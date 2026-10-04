@@ -56,9 +56,11 @@ Project Keel/
 
 （按项目实际填写）
 
-- 运行测试：`（待定）`
-- Lint：`（待定）`
-- 类型检查：`（待定）`
+- 运行测试：`npm test`（Node 22 / 24，含编排 CLI 与 git 夹具）
+- 手册校验：`npm run lint:manual`；移植覆盖：`npm run port-check`
+- 类型检查：`npm run typecheck`；完整本地验证：`npm run verify`
+- 公开隐私检查：`npm run check:privacy`（只读，不重写报告）
+- 云端 CI：`.github/workflows/ci.yml`，汇总门禁为 `verify`；范围见 README。
 
 ## 版本管理
 

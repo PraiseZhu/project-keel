@@ -1,8 +1,14 @@
 // SC-17 / Step 0.5: block publishing if tracked files or any commit in history carry
 // personal paths, private names (profile.local.json privateTerms), provider ids, emails,
-// token-shaped strings or env files. Writes docs/privacy-scan.md.
+// token-shaped strings or env files. --check skips writing docs/privacy-scan.md.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+if (args.some((arg) => arg !== "--check")) {
+  console.error("Usage: node scripts/privacy-scan.mjs [--check]");
+  process.exit(1);
+}
 
 const git = (...a) => execFileSync("git", a, { maxBuffer: 512 * 1024 * 1024 }).toString();
 const local = "config/profile.local.json";
@@ -49,7 +55,7 @@ const md = `# 公开前隐私扫描
 
 ${uniq.length ? "| 位置 | 规则 | 内容（已脱敏） |\n|---|---|---|\n" + uniq.slice(0, 200).map((h) => `| ${h.where} | ${h.rule} | \`${redact(h.line).replace(/\|/g, "\\|").replace(/`/g, "'")}\` |`).join("\n") : ""}
 `;
-writeFileSync("docs/privacy-scan.md", md);
+if (!args.includes("--check")) writeFileSync("docs/privacy-scan.md", md);
 if (uniq.length) {
   for (const h of uniq.slice(0, 60)) console.log(`HIT ${h.where} ${h.rule}`);
   console.log(`PRIVACY_BLOCKED ${uniq.length}`);

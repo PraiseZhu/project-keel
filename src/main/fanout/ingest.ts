@@ -32,6 +32,23 @@ export function findingsOf(text: string): Finding[] {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9一-鿿]+/g, " ").trim();
+const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
+
+function chineseTitleMatch(a: string, b: string): boolean {
+  if (!/[一-鿿]/.test(a) || !/[一-鿿]/.test(b)) return false;
+  const terms = (title: string) => [...new Set([...segmenter.segment(title.toLowerCase())]
+    .filter((part) => part.isWordLike && part.segment.length > 1)
+    .map((part) => part.segment))];
+  const aTerms = terms(a);
+  const bTerms = terms(b);
+  const shorter = aTerms.length <= bTerms.length ? aTerms : bTerms;
+  const longer = new Set(aTerms.length <= bTerms.length ? bTerms : aTerms);
+  const shared = shorter.filter((term) => longer.has(term));
+  // Shared context at the start alone must not merge findings with different outcomes.
+  return shared.length >= 4
+    && shared.length >= Math.ceil(shorter.length / 2)
+    && shorter.slice(-Math.ceil(shorter.length / 3)).filter((term) => longer.has(term)).length >= 2;
+}
 
 export interface Merged {
   readonly id: string;
@@ -40,7 +57,7 @@ export interface Merged {
   readonly guesses: string[];
 }
 
-/** Same file, lines within 3, and overlapping title words → same finding. */
+/** Same file, lines within 3, and overlapping title terms → same finding. */
 export function dedupe(perLane: { label: string; findings: Finding[] }[]): Merged[] {
   const merged: { id: string; finding: Finding; lanes: string[]; guesses: string[] }[] = [];
   for (const { label, findings } of perLane) {
@@ -51,7 +68,8 @@ export function dedupe(perLane: { label: string; findings: Finding[] }[]): Merge
         if (m.finding.line !== null && f.line !== null && Math.abs(m.finding.line - f.line) > 3) return false;
         const other = norm(m.finding.title).split(" ").filter((w) => w.length > 2);
         const overlap = other.filter((w) => words.has(w)).length;
-        return overlap >= Math.min(2, Math.max(1, Math.min(words.size, other.length)));
+        return overlap >= Math.min(2, Math.max(1, Math.min(words.size, other.length)))
+          || chineseTitleMatch(m.finding.title, f.title);
       });
       if (hit) {
         if (!hit.lanes.includes(label)) hit.lanes.push(label);

@@ -115,7 +115,8 @@ async function request(host: Host, path: string, body: string | undefined, callI
     throw new KeelError("REQUEST_FAILED", "请求未完成，请检查网络或稍后重试。");
   }
   if (!r.ok && /凭证|credential|secret|api[_ ]?key/i.test(`${r.message ?? ""} ${r.errorCode ?? ""}`))
-    throw new KeelError("JEV_NOT_CONFIGURED", `还没有可用的 Typesafe API Key：${r.message ?? "凭证未配置"}。请在 Keel 插件详情页的设置区填写后重试。`);
+    // The host message already says where to fill the key; relay it instead of adding a second instruction.
+    throw new KeelError("JEV_NOT_CONFIGURED", r.message || "还没有可用的 Typesafe API Key。请在 Keel 插件详情页的设置区填写后重试。");
   if (!r.ok) throw new KeelError("NETWORK_ERROR", "连接 Typesafe 失败。请检查网络以及插件详情页的 API Key 配置后重试。");
   if (r.status < 200 || r.status >= 300) {
     const hint = [401, 403].includes(r.status) ? "请检查 API Key 和账号使用资格。" : [429, 529].includes(r.status) ? "服务限流或繁忙，请稍后重试。" : "请检查请求参数或稍后重试。";

@@ -44,6 +44,15 @@ export function keywordRoute(task: string): string {
   return "figure-it-out";
 }
 
+/** The user named a multi-model mode outright; Jev confidence must not hide that. */
+export function explicitFanout(task: string): { interrogate: boolean; arena: boolean } {
+  const t = task.toLowerCase();
+  return {
+    interrogate: /interrogate|交叉审查|(多|[两三四2-4])个?(不同)?模型.{0,4}(审|review)/.test(t),
+    arena: /arena|(多|[两三四2-4])个?候选|多方案/.test(t),
+  };
+}
+
 export async function pstackStart(ctx: ToolContext, args: Record<string, unknown>) {
   const task = requireString(args, "task");
   const runId = newRunId(ctx.host.now());
@@ -65,6 +74,7 @@ export async function pstackStart(ctx: ToolContext, args: Record<string, unknown
     }
   }
   const depth = j2?.policy.action === "act" ? Number(j2.policy.value) : null;
+  const explicit = explicitFanout(task);
   let lane = null;
   if (typeof args.repo_dir === "string") {
     try {
@@ -90,7 +100,7 @@ export async function pstackStart(ctx: ToolContext, args: Record<string, unknown
     manual_path: manualPath(playbook),
     steps: info?.steps ?? [],
     depth,
-    suggest: { architect: depth !== null && depth >= 2, arena: depth !== null && depth >= 3, interrogate: false, multi_pr_pipeline: multi },
+    suggest: { architect: depth !== null && depth >= 2, arena: explicit.arena || (depth !== null && depth >= 3), interrogate: explicit.interrogate, multi_pr_pipeline: multi },
     lane,
     jev: outcome.answers ? outcome.judgements.map((j) => ({ template: j.template, value: j.interpretation?.value ?? null, confidence: j.interpretation?.confidence ?? 0, policy: j.policy.action, ranked: j.interpretation?.ranked?.slice(0, 2) })) : null,
     ...(outcome.fallback_reason ? { fallback_reason: outcome.fallback_reason } : {}),

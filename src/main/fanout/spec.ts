@@ -24,7 +24,7 @@ export function promptFor(kind: FanoutKind, lane: PreparedLane, task: string, ru
     : lane.lane === "reviewer" ? `按评审标准独立审查。${rubric ? `评审标准：${rubric}` : ""}`
     : lane.lane === "slice" ? `负责切片：${lane.slice ?? "main"}。`
     : "独立验证其他车道的结论。";
-  return [`[Keel ${kind} 车道 ${lane.label}]`, `任务：${task}`, role, where, `输出要求：${CONTRACT[lane.lane]}`, "规则：只修确认成立的 P0/P1；不推送、不开 PR、不合并、不回帖；完成后把结果回报给 lead。"].join("\n");
+  return [`[Keel ${kind} 车道 ${lane.label}]`, `任务：${task}`, role, where, `输出要求：${CONTRACT[lane.lane]}`, lane.write ? "规则：只修确认成立的 P0/P1；不推送、不开 PR、不合并、不回帖；完成后把结果回报给 lead。" : "规则：只读，只报告不修改；不推送、不开 PR、不合并、不回帖；完成后把结果回报给 lead。"].join("\n");
 }
 
 export function createWorkersPayload(fanoutId: string, kind: FanoutKind, lanes: readonly PreparedLane[], task: string, rubric?: string) {

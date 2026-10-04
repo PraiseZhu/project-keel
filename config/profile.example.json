@@ -17,5 +17,14 @@
   "plansDir": "/path/to/plans",
   "overlayNote": "",
   "privateTerms": [],
-  "upstreamDir": "/path/to/cursor-plugins/pstack"
+  "upstreamDir": "/path/to/cursor-plugins/pstack",
+  "jevRefs": {
+    "files": [
+      "/path/to/rules/CLAUDE.md"
+    ],
+    "repos": [
+      "/path/to/approve-exec"
+    ],
+    "checkOnly": []
+  }
 }

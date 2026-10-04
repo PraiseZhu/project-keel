@@ -76,3 +76,9 @@ import { readFileSync } from "node:fs";
 it("tests/playbooks.json fixture matches PLAYBOOKS", () => {
   expect(JSON.parse(readFileSync("tests/playbooks.json", "utf8"))).toEqual([...PLAYBOOKS]);
 });
+
+it("J1 puts playbook notes into criteria descriptions, not into state", () => {
+  const args = TEMPLATES.J1.build({ task: "x", playbook_notes: { "bug-fix": "Plan, review, verify." } });
+  expect(args.state).toEqual({ task: "x" });
+  expect((args.questions.playbook!.criteria as Record<string, unknown>)["bug-fix"]).toBe("Plan, review, verify.");
+});

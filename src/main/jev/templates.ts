@@ -102,10 +102,15 @@ export const TEMPLATES: Readonly<Record<TemplateId, Template>> = {
   J1: {
     id: "J1",
     title: "路由到哪个 playbook",
-    build: (state) => single("playbook", {
+    // `playbook_notes` (name → one-line summary) becomes the criteria descriptions, not state.
+    build: ({ playbook_notes, ...state }) => single("playbook", {
       type: "choice",
       instructions: "这个任务应该按哪个 pstack playbook 执行？只看任务描述与给出的上下文。纯问答、改一个错字这类不需要流程的任务选 trivial_no_pstack；没有合适 playbook 时选 figure-it-out。",
-      criteria: choiceCriteria([...PLAYBOOKS, "figure-it-out", "trivial_no_pstack"]),
+      criteria: choiceCriteria([...PLAYBOOKS, "figure-it-out", "trivial_no_pstack"], {
+        ...((playbook_notes as Record<string, string> | undefined) ?? {}),
+        "figure-it-out": "没有现成 playbook 时，先搞清问题再选路径",
+        trivial_no_pstack: "一句话问答或极小改动，不需要任何流程",
+      }),
     }, state),
     interpret: readChoice("playbook"),
     minimal: "figure-it-out",

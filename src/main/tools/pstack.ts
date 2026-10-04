@@ -50,7 +50,8 @@ export async function pstackStart(ctx: ToolContext, args: Record<string, unknown
   const named = typeof args.playbook === "string" ? args.playbook : null;
   if (named && ![...PLAYBOOKS, "figure-it-out"].includes(named as any)) throw new KeelError("INVALID_INPUT", `未知 playbook ${named}。可选：${PLAYBOOKS.join("、")}、figure-it-out。`);
   const state = { task, ...(typeof args.context === "string" ? { context: args.context } : {}) };
-  const specs: { id: TemplateId; state: Record<string, unknown> }[] = named ? [{ id: "J2", state }] : [{ id: "J1", state }, { id: "J2", state }];
+  const notes = Object.fromEntries(Object.entries(PLAYBOOK_INFO).map(([k, v]) => [k, `${v.summary} ${v.steps[0] ?? ""}`.slice(0, 200)]));
+  const specs: { id: TemplateId; state: Record<string, unknown> }[] = named ? [{ id: "J2", state }] : [{ id: "J1", state: { ...state, playbook_notes: notes } }, { id: "J2", state }];
   const outcome = await judge(ctx, specs, { runId });
   const j1 = outcome.judgements.find((j) => j.template === "J1");
   const j2 = outcome.judgements.find((j) => j.template === "J2");

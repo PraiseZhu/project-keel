@@ -9,6 +9,12 @@ import { ToolError, ghRaw, git, gitRaw } from "../env.ts";
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
+/** Refs reach git as argv; a leading "-" would be parsed as an option. */
+export function assertRef(ref: string): string {
+  if (!ref || ref.startsWith("-") || /[\s~^:?*\[\\]|\.\./.test(ref)) throw new ToolError("INVALID_INPUT", `不是合法的 git 引用：${ref.slice(0, 80)}`);
+  return ref;
+}
+
 export async function repoRoot(dir: string): Promise<string> {
   const top = (await git(["rev-parse", "--show-toplevel"], { cwd: dir })).trim();
   // Inside a linked worktree, the main repo is the parent of the common dir.
@@ -27,7 +33,7 @@ export async function createWorktree(p: { repo_dir: string; name: string; base_r
   const path = join(root, ".worktrees", p.name);
   if (existsSync(path)) throw new ToolError("UNSAFE_TARGET", `${path} 已存在，换个名字。`);
   const branch = p.branch ?? `keel/${p.name}`;
-  const base = p.base_ref ?? `origin/${await defaultBranch(root)}`;
+  const base = assertRef(p.base_ref ?? `origin/${await defaultBranch(root)}`);
   await gitRaw(["fetch", "origin", "--quiet"], { cwd: root, timeoutMs: 120_000 });
   await git(["worktree", "add", "-b", branch, path, base], { cwd: root, timeoutMs: 120_000 });
   return { path, branch, base };

@@ -73,3 +73,12 @@ describe("fanout/prepare via RPC", () => {
     expect(out.error?.message).toMatch(/^ROUTING_UNREADABLE/);
   });
 });
+
+describe("ref guard", () => {
+  it("rejects option-shaped or malformed base refs", async () => {
+    const { assertRef } = await import("../../src/node/git/worktree.ts");
+    expect(() => assertRef("--upload-pack=x")).toThrow();
+    expect(() => assertRef("a..b")).toThrow();
+    expect(assertRef("origin/main")).toBe("origin/main");
+  });
+});

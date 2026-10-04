@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { planLanes, type FanoutKind, type Tiers } from "../../shared/fanout.ts";
 import type { KeelProfile } from "../../shared/types.ts";
 import { ToolError, git, gitRaw } from "../env.ts";
-import { defaultBranch, repoRoot } from "../git/worktree.ts";
+import { assertRef, defaultBranch, repoRoot } from "../git/worktree.ts";
 import { readRouting, tierOf } from "../routes/routing.ts";
 
 const ID = /^[a-z0-9][a-z0-9-]{3,40}$/;
@@ -26,7 +26,7 @@ export async function prepare(profile: KeelProfile, p: { fanout_id: string; kind
   const needsWrite = plans.some((l) => l.write);
   if (needsWrite && !p.repo_dir) throw new ToolError("INVALID_INPUT", `${p.kind} 有写车道，需要 repo_dir。`);
   const root = p.repo_dir ? await repoRoot(p.repo_dir) : null;
-  const base = root ? p.base_ref ?? `origin/${await defaultBranch(root)}` : null;
+  const base = root ? assertRef(p.base_ref ?? `origin/${await defaultBranch(root)}`) : null;
   if (root && needsWrite) await gitRaw(["fetch", "origin", "--quiet"], { cwd: root, timeoutMs: 120_000 });
   const lanes = [];
   for (const l of plans) {
@@ -44,6 +44,7 @@ export async function prepare(profile: KeelProfile, p: { fanout_id: string; kind
 }
 
 export async function collect(p: { repo_dir: string; lanes: { label: string; working_dir: string }[]; base_ref: string }) {
+  assertRef(p.base_ref);
   const out = [];
   for (const l of p.lanes) {
     if (!existsSync(l.working_dir)) { out.push({ label: l.label, error: "worktree 不存在" }); continue; }

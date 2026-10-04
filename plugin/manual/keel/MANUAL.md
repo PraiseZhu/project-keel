@@ -40,15 +40,28 @@ Keel 把两件事装进一个 Cindy 插件：**日常随时可问的 Jev**（`je
 |---|---|
 | `Task` / subagent | 当前 harness 原生只读 subagent；多模型并行经 `fanout_plan` 开 Orca Worker |
 | `~/.cursor/rules/pstack-models.mdc` | `roles` 工具（routing.json） |
-| `/loop` | `pr_wait`（心跳轮询 ≤25 分钟）；长周期用面板「巡检」请用户保存自动化 |
+| `/loop` | 短等待用 `pr_wait`（心跳轮询 ≤25 分钟）；长周期用 Cindy 定时任务 `schedule_create`（需用户同意） |
 | `scripts/watch-pr/watch-pr` | `pr_status` / `pr_wait` |
 | `scripts/worktree-audit.sh` | `worktree({op:"audit"})` |
 | `show-me-your-work/scripts/log.sh` | `pstack_ledger({op:"log"})` |
-| `check-plan.mjs` | Node 方法 `plan/check` |
-| `orch` CLI | Node 方法 `orch/*` |
+| `check-plan.mjs` | `node <keel>/node/check-plan.mjs <plan.md>`（同上游输出与退出码） |
+| `orch` CLI（`bun scripts/orch/orch.ts`） | `node <keel>/node/orch.mjs …`（同上游子命令） |
 | control-ui / control-cli | Cindy 浏览器 / 桌面工具 |
 | cloud agent / Grok Bot | 本机 Orca Worker；自定义入口用 Cindy 插件面板 |
 | `gh pr merge` / merge-when-ready | 不提供；用户在 GitHub 合并 |
+| watch-pr 的 ChecksUnavailable（无 CI 的仓永不就绪） | 有意替代：仓里没有任何检查时，按冲突、未解决线程、Draft、评审结论判定；有检查的仓与上游完全一致 |
+
+## 插件自带的命令行（`<keel>`）
+
+上游由 agent 在终端跑的两个脚本随插件一起安装，`<keel>` 是本机 Keel 安装目录：
+
+```sh
+KEEL="$(ls -d "$HOME/Library/Application Support/Cindy/owners/"*/cindy-brain/keel | head -1)"
+node "$KEEL/node/check-plan.mjs" <plan.md>     # 计划结构检查，退出码 0 / 1
+node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上游
+```
+
+多 PR 编排按用户规则交给 task-priority → approve-exec；`orch` 只在用户点名用 pstack 原生编排时使用。
 
 ## 一次典型的修 bug
 

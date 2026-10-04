@@ -29,6 +29,9 @@ const define = { __KEEL_PROFILE__: JSON.stringify(profile), __KEEL_PLAYBOOKS__: 
 const common = { bundle: true, legalComments: "none", logLevel: "warning", define, target: "es2022" };
 await build({ ...common, entryPoints: [join(root, "src/main/index.ts")], outfile: join(root, "plugin/main.js"), format: "iife", platform: "browser" });
 await build({ ...common, entryPoints: [join(root, "src/node/worker.ts")], outfile: join(root, "plugin/node/worker.cjs"), format: "cjs", platform: "node", target: "node20" });
+// Agent-run CLIs, same surface as upstream's `bun scripts/orch.ts` and `check-plan.mjs`.
+// ESM because the orch CLI loads commander with top-level await; the bin calls main() itself.
+for (const bin of ["orch", "check-plan"]) await build({ ...common, define: { ...define, "import.meta.main": "false" }, entryPoints: [join(root, `src/node/bin/${bin}.ts`)], outfile: join(root, `plugin/node/${bin}.mjs`), format: "esm", platform: "node", target: "node20", banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" } });
 await build({ ...common, entryPoints: [join(root, "src/panel/panel.ts")], outfile: join(root, "plugin/panel.js"), format: "iife", platform: "browser" });
 await build({ ...common, entryPoints: [join(root, "src/panel/settings.ts")], outfile: join(root, "plugin/settings.js"), format: "iife", platform: "browser" });
 

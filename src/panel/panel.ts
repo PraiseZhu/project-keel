@@ -23,6 +23,8 @@ async function ask(op: string): Promise<void> {
   send();
 }
 
+const lanesHtml = (lanes: any[]) => lanes.map((l: any) => `<div class="row"><b>${esc(l.label)}</b> ${esc(l.role)} <span class="meta">${esc(l.route?.model)}/${esc(l.route?.effort)} · ${esc(l.working_dir ?? "只读")}</span></div>`).join("");
+
 function renderBoard(rows: any[], at: string): void {
   $("#at").textContent = `更新于 ${new Date(at).toLocaleTimeString()}`;
   if (!rows.length) return void ($("#board").textContent = "没有你名下的 open PR。");
@@ -42,7 +44,9 @@ ch.addEventListener("message", (ev) => {
   else if (m?.type === "ledger") {
     $("#ledger-list").innerHTML = (m.rows ?? []).slice().reverse().map((r: any) => `<div class="row"><b>${esc(r.kind)}</b> ${esc(r.summary)}<div class="meta">${esc(r.at)} · ${esc(r.run_id)}${r.confidence !== undefined ? ` · confidence ${Number(r.confidence).toFixed(2)}` : ""}</div></div>`).join("") || esc(m.message ?? "还没有决策记录。");
   } else if (m?.type === "fanout") {
-    $("#fanout-list").innerHTML = (m.lanes ?? []).map((l: any) => `<div class="row"><b>${esc(l.label)}</b> ${esc(l.role)} <span class="meta">${esc(l.route?.model)}/${esc(l.route?.effort)} · ${esc(l.working_dir ?? "只读")}</span></div>`).join("");
+    $("#fanout-list").innerHTML = lanesHtml(m.lanes ?? []);
+  } else if (m?.type === "fanouts") {
+    $("#fanout-list").innerHTML = (m.fanouts ?? []).map((f: any) => `<div class="row"><b>${esc(f.kind)}</b> ${esc(f.fanout_id)} <span class="meta">${esc(f.created_at)} · ${esc(f.task)}</span>${lanesHtml(f.lanes ?? [])}</div>`).join("") || "还没有并行车道。用 fanout_plan 规划后，这里显示每条车道的状态。";
   } else if (m?.type === "scheduled") $("#msg").textContent = "已为你打开自动化创建面板，请去自动化页确认保存。";
   else if (m?.type === "error") $("#msg").textContent = m.message;
 });
@@ -60,5 +64,6 @@ $("#refresh").addEventListener("click", () => {
 });
 $("#ledger-refresh").addEventListener("click", () => void ask("ledger"));
 $("#schedule").addEventListener("click", () => void ask("schedule"));
+void ask("restore");
 
 export {};

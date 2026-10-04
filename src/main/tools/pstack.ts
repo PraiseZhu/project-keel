@@ -92,6 +92,11 @@ export async function pstackStart(ctx: ToolContext, args: Record<string, unknown
     : multi
       ? "这是跨多个 PR 的任务：按用户既定流程交给 task-priority → approve-exec（需要用户说“汇总任务优先级”再“批准执行”）。Keel 不另起编排；先把任务目标、仓库与验收标准整理给用户。"
       : `用 ghost_manual({ ghost_id: "keel", path: "${manualPath(playbook)}" }) 读取 playbook，按步骤执行；关键判断点用 pstack_decide，留痕用 pstack_ledger。`;
+  // Upstream routes by the model reading poteto-mode's table. When Jev is unsure, the keyword
+  // guess is only a default: the agent checks the table and re-calls with `playbook` if it differs.
+  const routeCheck = routeSource.startsWith("keyword")
+    ? `路由是关键词兜底（${routeSource}）。先读 pstack/skills/poteto-mode/SKILL.md 的路由表核对；不符就用 pstack_start({ task, playbook: "<正确的 playbook>" }) 重调。Jev 候选：${(j1?.interpretation?.ranked ?? []).slice(0, 3).join("、") || "无"}。`
+    : null;
   await append(ctx.host, { run_id: runId, kind: "step", summary: `start ${playbook}（${routeSource}）depth=${depth ?? "?"}` });
   return {
     run_id: runId,
@@ -104,7 +109,7 @@ export async function pstackStart(ctx: ToolContext, args: Record<string, unknown
     lane,
     jev: outcome.answers ? outcome.judgements.map((j) => ({ template: j.template, value: j.interpretation?.value ?? null, confidence: j.interpretation?.confidence ?? 0, policy: j.policy.action, ranked: j.interpretation?.ranked?.slice(0, 2) })) : null,
     ...(outcome.fallback_reason ? { fallback_reason: outcome.fallback_reason } : {}),
-    next,
+    next: routeCheck ? `${routeCheck}\n${next}` : next,
   };
 }
 

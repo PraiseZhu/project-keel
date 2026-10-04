@@ -43,6 +43,21 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
   } else if (m.op === "ledger") {
     const r = await runTool(ctx, "pstack_ledger", { op: "read", limit: 100 });
     channel.postMessage({ type: "ledger", reqId: m.reqId, ...(r.ok ? { rows: (r.result as any).rows } : { message: r.message }) });
+  } else if (m.op === "restore") {
+    // Reopened panel: last board snapshot plus the most recent fanouts from the data dir.
+    const board = await host.fs({ op: "read", root: "data", path: "board/latest.json" });
+    if (board.ok && board.content) channel.postMessage({ type: "board", ...JSON.parse(board.content) });
+    const list = await host.fs({ op: "list", root: "data", path: "fanout" });
+    const names = (list.ok ? list.entries ?? [] : []).map((e: { name: string }) => e.name).filter((n: string) => n.endsWith(".json")).sort().slice(-5);
+    const fanouts = [];
+    for (const n of names) {
+      const r = await host.fs({ op: "read", root: "data", path: `fanout/${n}` });
+      if (r.ok && r.content) {
+        const f = JSON.parse(r.content);
+        fanouts.push({ fanout_id: f.fanout_id, kind: f.kind, created_at: f.created_at, task: String(f.task ?? "").slice(0, 120), lanes: (f.lanes ?? []).map((l: any) => ({ label: l.label, role: l.role, route: l.route, working_dir: l.working_dir })) });
+      }
+    }
+    channel.postMessage({ type: "fanouts", reqId: m.reqId, fanouts: fanouts.reverse() });
   } else if (m.op === "schedule") {
     const r = await host.requestSchedule?.({ name: "Keel PR 巡检", prompt: "调用 Keel 插件的 pr_board 工具刷新我的 PR 看板，把可合并与阻塞的 PR 用一句话总结给我。不要合并任何 PR。", intervalMs: 60 * 60 * 1000 });
     channel.postMessage(r?.ok ? { type: "scheduled", reqId: m.reqId } : { type: "error", reqId: m.reqId, message: r?.message ?? "无法打开自动化创建面板" });

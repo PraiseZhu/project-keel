@@ -5,7 +5,7 @@ import { EMPTY_PROFILE, type KeelProfile } from "../shared/types.ts";
 import { ToolError, gh, resolveTool } from "./env.ts";
 import { audit, createWorktree, gitState, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
-import { snapshot } from "./pr/snapshot.ts";
+import { resolveExisting, snapshot } from "./pr/snapshot.ts";
 import { roles } from "./routes/routing.ts";
 
 declare const __KEEL_PROFILE__: KeelProfile | undefined;
@@ -34,6 +34,7 @@ const methods: Record<string, Method> = {
   },
   "pr/snapshot": (p, profile) => snapshot(profile, p as any),
   "pr/open": (p, profile) => prOpen(profile, p as any),
+  "pr/resolve": (p) => resolveExisting(p as any),
   "pr/ready": (p, profile) => prReady(profile, p as any),
   "pr/threads": (p, profile) => prThreads(profile, p as any),
   "pr/reply": (p) => prReply(p as any),

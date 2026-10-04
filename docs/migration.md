@@ -1,6 +1,6 @@
-# Step 12 旧 Jev 引用迁移（待 Key 与三机就绪）
+# Step 12 旧 Jev 引用迁移
 
-状态：**未改任何引用文件**。前置条件（三台都装好 Keel、各自填 Key、`jev` 在三台各调用成功）目前只满足本机。
+状态（2026-10-05）：**已完成**。三台装好 Keel 并各自成功调用 `jev` 后，`--apply` 改了 11 个文件、14 处引用，`jev-refs-check` 输出 `JEV_REFS_MIGRATED`；approve-exec 的改动经该仓 PR #63 合入，三台已 ff 对齐。剩余：三台停用旧 typesafe-jev 观察 7 天后卸载（用户在插件页操作）。下文保留当时的方案记录。
 
 ## 已交付
 
@@ -18,7 +18,7 @@
 4. 停用（不卸载）三台的 typesafe-jev 观察 7 天；异常就恢复旧插件并回滚引用。
 5. 观察期无异常后，由用户在三台插件页卸载 typesafe-jev。
 
-## 不在本轮做
+## 当时未做、后来的处理
 
 - 修改 `workspace-triad-align.mjs`（把 triad-check 挂进每日对齐）：需用户单独确认。建议改法：在远端检查段末尾加一步“对每台 `sh scripts/triad-facts.sh`，汇总后跑 triad-check，不一致只报不改”。
-- Syncthing 排除：远端 `Project Keel/` 目录（含 `.git`）正被 Syncthing 同步，与 git 构成双通道（远端 HEAD 停在旧提交）。建议在 `.stignore` 增加 `Project Keel/.git`、`node_modules`、`_tmp` 的排除后，远端只用 git 拉取；`.stignore` 由三机对齐脚本下发，同样需用户确认。
+- Syncthing 排除：用户 2026-10-04 确认后，三台 `.stignore` 已加 `/Claude/projects/Project Keel/.git`（`node_modules` 原本就由全局规则排除；`_tmp` 保留同步，远端安装包靠它传递）。此后 `.git` 由各机自己的 git 管理，代码文件仍经 Syncthing 到达，远端需要时按 `origin/main` 对齐。

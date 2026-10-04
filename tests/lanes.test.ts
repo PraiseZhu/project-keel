@@ -105,12 +105,28 @@ describe("pr_ready / pr_reply lane enforcement", () => {
     const calls: string[] = [];
     const h = fakeHost({ node: nodeFake(true, calls), confirm: true });
     const ctx = makeContext(h, "c1", profile);
-    const r = await runTool(ctx, "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready" });
+    const r = await runTool(ctx, "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready", review_entry_evidence: "code-review run 123：进场条件满足" });
     expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true } });
     expect(await runTool(ctx, "pr_reply", { repo: "acme/gated-app", pr: 7, target_id: "issue", body: "hi" })).toMatchObject({ ok: false, errorCode: "LANE_HANDED_OFF" });
     expect(await runTool(ctx, "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: "again" })).toMatchObject({ ok: false, errorCode: "LANE_HANDED_OFF" });
     expect(calls).not.toContain("pr/reply");
     expect(h.confirms).toHaveLength(0);
+  });
+  it("an automation lane will not hand off without the review machine's entry evidence", async () => {
+    const calls: string[] = [];
+    const h = fakeHost({ node: nodeFake(true, calls) });
+    const r = await runTool(makeContext(h, "c1", profile), "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready" });
+    expect(r).toMatchObject({ ok: false, errorCode: "GATE_NOT_MET" });
+    expect(calls).not.toContain("pr/ready");
+    expect([...h.files.keys()].some((k) => k.startsWith("handoff/"))).toBe(false);
+  });
+  it("pr_open never pushes a branch whose PR was already handed off", async () => {
+    const calls: string[] = [];
+    const h = fakeHost({ node: (m, p) => (calls.push(m), m === "pr/resolve" ? { ok: true, result: { repo: "acme/gated-app", number: 7 } } : { ok: true, result: { url: "u", number: 7 } }) });
+    await writeHandoff(h, { repo: "acme/gated-app", number: 7, at: "2026-10-04T00:00:00Z", head_sha: "abc", gate: {}, evidence: {} });
+    const r = await runTool(makeContext(h, "c1", profile), "pr_open", { repo_dir: "/r", title: "feat: x", sections: "b", push: true, authorization_source: "用户 2026-10-04：提交 PR" });
+    expect(r).toMatchObject({ ok: false, errorCode: "LANE_HANDED_OFF" });
+    expect(calls).toEqual(["pr/resolve"]);
   });
   it("pr_reply asks for confirmation and respects a decline", async () => {
     const calls: string[] = [];
@@ -125,5 +141,28 @@ describe("pr_ready / pr_reply lane enforcement", () => {
     await writeHandoff(h, { repo: "acme/gated-app", number: 7, at: "t", head_sha: "abc", gate: {}, evidence: {} });
     const r = await runTool(makeContext(h, "c1", profile), "pr_status", { repo: "acme/gated-app", pr: 7 });
     expect(r).toMatchObject({ ok: true, result: { handedOff: true, allowedActions: ["stopped_after_handoff"], nextAction: "stopped_after_handoff" } });
+  });
+});
+
+describe("final-review follow-ups at the tool level", () => {
+  it("a ready PR in a labelled lane is not reported mergeable until the label is there", async () => {
+    const ready = (labels: string[]) => ({ ...snapshot(true), decision: { kind: "ready" }, pr: { ...pr, isDraft: false, labels }, mergeReadyLabel: labels.includes("review:merge-ready") });
+    const run = async (labels: string[]) => runTool(makeContext(fakeHost({ node: () => ({ ok: true, result: ready(labels) }) }), "c1", profile), "pr_status", { repo: "acme/gated-app", pr: 7 });
+    expect(await run([])).toMatchObject({ ok: true, result: { mergeable: false } });
+    expect(await run(["review:merge-ready"])).toMatchObject({ ok: true, result: { mergeable: true } });
+  });
+  it("interrogate ingest reports silent or unparseable lanes as gaps", async () => {
+    const h = fakeHost();
+    const lanes = ["r1", "r2", "r3"].map((label) => ({ label, lane: "reviewer", write: false, working_dir: "/r", branch: null, route: {} }));
+    await h.fs({ op: "write", root: "data", path: "fanout/fo-x.json", content: JSON.stringify({ fanout_id: "fo-x", kind: "interrogate", lanes, repo_root: null, task: "t" }) });
+    const r: any = await runTool(makeContext(h, "c1", profile), "fanout_ingest", { fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: "```json\n[]\n```" }, { label: "r2", text: "我看过了，没问题" }] });
+    expect(r.ok).toBe(true);
+    expect(r.result.complete).toBe(false);
+    expect(r.result.gaps.map((g: any) => g.label).sort()).toEqual(["r2", "r3"]);
+  });
+  it("a keyword-routed start tells the agent to check the routing table", async () => {
+    const r: any = await runTool(makeContext(fakeHost(), "c1", profile), "pstack_start", { task: "修一下登录报错" });
+    expect(r.ok).toBe(true);
+    expect(r.result.next).toContain("路由表核对");
   });
 });

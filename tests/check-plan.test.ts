@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { checkPlan } from "../src/node/plan/check-plan.ts";
 import { dispatch } from "../src/node/rpc.ts";
@@ -19,6 +20,24 @@ describe("check-plan port", () => {
   it("ignores fenced code", () => {
     const r = checkPlan("```\nx — y\n```\n", "p.md");
     expect(r.problems.some((p) => p.includes("long dash"))).toBe(false);
+  });
+  it("accepts a Cindy scheduler heartbeat in place of Cursor's /loop 1h", () => {
+    const loop = (body: string) => checkPlan(`# P\n\n## Program checklist\n\n${body}\n`, "p.md").problems.some((p) => p.includes('lacks "/loop 1h"'));
+    expect(loop("nothing here")).toBe(true);
+    expect(loop("arm `/loop 1h`")).toBe(false);
+    expect(loop("arm a schedule_create heartbeat")).toBe(false);
+  });
+  it.skipIf(!existsSync("plugin/node/check-plan.mjs"))("ships as an agent-run CLI with upstream exit codes", () => {
+    const run = (args: string[]) => spawnSync(process.execPath, ["plugin/node/check-plan.mjs", ...args], { encoding: "utf8" });
+    expect(run([]).status).toBe(2);
+    mkdirSync("_tmp/test-runs", { recursive: true });
+    writeFileSync("_tmp/test-runs/plan-cli.md", "# x\n");
+    expect(run(["_tmp/test-runs/plan-cli.md"]).status).toBe(1);
+  });
+  it.skipIf(!existsSync("plugin/node/orch.mjs"))("orch ships as an agent-run CLI", () => {
+    const r = spawnSync(process.execPath, ["plugin/node/orch.mjs", "--help"], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("inbox");
   });
   it("is served over RPC as plan/check", async () => {
     const out: any = await dispatch("plan/check", { text: "# x\n", path: "x.md" });

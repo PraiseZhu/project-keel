@@ -37,3 +37,13 @@
 
 - 三机：Mini、Air 由用户导入并填 Key；Mini 一度为停用状态（安装目录有 `.disabled`），启用后三台安装内容 sha256 一致 → `TRIAD_OK 3`。两台的 Keel jev 留痕各有一条成功调用（noul 0.99）。
 - 迁移：`node scripts/jev-migrate.mjs --apply` 改 11 个文件（全局规则 3、Pi AGENTS、skill-trigger-detail、jev-decision SKILL、approve-exec 6 个文件）；`jev-refs-check` 修正“git grep 无匹配退出 1 被当成错误”后输出 `JEV_REFS_MIGRATED`。Cindy 托管的 codex-home 副本只检查不改。
+
+## 最终审核整改（2026-10-05）
+
+审核：Orca Worker codex / gpt-6-astra / high，报告 `Codex/reviews/2026-10-04-keel-final-review.md`（REQUIRES_CHANGES，P1×3、P2×9）。用户指示 P1、P2 与 pstack 不一致项全部修正，拒绝过度设计。
+
+- P1-01：`pr_open` 推送前先查本分支已有 PR 的交接记录（`pr/resolve`），已交接返回 `LANE_HANDED_OFF`，不推送。
+- P1-02：interrogate 只读车道留在调用方 worktree，审查范围固定 `base_sha...HEAD`。
+- P1-03：`pr_ready` 要求全部检查通过、无进行中、分类器在 Draft 之前无阻塞；交接车道另需 `review_entry_evidence`。
+- P2-01 起点固定为 `base_sha`，未跟踪文件随结果返回；P2-02 worktree 审计按 PR head 匹配、未推送提交不算 safe、审计默认不 fetch，fanout 清理复用同一审计并先确认；P2-03 `localInterrogate:off` 车道无 `user_requested` 拒绝；P2-04 交接车道无 `review:merge-ready` 不报可合并；P2-05 裁判 / 验证车道分到 `after_stage1`，指令列出候选 / 切片 worktree 与 rubric，写车道规则改为按任务实现；P2-06 `lead_agent` 必填、路由缺 effort 即 fail-closed、interrogate 车道缺回报或无 JSON 记为 gaps、J4/J5 超 40 条分批；P2-07 orch 与 check-plan 作为插件自带 CLI（`node <keel>/node/orch.mjs`、`check-plan.mjs`），心跳标记接受 `schedule_create`；P2-08 setup-benny / make-bot-ui 加 Cindy 落地覆盖层；P2-09 设置页显示车道与路径，面板重开恢复看板与最近 fanout，本文件与 migration.md 更新实况。
+- pstack 一致性：关键词兜底路由提示 agent 按 poteto-mode 路由表核对后可用 `playbook` 重调（上游由模型自读路由表）。无 CI 仓的判定（上游 ChecksUnavailable 永不就绪）保留为有意替代，已写入 keel 手册。“持续模式钩子”“cindy.tasks 后端”不是 pstack 能力，按拒绝过度设计不做。

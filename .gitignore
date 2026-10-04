@@ -57,6 +57,7 @@ _tmp/
 _tmp/
 plugin/main.js
 plugin/node/worker.cjs
+plugin/node/*.mjs
 plugin/panel.js
 plugin/settings.js
 *.cindy

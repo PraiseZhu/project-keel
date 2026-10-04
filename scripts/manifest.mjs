@@ -74,8 +74,8 @@ const tools = [
   },
   {
     name: "pr_ready",
-    description: "评估并（非 dry_run 时）把 Draft PR 转为 Ready（会写 GitHub）。门禁车道要求当前 head 的必需检查非空且全部通过，否则返回 GATE_NOT_MET 与缺项；交接车道转 Ready 后写交接记录，之后推送/回帖类调用返回 LANE_HANDED_OFF。dry_run:true 只评估门禁，绝不执行 gh pr ready。非 dry_run 需要 authorization_source。",
-    parameters: obj({ ...prRef, dry_run: bool("只评估门禁。"), authorization_source: str("用户授权原话与日期（非 dry_run 必填）。") }),
+    description: "评估并（非 dry_run 时）把 Draft PR 转为 Ready（会写 GitHub）。要求当前 head 全部检查通过、无进行中、无冲突与未解决线程；门禁车道另要求必需检查非空且全部通过，否则返回 GATE_NOT_MET 与缺项；交接车道非 dry_run 还要 review_entry_evidence（服务器审查机进场证据）；交接车道转 Ready 后写交接记录，之后推送/回帖类调用返回 LANE_HANDED_OFF。dry_run:true 只评估门禁，绝不执行 gh pr ready。非 dry_run 需要 authorization_source。",
+    parameters: obj({ ...prRef, dry_run: bool("只评估门禁。"), authorization_source: str("用户授权原话与日期（非 dry_run 必填）。"), review_entry_evidence: str("交接车道：核对过的服务器审查机进场证据（链接与结论）。") }),
   },
   {
     name: "pr_threads",
@@ -100,16 +100,16 @@ const tools = [
   {
     name: "roles",
     description: "现读本机 Orca routing.json，返回 developer/reviewer/tester/merger 对应的 {agent, model, effort, provider_id, fallbacks} 与来源档位。读不到或格式错返回 ROUTING_UNREADABLE（fail-closed，不自行换模型）。只读本地文件。",
-    parameters: obj({ op: { type: "string", enum: ["show", "refresh"] }, lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>；不传则用顶层 review。" } }),
+    parameters: obj({ op: { type: "string", enum: ["show", "refresh"] }, lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent（必填）。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。" } }, ["lead_agent"]),
   },
   {
     name: "fanout_plan",
-    description: "规划多模型并行（arena/interrogate/swarm）：现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/。不派发 Worker——派发由主 Agent 执行。",
-    parameters: obj({ kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, run_id: str("台账 run_id。"), repo_dir: str("仓库目录。"), base_ref: str("写车道起点。"), task: str("任务描述。"), rubric: str("评审标准。"), lanes: int("车道数（arena/interrogate 缺省 3）。"), slices: { type: "array", items: { type: "string" }, description: "swarm 的切片。" }, lead_model: str("lead 会话模型 id（只用于让裁判席避开同家族）。"), lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>；不传则用顶层 review。" } }, ["kind", "task"]),
+    description: "规划多模型并行（arena/interrogate/swarm）：现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/。不派发 Worker——派发由主 Agent 执行：第一阶段 create_workers.workers 先派，裁判/验证车道在 after_stage1 里，等第一阶段全部回报后再派。只读审查车道就在传入的 repo_dir（可以是功能 worktree）里，审查范围固定为 base_sha...当前 HEAD。",
+    parameters: obj({ kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, run_id: str("台账 run_id。"), repo_dir: str("仓库目录。"), base_ref: str("写车道起点。"), task: str("任务描述。"), rubric: str("评审标准。"), lanes: int("车道数（arena/interrogate 缺省 3）。"), slices: { type: "array", items: { type: "string" }, description: "swarm 的切片。" }, lead_model: str("lead 会话模型 id（只用于让裁判席避开同家族）。"), lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent（必填）。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。" }, user_requested: bool("用户本轮明确点名要多模型审查时传 true；本地多模型审查默认关闭的车道不传就拒绝。") }, ["kind", "task", "lead_agent"]),
   },
   {
     name: "fanout_ingest",
-    description: "汇收并行车道结果：arena 收各 worktree diff 并用 Jev J3 选基础；interrogate 解析审查 JSON、去重后 J4 分级，输出共识/单模型/分歧；swarm 输出 PASS/ISSUES/BLOCKED 与缺口。cleanup:true 只清本次 fanout 的干净 worktree。",
+    description: "汇收并行车道结果：arena 收各 worktree diff 并用 Jev J3 选基础；interrogate 解析审查 JSON、去重后 J4 分级，输出共识/单模型/分歧；swarm 输出 PASS/ISSUES/BLOCKED 与缺口。interrogate 车道缺回报或没有 JSON 块记为 gaps（不当作 0 发现）。cleanup:true 先弹确认，只清本次 fanout 中没有未提交改动、没有 open PR 的 worktree，未合并分支保留。",
     parameters: obj({ fanout_id: str("fanout_plan 返回的 id。"), kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, repo_dir: str("仓库目录。"), lane_results: { type: "array", items: { type: "object" }, description: "每条车道的 {label, text?, verdict?}。" }, cleanup: bool("汇收后清理本次 worktree。"), run_id: str("台账 run_id。") }, ["fanout_id", "kind"]),
   },
 ];

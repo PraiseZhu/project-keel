@@ -27,7 +27,7 @@ const profile = { lanes: [], routingPath, boardRepos: [], plansDir: null };
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("lane routes come verbatim from routing.json", () => {
-  const t = tiersFrom(routing as any);
+  const t = tiersFrom(routing as any, "codex");
   it("arena: three candidates across three families plus a cross-judge", () => {
     const lanes = planLanes("arena", t, { leadModel: "claude-opus" });
     expect(lanes.map((l) => l.label)).toEqual(["c1", "c2", "c3", "judge"]);
@@ -54,6 +54,7 @@ describe("lane routes come verbatim from routing.json", () => {
   });
   it("rejects an unknown lead_agent instead of guessing", () => {
     expect(() => tiersFrom(routing as any, "gpt")).toThrow(/lead_agent/);
+    expect(() => tiersFrom(routing as any)).toThrow(/lead_agent/);
   });
   it("swarm uses execute for slices and e2e for the verifier", () => {
     const lanes = planLanes("swarm", t, { slices: ["api", "ui"] });
@@ -61,7 +62,7 @@ describe("lane routes come verbatim from routing.json", () => {
   });
   it("create_workers payload copies agent/model/effort/provider_id exactly", () => {
     const lanes = planLanes("interrogate", t, {}).map((l) => ({ ...l, working_dir: null, branch: null }));
-    const p = createWorkersPayload("fo-2601010000-abc", "interrogate", lanes, "review x");
+    const p = createWorkersPayload("fo-2601010000-abc", "interrogate", lanes, { task: "review x" });
     expect(p.workers[0]).toMatchObject({ role: "reviewer", agent: "claude-code", model: "z/glm-9", effort: "max", provider_id: "p-b" });
     for (const w of p.workers) expect(w.label).toMatch(/^[a-z0-9_-]{1,32}$/);
   });
@@ -69,7 +70,7 @@ describe("lane routes come verbatim from routing.json", () => {
 
 describe("fanout/prepare via RPC", () => {
   it("pre-creates write-lane worktrees under <repo>/.worktrees/pstack-*", async () => {
-    const out: any = await dispatch("fanout/prepare", { profile, fanout_id: "fo-test-0001", kind: "arena", repo_dir: repo, base_ref: "HEAD", lead_model: "claude-x" });
+    const out: any = await dispatch("fanout/prepare", { profile, fanout_id: "fo-test-0001", kind: "arena", repo_dir: repo, base_ref: "HEAD", lead_model: "claude-x", lead_agent: "codex" });
     expect(out.error).toBeUndefined();
     const cands = out.result.lanes.filter((l: any) => l.write);
     expect(cands).toHaveLength(3);

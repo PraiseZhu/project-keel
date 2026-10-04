@@ -11,7 +11,7 @@ import { withCwd } from "../context.ts";
 import { readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
 import { GhGitHubReader } from "./upstream/github.ts";
 
-async function originRepo(repoDir: string): Promise<string> {
+export async function originRepo(repoDir: string): Promise<string> {
   const url = (await git(["remote", "get-url", "origin"], { cwd: repoDir })).trim();
   const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
   if (!m) throw new ToolError("NO_REMOTE", `origin 不是 GitHub 仓库：${url}`);
@@ -76,11 +76,23 @@ export async function prOpen(profile: KeelProfile, p: { repo_dir: string; title:
   return { url, number, draft, draft_forced_by_lane: forced, preset: rule.preset, preflight: match?.preflight ?? null };
 }
 
+/** Ready needs the lane gate, every check green, and nothing ahead of the Draft flag. */
+export function readyVerdict(s: Pick<Awaited<ReturnType<typeof snapshot>>, "gate" | "decision" | "checks">): { passed: boolean; missing: string[] } {
+  const gate = s.gate;
+  const missing = gate.applies ? [...gate.missing, ...gate.failing.map((n) => `${n}（失败）`), ...gate.pending.map((n) => `${n}（进行中）`)] : [];
+  // Required checks alone are not "CI green": the upstream classifier must see nothing ahead
+  // of the Draft flag (conflicts, threads, failing CI) and no check may still be running.
+  const blockerOk = s.decision.kind === "ready" || (s.decision.kind === "blocker" && s.decision.blocker === "draft-pr");
+  if (!blockerOk) missing.push(`PR 状态未就绪（${s.decision.kind === "blocker" ? s.decision.blocker : s.decision.kind}）`);
+  for (const n of s.checks.failed) if (!missing.includes(`${n}（失败）`)) missing.push(`${n}（失败）`);
+  for (const n of s.checks.pending) if (!missing.includes(`${n}（进行中）`)) missing.push(`${n}（进行中）`);
+  return { passed: (!gate.applies || gate.ok) && blockerOk && s.checks.failed.length === 0 && s.checks.pending.length === 0, missing };
+}
+
 export async function prReady(profile: KeelProfile, p: { repo_dir?: string; repo?: string; pr?: number; dry_run?: boolean }) {
   const s = await snapshot(profile, p);
   const gate = s.gate;
-  const missing = gate.applies ? [...gate.missing, ...gate.failing.map((n) => `${n}（失败）`), ...gate.pending.map((n) => `${n}（进行中）`)] : [];
-  const passed = !gate.applies || gate.ok;
+  const { passed, missing } = readyVerdict(s);
   const base = { gate: { passed, missing, required: gate.required, sources: gate.sources }, pr: s.pr, preset: s.preset, head_sha: s.pr.headSha };
   if (!passed) return { ...base, ready: false, executed: false };
   if (p.dry_run) return { ...base, ready: s.pr.isDraft ? false : true, executed: false, would_mark_ready: s.pr.isDraft };

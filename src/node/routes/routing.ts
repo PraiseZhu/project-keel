@@ -10,12 +10,12 @@ export const ROLE_TIER: Readonly<Record<string, string>> = { developer: "execute
 
 function spec(v: unknown, where: string): RouteSpec {
   const o = v as Record<string, unknown> | null;
-  if (!o || typeof o.agent !== "string" || !o.agent || typeof o.model !== "string" || !o.model)
-    throw new ToolError("ROUTING_UNREADABLE", `routing.json 的 ${where} 缺少 agent 或 model。按规则 fail-closed，请修复配置后重试。`);
+  if (!o || typeof o.agent !== "string" || !o.agent || typeof o.model !== "string" || !o.model || typeof o.effort !== "string" || !o.effort)
+    throw new ToolError("ROUTING_UNREADABLE", `routing.json 的 ${where} 缺少 agent、model 或 effort。按规则 fail-closed，请修复配置后重试。`);
   return {
     agent: o.agent,
     model: o.model,
-    ...(typeof o.effort === "string" ? { effort: o.effort } : {}),
+    effort: o.effort,
     ...(typeof o.provider_id === "string" ? { provider_id: o.provider_id } : {}),
   };
 }
@@ -44,6 +44,8 @@ export function tierOf(data: Record<string, unknown>, tier: string, leadAgent?: 
   const raw = data[tier] as Record<string, unknown> | undefined;
   if (!raw) throw new ToolError("ROUTING_UNREADABLE", `routing.json 没有 ${tier} 档。按规则 fail-closed。`);
   const agent = assertLeadAgent(leadAgent);
+  // The review tier depends on who leads; guessing would silently pick the wrong family.
+  if (tier === "review" && !agent) throw new ToolError("INVALID_INPUT", `审核档需要 lead_agent（${LEAD_AGENTS.join(" / ")}）。无法确认 lead agent 就先问，不要猜。`);
   const override = tier === "review" && agent ? whenLead(raw)[agent] : undefined;
   if (override) return build(override as Record<string, unknown>, `review.when_lead.${agent}`);
   return build(raw, tier);

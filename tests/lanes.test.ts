@@ -135,6 +135,12 @@ describe("pr_ready / pr_reply lane enforcement", () => {
     expect(dry.result.gate.passed).toBe(false);
     expect(dry.result.gate.missing.join()).toContain("review_entry");
   });
+  it("Ready is checked against the head the evidence was bound to", async () => {
+    const seen: any[] = [];
+    const h = fakeHost({ node: (m, p) => (m === "pr/ready" && seen.push(p), nodeFake(true, [])(m, p)) });
+    await runTool(makeContext(h, "c1", profile), "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready", review_entry: { head_sha: "abc", checked_at: new Date(Date.UTC(2026, 9, 4, 11, 55)).toISOString(), result: "pass", source: "code-review.yml 窗口检查" } });
+    expect(seen[0]).toMatchObject({ expected_head: "abc" });
+  });
   it("pr_open refuses to push when the PR lookup itself fails", async () => {
     const calls: string[] = [];
     const h = fakeHost({ node: (m) => (calls.push(m), m === "pr/resolve" ? { ok: false, errorCode: "GH_ERROR", message: "GH_ERROR: HTTP 502" } : { ok: true, result: {} }) });

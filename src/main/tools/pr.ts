@@ -136,7 +136,7 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const entry = entryNeeded ? checkEntry(args.review_entry, pre.pr.headSha, ctx.host.now()) : null;
   if (!dry && entry && !entry.ok)
     throw new KeelError("GATE_NOT_MET", `这个车道转 Ready 后交给自动化接管，服务器审查机进场证据不成立：${entry.problem}`, { missing: ["review_entry"], review_entry: entry });
-  const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry });
+  const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
   if (!r.gate.passed) throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。`, { missing: r.gate.missing, gate: r.gate });
   let handoff = null;
   if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {

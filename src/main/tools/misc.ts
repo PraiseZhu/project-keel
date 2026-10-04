@@ -23,5 +23,5 @@ export async function rolesTool(ctx: ToolContext, args: Record<string, unknown>)
   const op = typeof args.op === "string" ? args.op : "show";
   if (!["show", "refresh"].includes(op)) throw new KeelError("INVALID_INPUT", "op 只能是 show 或 refresh。");
   // Both ops re-read routing.json; "refresh" exists so callers can say they want a fresh read.
-  return node(ctx, "routes/read", { lead_model: typeof args.lead_model === "string" ? args.lead_model : null });
+  return node(ctx, "routes/read", { lead_agent: typeof args.lead_agent === "string" ? args.lead_agent : null });
 }

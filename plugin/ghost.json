@@ -534,9 +534,14 @@
               "refresh"
             ]
           },
-          "lead_model": {
+          "lead_agent": {
             "type": "string",
-            "description": "当前 lead 会话模型 id；gpt 系会改用 review.when_lead.gpt。"
+            "enum": [
+              "claude-code",
+              "codex",
+              "pi"
+            ],
+            "description": "当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>；不传则用顶层 review。"
           }
         }
       }
@@ -589,7 +594,16 @@
           },
           "lead_model": {
             "type": "string",
-            "description": "lead 会话模型 id。"
+            "description": "lead 会话模型 id（只用于让裁判席避开同家族）。"
+          },
+          "lead_agent": {
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex",
+              "pi"
+            ],
+            "description": "当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>；不传则用顶层 review。"
           }
         },
         "required": [

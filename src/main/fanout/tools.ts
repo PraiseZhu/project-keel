@@ -36,6 +36,7 @@ export async function fanoutPlan(ctx: ToolContext, args: Record<string, unknown>
     ...(typeof args.lanes === "number" ? { lanes: args.lanes } : {}),
     ...(Array.isArray(args.slices) ? { slices: args.slices } : {}),
     lead_model: typeof args.lead_model === "string" ? args.lead_model : null,
+    lead_agent: typeof args.lead_agent === "string" ? args.lead_agent : null,
   });
   const rubric = typeof args.rubric === "string" ? args.rubric : undefined;
   const lanes = prep.lanes.map((l) => ({ label: l.label, role: l.role, lane: l.lane, route: { agent: l.route.agent, model: l.route.model, effort: l.route.effort, provider_id: l.route.provider_id, tier: l.route.tier }, fallbacks: l.route.fallbacks, working_dir: l.working_dir, branch: l.branch, note: l.note ?? null, prompt: promptFor(kind, l, task, rubric), output_contract: outputContract(l) }));

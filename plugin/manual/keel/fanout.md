@@ -4,8 +4,8 @@
 
 ## 步骤
 
-1. `fanout_plan({ kind, task, repo_dir, run_id, lanes?, slices?, lead_model? })`。Keel 现读 routing.json：
-   - arena 候选与 interrogate 审查车道依次取 `review` 主档、`execute` 主档、`review.when_lead.gpt` 主档，形成不同模型家族；lead 是 gpt 系时 A 席改用 `review.when_lead.gpt`，C 席改取 `review` 主档并标注“与 lead 同家族”。
+1. `fanout_plan({ kind, task, repo_dir, run_id, lanes?, slices?, lead_agent?, lead_model? })`。Keel 现读 routing.json：
+   - arena 候选与 interrogate 审查车道依次取：A 席＝审核档（传了 `lead_agent` 且存在 `review.when_lead.<lead_agent>` 时取该覆盖，否则取顶层 `review`）、B 席＝`execute` 主档、C 席＝另一个与 A/B 不同家族的审核变体（顶层 `review` 或其他 lead 的覆盖），形成三个模型家族；找不到第三家族时 C 席与 A 席同模型并标注。`lead_model` 只用于让裁判席避开 lead 的模型家族。
    - swarm 切片取 `execute`；验证车道取 `e2e`。
    - 写车道（arena 候选、swarm 切片）由 Keel 预建 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`，分支 `pstack/<fanout_id>/<label>`。
 2. 主 Agent：`start_team({ worker_permission_mode: "bypassPermissions" })`，然后把返回的 `create_workers` 参数原样传给 `create_workers`。派发说明为每个 Worker 标注 `(model/effort)`；有降级时写明原因。

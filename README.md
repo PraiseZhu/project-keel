@@ -123,7 +123,13 @@ npm run check:privacy  # 公开隐私检查（只读）
 
 ## 隐私
 
-- `jev` 会把你提交的问题和选项发送到 Jev 判断服务；其他工具不向该服务发送内容。
+- 以下工具会把内容发送到 Jev 判断服务，私有仓库里的内容也在其中，请按需使用：
+  - `jev`：你提交的问题和选项。
+  - `pstack_start`、`pstack_decide`：任务描述和判断点的上下文。
+  - `pr_status`、`pr_wait`（返回前的最终判断）：PR 的摘要（标题、分支、检查结果）；检查失败时还包括失败项。
+  - `pr_threads`：评审线程和机器人评论的正文。
+  - `fanout_ingest`：`arena` 模式下各候选的 diff；`interrogate` 模式下各审查者报告的发现。
+- 其余工具（`pr_board`、`pr_open`、`pr_ready`、`pr_reply`、`worktree`、`roles`、`fanout_plan`、`pstack_ledger`）不向该服务发送内容。
 - PR 相关工具只调用本机 `gh` / `git` 访问 GitHub，写操作（开 PR、转 Ready、回帖）每次都需要你的授权。
 - 运行台账和判断留痕只写在插件私有数据目录，不上传。
 - KEEL 本身不含遥测或使用统计。

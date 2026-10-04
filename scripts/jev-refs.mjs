@@ -8,10 +8,18 @@ export function loadRefs() {
   const local = "config/profile.local.json";
   if (!existsSync(local)) throw new Error("config/profile.local.json is required (jevRefs)");
   const r = JSON.parse(readFileSync(local, "utf8")).jevRefs ?? { files: [], repos: [], checkOnly: [] };
-  const fromRepos = r.repos.flatMap((repo) =>
-    execFileSync("git", ["-C", repo, "grep", "-l", "-e", "typesafe-jev", "-e", "tool=evaluate"], { encoding: "utf8" }).split("\n").filter(Boolean).map((f) => join(repo, f)),
-  );
+  const fromRepos = r.repos.flatMap((repo) => grepRepo(repo).map((f) => join(repo, f)));
   return { targets: [...new Set([...r.files, ...fromRepos])].filter((f) => !/\/archive\//.test(f)), checkOnly: r.checkOnly ?? [], repos: r.repos };
+}
+
+// git grep exits 1 when nothing matches, which is the migrated state, not an error.
+function grepRepo(repo) {
+  try {
+    return execFileSync("git", ["-C", repo, "grep", "-l", "-e", "typesafe-jev", "-e", "tool=evaluate"], { encoding: "utf8" }).split("\n").filter(Boolean);
+  } catch (e) {
+    if (e.status === 1 && !e.stderr) return [];
+    throw e;
+  }
 }
 
 const TRIGGER = /typesafe-jev|tool=evaluate|tool: evaluate|"tool": "evaluate"|`evaluate`/;

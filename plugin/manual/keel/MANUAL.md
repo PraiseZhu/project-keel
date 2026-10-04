@@ -49,7 +49,8 @@ Keel 把两件事装进一个 Cindy 插件：**日常随时可问的 Jev**（`je
 | control-ui / control-cli | Cindy 浏览器 / 桌面工具 |
 | cloud agent / Grok Bot | 本机 Orca Worker；自定义入口用 Cindy 插件面板 |
 | `gh pr merge` / merge-when-ready | 不提供；用户在 GitHub 合并 |
-| watch-pr 的 ChecksUnavailable（无 CI 的仓永不就绪） | 有意替代：仓里没有任何检查时，按冲突、未解决线程、Draft、评审结论判定；有检查的仓与上游完全一致 |
+| poteto-mode 的 `mode: true` 与新任务 reminder | 未移植：Cindy 插件只能改写用户消息正文（气泡会变），不能像 Cursor 那样隐式附加提醒。改为由 agent 在新任务开始时调用 `pstack_start`；用户不想走 pstack 时不调用 |
+| watch-pr 的 ChecksUnavailable（无 CI 的仓永不就绪） | 有意替代：本次读取不到任何检查时（真无 CI，或新 head 的检查尚未注册），按冲突、未解决线程、Draft、评审结论判定；读得到检查时与上游一致。刚推送后请等检查出现再看结论 |
 
 ## 插件自带的命令行（`<keel>`）
 

@@ -46,7 +46,7 @@ ch.addEventListener("message", (ev) => {
   } else if (m?.type === "fanout") {
     $("#fanout-list").innerHTML = lanesHtml(m.lanes ?? []);
   } else if (m?.type === "fanouts") {
-    $("#fanout-list").innerHTML = (m.fanouts ?? []).map((f: any) => `<div class="row"><b>${esc(f.kind)}</b> ${esc(f.fanout_id)} <span class="meta">${esc(f.created_at)} · ${esc(f.task)}</span>${lanesHtml(f.lanes ?? [])}</div>`).join("") || "还没有并行车道。用 fanout_plan 规划后，这里显示每条车道的状态。";
+    $("#fanout-list").innerHTML = (m.fanouts ?? []).map((f: any) => `<div class="row"><b>${esc(f.kind)}</b> ${esc(f.fanout_id)} <span class="meta">${esc(f.created_at)} · ${f.ingested_at ? `已汇收 ${esc(f.ingested_at)} · ${esc(JSON.stringify(f.status))}` : `进行中（已回报 ${esc((f.reported ?? []).length)}/${esc((f.lanes ?? []).length)}）`} · ${esc(f.task)}</span>${lanesHtml(f.lanes ?? [])}</div>`).join("") || "还没有并行车道。用 fanout_plan 规划后，这里显示每条车道的状态。";
   } else if (m?.type === "scheduled") $("#msg").textContent = "已为你打开自动化创建面板，请去自动化页确认保存。";
   else if (m?.type === "error") $("#msg").textContent = m.message;
 });

@@ -15,7 +15,7 @@
 3. 每个 Worker 按 `output_contract` 回报。主 Agent 收齐后调 `fanout_ingest({ fanout_id, kind, repo_dir, lane_results })`。
 4. arena：Keel 收集各 worktree 的 diff，Jev J3 选基础候选；主 Agent 把它与自评、交叉评审对照后决定，再嫁接其他候选的优点。interrogate：解析各审查车道的 JSON 发现，去重后 J4 统一分级，输出共识 / 单模型 / 分歧。swarm：PASS / ISSUES / BLOCKED 表，缺 SHA 或验证方法的结果判为缺口。
    interrogate 有车道没回报或回报里没有 JSON 块时，结果里的 `gaps` 会列出来，`complete:false`，不当成 0 条发现。
-5. `fanout_ingest({ ..., cleanup: true })` 先弹确认，再按与 `worktree` 清理相同的审计规则清本次 fanout 的 worktree：有未提交改动或 open PR 的保留，未合并分支保留。
+5. `fanout_ingest({ ..., cleanup: true })` 先弹确认，只清本次 fanout 中已回报车道的 worktree：用与 `worktree` 相同的审计，有未提交改动或 open PR 的保留。候选本来就没合并，所以这里只删 worktree 目录、分支一律保留（`git branch -d` 不删未合并分支），和 `worktree` 清理“只删已合并”的规则不同。
 
 ## 失败处理
 

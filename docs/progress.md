@@ -46,4 +46,16 @@
 - P1-02：interrogate 只读车道留在调用方 worktree，审查范围固定 `base_sha...HEAD`。
 - P1-03：`pr_ready` 要求全部检查通过、无进行中、分类器在 Draft 之前无阻塞；交接车道另需 `review_entry_evidence`。
 - P2-01 起点固定为 `base_sha`，未跟踪文件随结果返回；P2-02 worktree 审计按 PR head 匹配、未推送提交不算 safe、审计默认不 fetch，fanout 清理复用同一审计并先确认；P2-03 `localInterrogate:off` 车道无 `user_requested` 拒绝；P2-04 交接车道无 `review:merge-ready` 不报可合并；P2-05 裁判 / 验证车道分到 `after_stage1`，指令列出候选 / 切片 worktree 与 rubric，写车道规则改为按任务实现；P2-06 `lead_agent` 必填、路由缺 effort 即 fail-closed、interrogate 车道缺回报或无 JSON 记为 gaps、J4/J5 超 40 条分批；P2-07 orch 与 check-plan 作为插件自带 CLI（`node <keel>/node/orch.mjs`、`check-plan.mjs`），心跳标记接受 `schedule_create`；P2-08 setup-benny / make-bot-ui 加 Cindy 落地覆盖层；P2-09 设置页显示车道与路径，面板重开恢复看板与最近 fanout，本文件与 migration.md 更新实况。
-- pstack 一致性：关键词兜底路由提示 agent 按 poteto-mode 路由表核对后可用 `playbook` 重调（上游由模型自读路由表）。无 CI 仓的判定（上游 ChecksUnavailable 永不就绪）保留为有意替代，已写入 keel 手册。“持续模式钩子”“cindy.tasks 后端”不是 pstack 能力，按拒绝过度设计不做。
+- pstack 一致性：关键词兜底路由提示 agent 按 poteto-mode 路由表核对后可用 `playbook` 重调（上游由模型自读路由表）。无 CI 仓的判定（上游 ChecksUnavailable 永不就绪）保留为有意替代，已写入 keel 手册。`cindy.tasks` 后端不是 pstack 能力，不做；持续模式见下节复审更正。
+
+## 复审整改（2026-10-05）
+
+复审报告 `Codex/reviews/2026-10-05-keel-rereview.md`：7 条已修、5 条部分修复，仍有 P1-01、P1-03。
+
+- P1-01：`pr/resolve` 改用 `gh pr list --head <branch> --state open`，只有空结果算“没有 PR”；网络、认证、非法响应一律报错，`pr_open` 不会推送。
+- P1-03：`review_entry` 改为结构化证据 `{head_sha, checked_at, result, source}`，必须绑定当前 head、30 分钟内、`result=pass`、写明依据；不成立不转 Ready、不写交接；dry_run 也把它列进缺项。
+- P2-02：fanout 清理只处理已回报的车道，手册写明它只删目录、保留分支，与 `worktree` 只删已合并的规则不同。
+- P2-06：审查回报是 error 对象、或发现缺 file/title 时记为 gaps；routing 未写 `provider_id` 的车道在规划结果里标注。
+- P2-09：汇收结果写回 fanout 记录，面板显示进行中 / 已汇收与状态；设置页可按 lead agent 现读 routing.json；`docs/triad.md` 更新为三机一致的实况。设置页编辑车道、选仓目录不做：车道在构建时个人配置里（公开仓不入库），运行时再存一份会出现两个真源。
+- P2-10（持续模式 reminder）：更正上一轮说法，上游确有 `mode/reminder`。Cindy 只能改写用户消息正文（气泡可见），无法隐式附加提醒，且需要插件常驻；不移植，手册写明由 agent 在新任务开始调用 `pstack_start`。
+- 无 CI 判定：手册改为如实描述“读不到检查”的两种情况（真无 CI 或新 head 未注册）。

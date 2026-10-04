@@ -31,6 +31,19 @@ export function findingsOf(text: string): Finding[] {
   return out;
 }
 
+/** Shape check for a reviewer reply: a findings array (or {findings:[]}) and how many items were unusable. */
+export function laneShape(text: string): { hasArray: boolean; invalid: number } {
+  let hasArray = false;
+  let invalid = 0;
+  for (const b of jsonBlocks(text)) {
+    const arr = Array.isArray(b) ? b : b && typeof b === "object" && Array.isArray((b as any).findings) ? (b as any).findings : null;
+    if (!arr) continue;
+    hasArray = true;
+    invalid += arr.filter((f: any) => !(f && typeof f.file === "string" && typeof f.title === "string")).length;
+  }
+  return { hasArray, invalid };
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9一-鿿]+/g, " ").trim();
 const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
 

@@ -105,6 +105,23 @@ export async function prOpen(ctx: ToolContext, args: Record<string, unknown>) {
   return { ...r, authorization_source: auth };
 }
 
+const ENTRY_MAX_AGE_MS = 30 * 60_000;
+
+/** Structured review-entry evidence: which head was checked, when, against what, and the result. */
+export function checkEntry(raw: unknown, headSha: string | null, now: number): { ok: boolean; problem?: string; value?: Record<string, string> } {
+  const e = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!e) return { ok: false, problem: "缺少 review_entry（需要 head_sha、checked_at、result、source）" };
+  const str = (k: string) => (typeof e[k] === "string" ? (e[k] as string).trim() : "");
+  const value = { head_sha: str("head_sha"), checked_at: str("checked_at"), result: str("result"), source: str("source") };
+  if (value.result !== "pass") return { ok: false, problem: `进场检查结果是 ${JSON.stringify(value.result || "(空)")}，不是 pass`, value };
+  if (!headSha || value.head_sha !== headSha) return { ok: false, problem: `证据针对的 head ${value.head_sha.slice(0, 12) || "(空)"} 不是当前 head ${String(headSha).slice(0, 12)}`, value };
+  const at = Date.parse(value.checked_at);
+  if (!Number.isFinite(at)) return { ok: false, problem: "checked_at 不是有效时间", value };
+  if (at > now + 2 * 60_000 || now - at > ENTRY_MAX_AGE_MS) return { ok: false, problem: `证据时间 ${value.checked_at} 已超过 30 分钟或在未来，请重新核对进场条件`, value };
+  if (value.source.length < 4) return { ok: false, problem: "source 需写明核对依据（规则文件、健康检查或 run 链接）", value };
+  return { ok: true, value };
+}
+
 export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const dry = args.dry_run === true;
   const auth = dry ? null : requireAuth(args, "转 Ready ");
@@ -112,20 +129,24 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const pre = await node<Snapshot>(ctx, "pr/snapshot", snapArgs);
   if (!dry) await assertNotHandedOff(ctx.host, pre.pr.repo, pre.pr.number);
   const handed = Boolean(await readHandoff(ctx.host, pre.pr.repo, pre.pr.number));
-  // Handing off also needs the review machine's entry condition, which no API exposes:
-  // the agent states the evidence it checked, the same way it states authorization.
-  const entry = typeof args.review_entry_evidence === "string" ? args.review_entry_evidence.trim() : "";
-  if (!dry && pre.rule.postReadyOwner === "automation" && entry.length < 4)
-    throw new KeelError("GATE_NOT_MET", "这个车道转 Ready 后交给自动化接管，还需要 review_entry_evidence：写明核对过的服务器审查机进场证据（例如进场 run 链接与结论）。没有就先别转 Ready。", { missing: ["review_entry_evidence"] });
-  const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry });
+  // Handing off also needs the review machine's entry condition (window, tool health), which no
+  // GitHub check exposes before Ready. The agent supplies what it checked; Keel binds it to this
+  // head and a fresh time, and refuses failed, stale or unbound evidence.
+  const entryNeeded = pre.rule.postReadyOwner === "automation";
+  const entry = entryNeeded ? checkEntry(args.review_entry, pre.pr.headSha, ctx.host.now()) : null;
+  if (!dry && entry && !entry.ok)
+    throw new KeelError("GATE_NOT_MET", `这个车道转 Ready 后交给自动化接管，服务器审查机进场证据不成立：${entry.problem}`, { missing: ["review_entry"], review_entry: entry });
+  const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
   if (!r.gate.passed) throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。`, { missing: r.gate.missing, gate: r.gate });
   let handoff = null;
   if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {
-    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry_evidence: entry || null } };
+    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null } };
     await writeHandoff(ctx.host, handoff);
   }
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_ready ${dry ? "dry-run" : "执行"} ${pre.pr.repo}#${pre.pr.number} → ready=${r.ready}`, evidence: r.gate });
-  return { ready: r.ready, executed: r.executed, dry_run: dry, gate: r.gate, handoff, handed_off: Boolean(handoff) || handed, ...(r.would_mark_ready !== undefined ? { would_mark_ready: r.would_mark_ready } : {}) };
+  const entryBlocks = Boolean(entry && !entry.ok);
+  const gate = entryBlocks ? { ...r.gate, passed: false, missing: [...r.gate.missing, `review_entry（${entry!.problem}）`] } : r.gate;
+  return { ready: r.ready && !entryBlocks, executed: r.executed, dry_run: dry, gate, handoff, handed_off: Boolean(handoff) || handed, ...(r.would_mark_ready !== undefined ? { would_mark_ready: r.would_mark_ready && !entryBlocks } : {}), ...(entry ? { review_entry: entry } : {}) };
 }
 
 export async function prThreads(ctx: ToolContext, args: Record<string, unknown>) {

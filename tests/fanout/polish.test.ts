@@ -144,6 +144,13 @@ describe("review scene and lane rules in fanout/prepare", () => {
     const out: any = await dispatch("fanout/prepare", { profile, fanout_id: "fo-scene-0002", kind: "interrogate", repo_dir: feature, base_ref: "main" });
     expect(out.error?.message).toMatch(/lead_agent/);
   });
+  it("fanout cleanup leaves lanes that have not reported", async () => {
+    const out: any = await dispatch("fanout/prepare", { profile, fanout_id: "fo-scene-0005", kind: "arena", repo_dir: repo, base_ref: "main", lead_agent: "codex" });
+    expect(out.error).toBeUndefined();
+    const clean: any = await dispatch("fanout/cleanup", { repo_dir: repo, fanout_id: "fo-scene-0005", labels: ["c1"] });
+    expect(clean.result.removed.map((p: string) => p.split("-").pop())).toEqual(["c1"]);
+    expect(clean.result.kept.filter((k: any) => k.reason === "该车道还没回报")).toHaveLength(2);
+  });
   it("a lane with local review off refuses interrogate unless the user asked", async () => {
     g(repo, "remote", "add", "origin", "https://github.com/acme/gated-app.git");
     const out: any = await dispatch("fanout/prepare", { profile, fanout_id: "fo-scene-0003", kind: "interrogate", repo_dir: feature, base_ref: "main", lead_agent: "claude-code" });

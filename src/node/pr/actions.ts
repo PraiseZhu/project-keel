@@ -8,15 +8,9 @@ import { draftFor, resolveLane } from "../../shared/lanes.ts";
 import type { KeelProfile } from "../../shared/types.ts";
 import { ToolError, gh, ghJson, git, gitRaw } from "../env.ts";
 import { withCwd } from "../context.ts";
-import { readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
+import { originRepo, readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
 import { GhGitHubReader } from "./upstream/github.ts";
 
-export async function originRepo(repoDir: string): Promise<string> {
-  const url = (await git(["remote", "get-url", "origin"], { cwd: repoDir })).trim();
-  const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
-  if (!m) throw new ToolError("NO_REMOTE", `origin 不是 GitHub 仓库：${url}`);
-  return `${m[1]}/${m[2]}`;
-}
 
 /** Write a JSON body to a private temp file and hand it to `gh api --input`; never via argv or a shell. */
 async function ghApiInput(args: string[], body: unknown): Promise<string> {
@@ -89,8 +83,10 @@ export function readyVerdict(s: Pick<Awaited<ReturnType<typeof snapshot>>, "gate
   return { passed: (!gate.applies || gate.ok) && blockerOk && s.checks.failed.length === 0 && s.checks.pending.length === 0, missing };
 }
 
-export async function prReady(profile: KeelProfile, p: { repo_dir?: string; repo?: string; pr?: number; dry_run?: boolean }) {
+export async function prReady(profile: KeelProfile, p: { repo_dir?: string; repo?: string; pr?: number; dry_run?: boolean; expected_head?: string | null }) {
   const s = await snapshot(profile, p);
+  // The caller checked its evidence against one head; if the PR moved since, that evidence is stale.
+  if (p.expected_head && s.pr.headSha !== p.expected_head) throw new ToolError("HEAD_MOVED", "评估门禁后 PR head 有新提交，进场证据与门禁都要按新 head 重新核对后再调用 pr_ready。");
   const gate = s.gate;
   const { passed, missing } = readyVerdict(s);
   const base = { gate: { passed, missing, required: gate.required, sources: gate.sources }, pr: s.pr, preset: s.preset, head_sha: s.pr.headSha };

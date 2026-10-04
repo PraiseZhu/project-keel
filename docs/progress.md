@@ -32,3 +32,8 @@
 - S3：共用车道 `fo-2610041301-214`（gpt-6-sol / grok-4.6 / glm-5.3），lead、Codex、Pi 各自规划与汇收，结果一致。
 - S5：arena `fo-2610041312-7ac` 三候选 + cross-judge，base c1 嫁接 c2 测试，修复 interrogate 中文标题去重（分支 `keel/fix-cjk-dedupe`）。
 - 矩阵 6 格全部有实跑证据。
+
+## SC-15 / SC-16（2026-10-04）
+
+- 三机：Mini、Air 由用户导入并填 Key；Mini 一度为停用状态（安装目录有 `.disabled`），启用后三台安装内容 sha256 一致 → `TRIAD_OK 3`。两台的 Keel jev 留痕各有一条成功调用（noul 0.99）。
+- 迁移：`node scripts/jev-migrate.mjs --apply` 改 11 个文件（全局规则 3、Pi AGENTS、skill-trigger-detail、jev-decision SKILL、approve-exec 6 个文件）；`jev-refs-check` 修正“git grep 无匹配退出 1 被当成错误”后输出 `JEV_REFS_MIGRATED`。Cindy 托管的 codex-home 副本只检查不改。

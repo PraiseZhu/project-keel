@@ -5,7 +5,7 @@
 
 ## 项目目标
 
-Cindy 插件「Keel 龙骨」：可单独调用的 Jev 快速决策，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）
+Cindy 插件「KEEL」：可单独调用的 Jev 快速决策，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）
 
 ## 技术栈
 

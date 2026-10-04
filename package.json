@@ -2,7 +2,7 @@
   "name": "keel",
   "version": "0.1.0",
   "private": true,
-  "description": "Keel 龙骨：Cindy 插件——日常可单独调用的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）",
+  "description": "KEEL：Cindy 插件——日常可单独调用的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）",
   "type": "module",
   "license": "MIT",
   "scripts": {

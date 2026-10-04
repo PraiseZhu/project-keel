@@ -118,7 +118,7 @@ const manifest = {
   schemaVersion: 3,
   minCindyVersion: "0.1.97",
   id: "keel",
-  name: "Keel 龙骨",
+  name: "KEEL",
   description: "日常随时可问的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）。",
   whenToUse: "用户要问 Jev 做选择、评分或是非判断；或要推进 PR、盯 CI 与评审、修 bug、按 pstack 方法做调查/重构/功能，以及清理 worktree、查派工角色时使用。",
   version: pkg.version,
@@ -138,7 +138,7 @@ const manifest = {
   // rules and `jev` reports JEV_NOT_CONFIGURED. Without this, the host's heuristic blocks every
   // tool behind the setup card until a key is saved.
   setup: { requires: [] },
-  panel: { title: "Keel 龙骨", html: "panel.html" },
+  panel: { title: "KEEL", html: "panel.html" },
   badge: true,
   confirm: true,
   fs: true,

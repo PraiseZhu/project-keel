@@ -32,7 +32,7 @@ cindy.onHostMessage(async (msg: any) => {
 // Panel requests: { reqId, op: "board" | "ledger" }. Deduplicate by reqId; the panel resends until acked.
 const seen = new Set<string>();
 channel?.addEventListener("message", async (ev: MessageEvent) => {
-  const m = ev.data as { reqId?: string; op?: string };
+  const m = ev.data as { reqId?: string; op?: string; lead_agent?: string };
   if (!m?.reqId || seen.has(m.reqId) || m.op === undefined) return;
   seen.add(m.reqId);
   channel.postMessage({ type: "ack", reqId: m.reqId });
@@ -43,6 +43,10 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
   } else if (m.op === "ledger") {
     const r = await runTool(ctx, "pstack_ledger", { op: "read", limit: 100 });
     channel.postMessage({ type: "ledger", reqId: m.reqId, ...(r.ok ? { rows: (r.result as any).rows } : { message: r.message }) });
+  } else if (m.op === "roles") {
+    const agent = (m as { lead_agent?: string }).lead_agent ?? "claude-code";
+    const r = await runTool(ctx, "roles", { lead_agent: agent });
+    channel.postMessage({ type: "roles", reqId: m.reqId, lead_agent: agent, ...(r.ok ? { result: r.result } : { message: r.message }) });
   } else if (m.op === "restore") {
     // Reopened panel: last board snapshot plus the most recent fanouts from the data dir.
     const board = await host.fs({ op: "read", root: "data", path: "board/latest.json" });
@@ -54,7 +58,7 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
       const r = await host.fs({ op: "read", root: "data", path: `fanout/${n}` });
       if (r.ok && r.content) {
         const f = JSON.parse(r.content);
-        fanouts.push({ fanout_id: f.fanout_id, kind: f.kind, created_at: f.created_at, task: String(f.task ?? "").slice(0, 120), lanes: (f.lanes ?? []).map((l: any) => ({ label: l.label, role: l.role, route: l.route, working_dir: l.working_dir })) });
+        fanouts.push({ fanout_id: f.fanout_id, kind: f.kind, created_at: f.created_at, ingested_at: f.ingested_at ?? null, status: f.status ?? null, reported: f.reported ?? [], task: String(f.task ?? "").slice(0, 120), lanes: (f.lanes ?? []).map((l: any) => ({ label: l.label, role: l.role, route: l.route, working_dir: l.working_dir })) });
       }
     }
     channel.postMessage({ type: "fanouts", reqId: m.reqId, fanouts: fanouts.reverse() });

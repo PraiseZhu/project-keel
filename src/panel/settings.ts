@@ -49,6 +49,27 @@ if (lanesEl) {
 <p>派工路由：${prof.routingPath ? "已配置 routing.json" : "未配置（roles / fanout_plan 会 fail-closed）"}；计划目录：${prof.plansDir ? "已配置" : "目标仓 docs/"}；看板默认仓：${(prof.boardRepos ?? []).length} 个。</p>`;
 }
 
+// Live roles: ask main.js (same BroadcastChannel as the panel) to re-read routing.json.
+const rolesEl = document.querySelector<HTMLElement>("#roles");
+const rolesBtn = document.querySelector<HTMLButtonElement>("#roles-refresh");
+const leadSel = document.querySelector<HTMLSelectElement>("#roles-lead");
+if (rolesEl && rolesBtn && typeof BroadcastChannel !== "undefined") {
+  const ch = new BroadcastChannel("keel");
+  ch.addEventListener("message", (ev) => {
+    const m = ev.data;
+    if (m?.type !== "roles") return;
+    if (m.message) return void (rolesEl.textContent = `读取失败：${m.message}`);
+    const rows = Object.entries<any>(m.result?.roles ?? m.result ?? {}).filter(([, v]) => v && typeof v === "object" && v.model);
+    rolesEl.innerHTML = rows.length ? `<table><thead><tr><th>角色</th><th>agent / 模型 / 强度</th><th>来源档</th></tr></thead><tbody>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v.agent)} / ${esc(v.model)} / ${esc(v.effort)}</td><td>${esc(v.tier)}</td></tr>`).join("")}</tbody></table>` : esc(JSON.stringify(m.result).slice(0, 400));
+  });
+  rolesBtn.addEventListener("click", async () => {
+    rolesEl.textContent = "读取中…";
+    try { await fetch("cindy-ghost://keel/wake"); } catch { /* already awake */ }
+    const reqId = `roles-${Date.now()}`;
+    for (let i = 0; i < 10; i++) { ch.postMessage({ reqId, op: "roles", lead_agent: leadSel?.value ?? "claude-code" }); await new Promise((r) => setTimeout(r, 400)); if (rolesEl.textContent !== "读取中…") break; }
+  });
+}
+
 refresh().catch(() => {
   statusEl.textContent = "无法读取配置状态，请重新打开插件详情。";
 });

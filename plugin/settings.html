@@ -8,5 +8,8 @@
 <a href="https://console.typesafe.ai/home">前往 Typesafe 控制台</a>
 <h3>车道与派工路由</h3>
 <div id="lanes"></div>
-<p class="hint">以上来自本机个人配置（构建时注入，改配置后重新构建安装）。各角色当前用哪个模型，在聊天里用 <code>roles</code> 工具现读 routing.json。</p>
+<p class="hint">以上来自本机个人配置（构建时注入，改配置后重新构建安装）。</p>
+<h3>当前派工路由</h3>
+<div><select id="roles-lead"><option value="claude-code">lead：Claude Code</option><option value="codex">lead：Codex</option><option value="pi">lead：Pi</option></select><button type="button" id="roles-refresh">现读 routing.json</button></div>
+<div id="roles"></div>
 <script src="/settings.js"></script></body></html>

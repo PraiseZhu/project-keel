@@ -5,7 +5,7 @@ import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
-import { classifyAgreement, crossJudge, dedupe, findingsOf, jsonBlocks, swarmRow } from "./ingest.ts";
+import { classifyAgreement, crossJudge, dedupe, findingsOf, jsonBlocks, laneShape, swarmRow } from "./ingest.ts";
 import { createWorkersPayload, isStage2, outputContract, promptFor, type PreparedLane, type PromptContext } from "./spec.ts";
 
 const KINDS = ["arena", "interrogate", "swarm"];
@@ -44,7 +44,7 @@ export async function fanoutPlan(ctx: ToolContext, args: Record<string, unknown>
   });
   const rubric = typeof args.rubric === "string" ? args.rubric : undefined;
   const pc: PromptContext = { task, ...(rubric ? { rubric } : {}), baseSha: prep.base_sha ?? null, sceneHead: prep.scene_head ?? null, lanes: prep.lanes };
-  const lanes = prep.lanes.map((l) => ({ label: l.label, role: l.role, lane: l.lane, stage: isStage2(l) ? 2 : 1, route: { agent: l.route.agent, model: l.route.model, effort: l.route.effort, provider_id: l.route.provider_id, tier: l.route.tier }, fallbacks: l.route.fallbacks, working_dir: l.working_dir, branch: l.branch, note: l.note ?? null, prompt: promptFor(kind, l, pc), output_contract: outputContract(l) }));
+  const lanes = prep.lanes.map((l) => ({ label: l.label, role: l.role, lane: l.lane, stage: isStage2(l) ? 2 : 1, route: { agent: l.route.agent, model: l.route.model, effort: l.route.effort, provider_id: l.route.provider_id, tier: l.route.tier }, fallbacks: l.route.fallbacks, working_dir: l.working_dir, branch: l.branch, note: l.note ?? (l.route.provider_id ? null : "routing.json 未写 provider_id，由宿主按默认来源解析；同模型有多个来源时请先在 routing.json 补上"), prompt: promptFor(kind, l, pc), output_contract: outputContract(l) }));
   const record = { ...prep, task, rubric: rubric ?? null, created_at: new Date(ctx.host.now()).toISOString() };
   await ctx.host.fs({ op: "write", root: "data", path: `fanout/${id}.json`, content: JSON.stringify(record, null, 2) });
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `fanout_plan ${kind} ${id}：${lanes.length} 条车道（${lanes.map((l) => `${l.label}=${l.route.model}/${l.route.effort ?? "-"}`).join("，")}）`, evidence: { routing_sha256: prep.routing.sha256 } });
@@ -86,9 +86,13 @@ export async function fanoutIngest(ctx: ToolContext, args: Record<string, unknow
     const expected = prep.lanes.filter((l) => l.lane === "reviewer").map((l) => l.label);
     const gaps = [
       ...expected.filter((l) => !results.some((r) => r.label === l)).map((label) => ({ label, gap: "车道没有回报" })),
-      ...results.filter((r) => !jsonBlocks(r.text ?? "").length).map((r) => ({ label: r.label, gap: "回报里没有可解析的 JSON 发现块" })),
+      ...results.flatMap((r) => {
+        const sh = laneShape(r.text ?? "");
+        if (!sh.hasArray) return [{ label: r.label, gap: jsonBlocks(r.text ?? "").length ? "JSON 不是发现数组（例如 error 对象），不当作 0 发现" : "回报里没有可解析的 JSON 发现块" }];
+        return sh.invalid ? [{ label: r.label, gap: `${sh.invalid} 条发现缺 file 或 title，未计入` }] : [];
+      }),
     ];
-    const perLane = results.filter((r) => jsonBlocks(r.text ?? "").length).map((r) => ({ label: r.label, findings: findingsOf(r.text ?? "") }));
+    const perLane = results.filter((r) => laneShape(r.text ?? "").hasArray).map((r) => ({ label: r.label, findings: findingsOf(r.text ?? "") }));
     const merged = dedupe(perLane);
     const o = merged.length ? await judgeItems(ctx, "J4", merged.map((m) => ({ id: m.id, ...m.finding, found_by: m.lanes })), runOpts) : null;
     const items = o?.items ?? [];
@@ -105,11 +109,16 @@ export async function fanoutIngest(ctx: ToolContext, args: Record<string, unknow
     out = { rows, missing_lanes: missingLanes, gaps: rows.filter((r) => r.gap).map((r) => ({ label: r.label, gap: r.gap })), all_pass: !missingLanes.length && rows.every((r) => r.verdict === "PASS" && !r.gap) };
   }
   if (args.cleanup === true && prep.repo_root) {
-    const wts = prep.lanes.filter((l) => l.write && l.working_dir).map((l) => l.working_dir);
+    // Only lanes that have reported are finished; a candidate still working must not lose its tree.
+    const done = prep.lanes.filter((l) => l.write && l.working_dir && results.some((r) => r.label === l.label));
+    const wts = done.map((l) => l.working_dir);
     const c = await ctx.host.confirm({ body: `清理本次 fanout 的 ${wts.length} 个 worktree（有未提交改动或 open PR 的会保留，未合并分支保留）：\n${wts.join("\n")}`.slice(0, 300), confirmText: "清理", cancelText: "保留", danger: true });
     if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未清理。`);
-    out.cleanup = c.confirmed ? await node(ctx, "fanout/cleanup", { repo_dir: prep.repo_root, fanout_id: id }) : { skipped: "用户选择保留" };
+    out.cleanup = c.confirmed ? await node(ctx, "fanout/cleanup", { repo_dir: prep.repo_root, fanout_id: id, labels: done.map((l) => l.label) }) : { skipped: "用户选择保留" };
   }
+  // Keep the outcome next to the plan so a reopened panel can show where each fanout stands.
+  const status = kind === "arena" ? { cross_judge_base: (out.cross_judge as any)?.base ?? null, agree: out.agree } : kind === "interrogate" ? { complete: out.complete, consensus: out.consensus, single: out.single, disputed: out.disputed, gaps: (out.gaps as unknown[]).length } : { all_pass: out.all_pass, missing_lanes: (out.missing_lanes as unknown[]).length };
+  await ctx.host.fs({ op: "write", root: "data", path: `fanout/${id}.json`, content: JSON.stringify({ ...prep, ingested_at: new Date(ctx.host.now()).toISOString(), status, reported: results.map((r) => r.label) }, null, 2) });
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "evidence", summary: `fanout_ingest ${kind} ${id}`, evidence: out });
   return { fanout_id: id, kind, ...out };
 }

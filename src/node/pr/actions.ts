@@ -8,15 +8,9 @@ import { draftFor, resolveLane } from "../../shared/lanes.ts";
 import type { KeelProfile } from "../../shared/types.ts";
 import { ToolError, gh, ghJson, git, gitRaw } from "../env.ts";
 import { withCwd } from "../context.ts";
-import { readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
+import { originRepo, readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
 import { GhGitHubReader } from "./upstream/github.ts";
 
-export async function originRepo(repoDir: string): Promise<string> {
-  const url = (await git(["remote", "get-url", "origin"], { cwd: repoDir })).trim();
-  const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
-  if (!m) throw new ToolError("NO_REMOTE", `origin 不是 GitHub 仓库：${url}`);
-  return `${m[1]}/${m[2]}`;
-}
 
 /** Write a JSON body to a private temp file and hand it to `gh api --input`; never via argv or a shell. */
 async function ghApiInput(args: string[], body: unknown): Promise<string> {

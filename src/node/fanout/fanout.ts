@@ -8,7 +8,7 @@ import type { KeelProfile } from "../../shared/types.ts";
 import { ToolError, git, gitRaw } from "../env.ts";
 import { assertRef, audit, defaultBranch, repoRoot } from "../git/worktree.ts";
 import { resolveLane } from "../../shared/lanes.ts";
-import { originRepo } from "../pr/actions.ts";
+import { originRepo } from "../pr/snapshot.ts";
 import { readRouting, reviewVariants, tierOf } from "../routes/routing.ts";
 
 const ID = /^[a-z0-9][a-z0-9-]{3,40}$/;
@@ -72,7 +72,7 @@ export async function collect(p: { repo_dir: string; lanes: { label: string; wor
   return out;
 }
 
-export async function cleanup(p: { repo_dir: string; fanout_id: string }) {
+export async function cleanup(p: { repo_dir: string; fanout_id: string; labels?: string[] }) {
   if (!ID.test(p.fanout_id)) throw new ToolError("INVALID_INPUT", "fanout_id 格式不对。");
   const root = await repoRoot(p.repo_dir);
   const list = await git(["worktree", "list", "--porcelain"], { cwd: root });
@@ -84,6 +84,7 @@ export async function cleanup(p: { repo_dir: string; fanout_id: string }) {
   const rows = await audit(root);
   for (const wt of list.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9))) {
     if (!wt.startsWith(prefix)) continue;
+    if (p.labels && !p.labels.includes(wt.slice(prefix.length))) { kept.push({ path: wt, reason: "该车道还没回报" }); continue; }
     const row = rows.find((r) => r.path === wt);
     if (!row || row.bucket === "hold-wip" || row.bucket === "hold-open-pr" || row.dirty !== "clean") { kept.push({ path: wt, reason: row ? `审计为 ${row.bucket}/${row.dirty}` : "审计未覆盖" }); continue; }
     const r = await gitRaw(["worktree", "remove", wt], { cwd: root });

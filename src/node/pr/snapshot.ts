@@ -3,7 +3,7 @@
 
 import { evaluateGate, resolveLane } from "../../shared/lanes.ts";
 import type { DecisionKind, KeelProfile, PrStatus, PrSummary, RequiredGate } from "../../shared/types.ts";
-import { ToolError, ghJson, ghRaw } from "../env.ts";
+import { ToolError, ghJson, ghRaw, git } from "../env.ts";
 import { withCwd } from "../context.ts";
 import { ChecksUnavailable, GhGitHubReader, resolveContext } from "./upstream/github.ts";
 import { classifyPr, readSnapshot } from "./upstream/policy.ts";
@@ -29,15 +29,21 @@ export async function resolvePr(args: SnapshotArgs): Promise<T.PrContext> {
   }
 }
 
-/** The open PR for this branch, if any; `null` when the branch has none yet. */
+export async function originRepo(repoDir: string): Promise<string> {
+  const url = (await git(["remote", "get-url", "origin"], { cwd: repoDir })).trim();
+  const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
+  if (!m) throw new ToolError("NO_REMOTE", `origin 不是 GitHub 仓库：${url}`);
+  return `${m[1]}/${m[2]}`;
+}
+
+/** The open PR for this branch, if any. Only an empty answer means "no PR"; any query failure throws. */
 export async function resolveExisting(args: SnapshotArgs): Promise<{ repo: string; number: number } | null> {
-  try {
-    const c = await resolvePr(args);
-    return { repo: `${c.owner}/${c.repo}`, number: c.number };
-  } catch (e) {
-    if (e instanceof ToolError && e.code === "NO_PR") return null;
-    throw e;
-  }
+  if (!args.repo_dir) throw new ToolError("INVALID_INPUT", "需要 repo_dir 才能查当前分支的 PR。");
+  const repo = await originRepo(args.repo_dir);
+  const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: args.repo_dir })).trim();
+  const rows = await ghJson<{ number: number }[]>(["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number", "--limit", "5"], { timeoutMs: 30_000 });
+  if (!Array.isArray(rows)) throw new ToolError("GH_ERROR", "gh pr list 返回的不是数组，无法确认分支是否已有 PR。");
+  return rows[0] ? { repo, number: rows[0].number } : null;
 }
 
 export async function readBaseFile(repo: string, base: string, path: string): Promise<string | null> {

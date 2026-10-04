@@ -36,6 +36,27 @@ describe("interrogate ingest", () => {
     expect(classifyAgreement(m[0]!)).toBe("consensus");
     expect(classifyAgreement(m[1]!)).toBe("single");
   });
+  it("merges Chinese paraphrases of the same finding at the same line", () => {
+    const cn1 = '```json\n[{"file":"src/main/jev/client.ts","line":119,"title":"凭证错误消息可能失去填写指引","severity_guess":"P1"}]\n```';
+    const cn3 = '```json\n[{"file":"src/main/jev/client.ts","line":119,"title":"中继路径假设 host 凭证消息自带填写指引，若消息匹配凭证正则但无指引则丢失去向提示","severity_guess":"P1"}]\n```';
+    const m = dedupe([{ label: "r1", findings: findingsOf(cn1) }, { label: "r3", findings: findingsOf(cn3) }]);
+    expect(m).toHaveLength(1);
+    expect(m[0]!.lanes).toEqual(["r1", "r3"]);
+    expect(classifyAgreement(m[0]!)).toBe("consensus");
+  });
+  it("does not merge different Chinese issues at the same file and line", () => {
+    const lostGuide = '```json\n[{"file":"src/main/jev/client.ts","line":119,"title":"凭证错误消息可能失去填写指引"}]\n```';
+    const expiry = '```json\n[{"file":"src/main/jev/client.ts","line":119,"title":"host 未校验凭证过期时间导致请求失败"}]\n```';
+    const m = dedupe([{ label: "r1", findings: findingsOf(lostGuide) }, { label: "r2", findings: findingsOf(expiry) }]);
+    expect(m).toHaveLength(2);
+    expect(m.map((row) => classifyAgreement(row))).toEqual(["single", "single"]);
+  });
+  it("does not merge Chinese titles that only share generic two-character words", () => {
+    const a = '```json\n[{"file":"src/a.ts","line":10,"title":"错误消息可能丢失"}]\n```';
+    const b = '```json\n[{"file":"src/a.ts","line":10,"title":"可能错误处理空值"}]\n```';
+    const m = dedupe([{ label: "r1", findings: findingsOf(a) }, { label: "r2", findings: findingsOf(b) }]);
+    expect(m).toHaveLength(2);
+  });
 });
 
 describe("arena and swarm ingest", () => {

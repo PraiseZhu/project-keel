@@ -55,3 +55,14 @@ describe("missing credential", () => {
     await expect(evaluate(h, { state: "s", questions: q as any })).rejects.toMatchObject({ code: "JEV_NOT_CONFIGURED" });
   });
 });
+
+describe("JEV_NOT_CONFIGURED wording", () => {
+  it("relays the host's setup hint once instead of appending a second instruction", async () => {
+    const hostMsg = "凭证「Typesafe API Key」尚未配置——请到主界面侧边栏「插件」的本插件详情页填入后再试。";
+    const h = fakeHost({ fetch: () => ({ ok: false, status: 0, body: "", message: hostMsg }) });
+    const err: any = await evaluate(h, { state: "s", questions: q as any }).catch((e) => e);
+    expect(err.code).toBe("JEV_NOT_CONFIGURED");
+    expect(err.message).toContain(hostMsg);
+    expect(err.message.match(/后(再|重)?试/g)).toHaveLength(1);
+  });
+});

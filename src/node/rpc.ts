@@ -42,7 +42,7 @@ const methods: Record<string, Method> = {
   "worktree/create": (p) => createWorktree(p as any),
   "worktree/audit": (p) => audit(p.repo_dir),
   "worktree/prune": (p) => prune(p.repo_dir, p.paths ?? []),
-  "routes/read": async (p, profile) => roles(profile.routingPath, p.lead_model ?? null),
+  "routes/read": async (p, profile) => roles(profile.routingPath, p.lead_agent ?? null),
 };
 
 export function register(name: string, fn: Method): void {

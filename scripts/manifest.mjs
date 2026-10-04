@@ -100,12 +100,12 @@ const tools = [
   {
     name: "roles",
     description: "现读本机 Orca routing.json，返回 developer/reviewer/tester/merger 对应的 {agent, model, effort, provider_id, fallbacks} 与来源档位。读不到或格式错返回 ROUTING_UNREADABLE（fail-closed，不自行换模型）。只读本地文件。",
-    parameters: obj({ op: { type: "string", enum: ["show", "refresh"] }, lead_model: str("当前 lead 会话模型 id；gpt 系会改用 review.when_lead.gpt。") }),
+    parameters: obj({ op: { type: "string", enum: ["show", "refresh"] }, lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>；不传则用顶层 review。" } }),
   },
   {
     name: "fanout_plan",
     description: "规划多模型并行（arena/interrogate/swarm）：现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/。不派发 Worker——派发由主 Agent 执行。",
-    parameters: obj({ kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, run_id: str("台账 run_id。"), repo_dir: str("仓库目录。"), base_ref: str("写车道起点。"), task: str("任务描述。"), rubric: str("评审标准。"), lanes: int("车道数（arena/interrogate 缺省 3）。"), slices: { type: "array", items: { type: "string" }, description: "swarm 的切片。" }, lead_model: str("lead 会话模型 id。") }, ["kind", "task"]),
+    parameters: obj({ kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, run_id: str("台账 run_id。"), repo_dir: str("仓库目录。"), base_ref: str("写车道起点。"), task: str("任务描述。"), rubric: str("评审标准。"), lanes: int("车道数（arena/interrogate 缺省 3）。"), slices: { type: "array", items: { type: "string" }, description: "swarm 的切片。" }, lead_model: str("lead 会话模型 id（只用于让裁判席避开同家族）。"), lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>；不传则用顶层 review。" } }, ["kind", "task"]),
   },
   {
     name: "fanout_ingest",

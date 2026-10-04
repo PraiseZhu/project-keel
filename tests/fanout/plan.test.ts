@@ -11,7 +11,7 @@ import { createWorkersPayload } from "../../src/main/fanout/spec.ts";
 const routing = {
   updated: "2026-01-01",
   execute: { agent: "pi", model: "grok-9", effort: "high", provider_id: "p-a", fallbacks: [{ agent: "pi", model: "vendor/grok-9", effort: "high", provider_id: "p-b" }] },
-  review: { agent: "codex", model: "gpt-9", effort: "high", provider_id: "p-a", fallbacks: [], when_lead: { gpt: { agent: "claude-code", model: "z/glm-9", effort: "max", provider_id: "p-b", fallbacks: [] } } },
+  review: { agent: "claude-code", model: "z/glm-9", effort: "max", provider_id: "p-b", fallbacks: [], when_lead: { "claude-code": { agent: "claude-code", model: "openai/gpt-9", effort: "high", provider_id: "p-b", fallbacks: [{ agent: "claude-code", model: "gpt-9", effort: "high", provider_id: "p-a" }] } } },
   e2e: { agent: "codex", model: "gpt-9-mini", effort: "max", fallbacks: [] },
 };
 mkdirSync("_tmp/test-runs", { recursive: true });
@@ -32,14 +32,28 @@ describe("lane routes come verbatim from routing.json", () => {
     const lanes = planLanes("arena", t, { leadModel: "claude-opus" });
     expect(lanes.map((l) => l.label)).toEqual(["c1", "c2", "c3", "judge"]);
     expect(new Set(lanes.slice(0, 3).map((l) => family(l.route.model))).size).toBe(3);
-    expect(lanes[0]!.route).toMatchObject({ agent: "codex", model: "gpt-9", effort: "high", provider_id: "p-a" });
+    expect(lanes[0]!.route).toMatchObject({ agent: "claude-code", model: "z/glm-9", effort: "max", provider_id: "p-b", tier: "review" });
   });
-  it("gpt lead: seat A uses review.when_lead.gpt, seat C is flagged same-family, judge differs from lead", () => {
-    const lanes = planLanes("interrogate", t, { leadModel: "openai/gpt-9" });
-    expect(lanes[0]!.route.tier).toBe("review.when_lead.gpt");
-    expect(lanes[2]!.note).toContain("同家族");
-    const arena = planLanes("arena", t, { leadModel: "gpt-9" });
+  it("claude-code lead: seat A uses review.when_lead.claude-code, three families kept", () => {
+    const tc = tiersFrom(routing as any, "claude-code");
+    const lanes = planLanes("interrogate", tc, { leadModel: "claude-opus" });
+    expect(lanes[0]!.route).toMatchObject({ tier: "review.when_lead.claude-code", model: "openai/gpt-9" });
+    expect(lanes[0]!.route.fallbacks[0]).toMatchObject({ model: "gpt-9", provider_id: "p-a" });
+    expect(new Set(lanes.map((l) => family(l.route.model))).size).toBe(3);
+    expect(lanes[2]!.route.tier).toBe("review");
+  });
+  it("codex lead without its own override uses top-level review; the claude-code override fills seat C", () => {
+    const tx = tiersFrom(routing as any, "codex");
+    const lanes = planLanes("interrogate", tx, {});
+    expect(lanes.map((l) => l.route.tier)).toEqual(["review", "execute", "review.when_lead.claude-code"]);
+    expect(lanes.every((l) => !l.note)).toBe(true);
+  });
+  it("judge avoids the lead's model family", () => {
+    const arena = planLanes("arena", tiersFrom(routing as any, "claude-code"), { leadModel: "gpt-9" });
     expect(family(arena.at(-1)!.route.model)).not.toBe("gpt");
+  });
+  it("rejects an unknown lead_agent instead of guessing", () => {
+    expect(() => tiersFrom(routing as any, "gpt")).toThrow(/lead_agent/);
   });
   it("swarm uses execute for slices and e2e for the verifier", () => {
     const lanes = planLanes("swarm", t, { slices: ["api", "ui"] });
@@ -48,7 +62,7 @@ describe("lane routes come verbatim from routing.json", () => {
   it("create_workers payload copies agent/model/effort/provider_id exactly", () => {
     const lanes = planLanes("interrogate", t, {}).map((l) => ({ ...l, working_dir: null, branch: null }));
     const p = createWorkersPayload("fo-2601010000-abc", "interrogate", lanes, "review x");
-    expect(p.workers[0]).toMatchObject({ role: "reviewer", agent: "codex", model: "gpt-9", effort: "high", provider_id: "p-a" });
+    expect(p.workers[0]).toMatchObject({ role: "reviewer", agent: "claude-code", model: "z/glm-9", effort: "max", provider_id: "p-b" });
     for (const w of p.workers) expect(w.label).toMatch(/^[a-z0-9_-]{1,32}$/);
   });
 });

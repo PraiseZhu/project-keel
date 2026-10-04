@@ -8,7 +8,8 @@ export type FanoutKind = "arena" | "interrogate" | "swarm";
 export interface Tiers {
   readonly review: RouteWithFallbacks;
   readonly execute: RouteWithFallbacks;
-  readonly reviewWhenGpt: RouteWithFallbacks | null;
+  /** A review variant (top-level or another lead's override) from a third model family, if any. */
+  readonly reviewAlt: RouteWithFallbacks | null;
   readonly e2e: RouteWithFallbacks | null;
 }
 
@@ -27,12 +28,9 @@ export function family(model: string): string {
 }
 
 /** Three seats from three tiers so the lanes span different model families. */
-export function seats(t: Tiers, leadModel: string | null): { route: RouteWithFallbacks; note?: string }[] {
-  const lead = leadModel ? family(leadModel) : null;
-  const third = t.reviewWhenGpt ?? t.review;
-  if (lead === "gpt" && t.reviewWhenGpt)
-    return [{ route: t.reviewWhenGpt, note: "lead 为 gpt 系，A 席改用 review.when_lead.gpt" }, { route: t.execute }, { route: t.review, note: "与 lead 同家族" }];
-  return [{ route: t.review }, { route: t.execute }, { route: third }];
+export function seats(t: Tiers): { route: RouteWithFallbacks; note?: string }[] {
+  if (t.reviewAlt) return [{ route: t.review }, { route: t.execute }, { route: t.reviewAlt }];
+  return [{ route: t.review }, { route: t.execute }, { route: t.review, note: "routing.json 没有第三家族的审核档，C 席与 A 席同模型" }];
 }
 
 export function planLanes(kind: FanoutKind, t: Tiers, opts: { lanes?: number; slices?: readonly string[]; leadModel?: string | null }): LanePlan[] {
@@ -44,11 +42,11 @@ export function planLanes(kind: FanoutKind, t: Tiers, opts: { lanes?: number; sl
     return out;
   }
   const n = Math.min(3, Math.max(2, opts.lanes ?? 3));
-  const s = seats(t, lead).slice(0, n);
+  const s = seats(t).slice(0, n);
   if (kind === "interrogate") return s.map((x, i) => ({ label: `r${i + 1}`, role: "reviewer", lane: "reviewer", write: false, route: x.route, ...(x.note ? { note: x.note } : {}) }));
   const out: LanePlan[] = s.map((x, i) => ({ label: `c${i + 1}`, role: "developer", lane: "candidate", write: true, route: x.route, ...(x.note ? { note: x.note } : {}) }));
   const leadFam = lead ? family(lead) : null;
-  const judge = [t.review, t.execute, t.reviewWhenGpt].filter((r): r is RouteWithFallbacks => r !== null).find((r) => family(r.model) !== leadFam) ?? t.review;
+  const judge = [t.review, t.execute, t.reviewAlt].filter((r): r is RouteWithFallbacks => r !== null).find((r) => family(r.model) !== leadFam) ?? t.review;
   out.push({ label: "judge", role: "reviewer", lane: "cross-judge", write: false, route: judge, note: "与 lead 不同家族" });
   return out;
 }

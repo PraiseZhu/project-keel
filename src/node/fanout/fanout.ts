@@ -3,26 +3,27 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { planLanes, type FanoutKind, type Tiers } from "../../shared/fanout.ts";
+import { family, planLanes, type FanoutKind, type Tiers } from "../../shared/fanout.ts";
 import type { KeelProfile } from "../../shared/types.ts";
 import { ToolError, git, gitRaw } from "../env.ts";
 import { assertRef, defaultBranch, repoRoot } from "../git/worktree.ts";
-import { readRouting, tierOf } from "../routes/routing.ts";
+import { readRouting, reviewVariants, tierOf } from "../routes/routing.ts";
 
 const ID = /^[a-z0-9][a-z0-9-]{3,40}$/;
 
-export function tiersFrom(data: Record<string, unknown>): Tiers {
-  const review = tierOf(data, "review");
+export function tiersFrom(data: Record<string, unknown>, leadAgent?: string | null): Tiers {
+  const review = tierOf(data, "review", leadAgent);
   const execute = tierOf(data, "execute");
-  const whenGpt = (data.review as any)?.when_lead?.gpt ? tierOf(data, "review", "gpt-x") : null;
+  const used = new Set([family(review.model), family(execute.model)]);
+  const reviewAlt = reviewVariants(data).find((v) => v.tier !== review.tier && !used.has(family(v.model))) ?? null;
   const e2e = data.e2e ? tierOf(data, "e2e") : null;
-  return { review, execute, reviewWhenGpt: whenGpt, e2e };
+  return { review, execute, reviewAlt, e2e };
 }
 
-export async function prepare(profile: KeelProfile, p: { fanout_id: string; kind: FanoutKind; repo_dir?: string; base_ref?: string; lanes?: number; slices?: string[]; lead_model?: string | null }) {
+export async function prepare(profile: KeelProfile, p: { fanout_id: string; kind: FanoutKind; repo_dir?: string; base_ref?: string; lanes?: number; slices?: string[]; lead_model?: string | null; lead_agent?: string | null }) {
   if (!ID.test(p.fanout_id)) throw new ToolError("INVALID_INPUT", "fanout_id 格式不对。");
   const routing = readRouting(profile.routingPath);
-  const plans = planLanes(p.kind, tiersFrom(routing.data), { ...(p.lanes ? { lanes: p.lanes } : {}), ...(p.slices ? { slices: p.slices } : {}), leadModel: p.lead_model ?? null });
+  const plans = planLanes(p.kind, tiersFrom(routing.data, p.lead_agent ?? null), { ...(p.lanes ? { lanes: p.lanes } : {}), ...(p.slices ? { slices: p.slices } : {}), leadModel: p.lead_model ?? null });
   const needsWrite = plans.some((l) => l.write);
   if (needsWrite && !p.repo_dir) throw new ToolError("INVALID_INPUT", `${p.kind} 有写车道，需要 repo_dir。`);
   const root = p.repo_dir ? await repoRoot(p.repo_dir) : null;

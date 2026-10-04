@@ -26,3 +26,9 @@
 - SC-0..17 由 lead 原样重跑：通过 14 项；SC-11/14 待三 harness 回放，SC-15 待两台远端导入，SC-16 待三机就绪后迁移。
 - 删除 PR #2 上误发的探针评论；PR #2 合入 feat/keel-v1（c713c9c），`npm run verify` 131 passed。
 - 重新打包并原位更新本机安装；远端导入用 `_tmp/dist/keel-0.1.0.cindy`（sha256 aaabe9ae78536472fc1118eb2ba433deb43bc62eaf34a8e0e62b1c3f51cad24d）。
+
+## SC-11 / SC-14 补跑（2026-10-04）
+
+- S3：共用车道 `fo-2610041301-214`（gpt-6-sol / grok-4.6 / glm-5.3），lead、Codex、Pi 各自规划与汇收，结果一致。
+- S5：arena `fo-2610041312-7ac` 三候选 + cross-judge，base c1 嫁接 c2 测试，修复 interrogate 中文标题去重（分支 `keel/fix-cjk-dedupe`）。
+- 矩阵 6 格全部有实跑证据。

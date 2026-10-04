@@ -1,12 +1,62 @@
 [
-  { "find": "~/.cursor/rules/pstack-models.mdc", "replace": "the Keel `roles` tool (reads the Orca routing.json fresh)", "why": "Model roles come from the user's Orca routing.json, not a Cursor rule file." },
-  { "find": "pstack-models.mdc", "replace": "Keel `roles` tool", "why": "Same as above, short mentions." },
-  { "find": "scripts/watch-pr/watch-pr", "replace": "Keel `pr_status` / `pr_wait` tools", "why": "watch-pr is ported into the Keel Node worker; no shell wrapper." },
-  { "find": "scripts/worktree-audit.sh", "replace": "Keel `worktree({op:\"audit\"})` tool", "why": "worktree-audit is ported into the Node worker." },
-  { "find": "scripts/log.sh", "replace": "Keel `pstack_ledger({op:\"log\"})` tool", "why": "Decision log lives in the plugin data dir." },
-  { "find": "scripts/check-plan.mjs", "replace": "Keel `plan/check` (Node RPC)", "why": "check-plan is ported into the Node worker." },
-  { "regex": "(?<![\\w/.])/loop\\b", "replace": "a `pr_wait` loop (or a user-saved Cindy automation)", "why": "Cursor /loop does not exist in Cindy; pr_wait polls with heartbeats, long cadences use agent.schedule." },
-  { "regex": "\\bdeslop\\b", "replace": "unslop", "why": "cursor-team-kit deslop is not ported; pstack's own unslop skill covers it." },
-  { "regex": "\\bcontrol-ui\\b", "replace": "Cindy browser tools", "why": "cursor-team-kit control-ui is replaced by Cindy's browser automation." },
-  { "regex": "\\bcontrol-cli\\b", "replace": "Cindy desktop/terminal tools", "why": "cursor-team-kit control-cli is replaced by Cindy's desktop tools and Bash." }
+  {
+    "find": "~/.cursor/rules/pstack-models.mdc",
+    "replace": "the Keel `roles` tool (reads the Orca routing.json fresh)",
+    "why": "Model roles come from the user's Orca routing.json, not a Cursor rule file."
+  },
+  {
+    "find": "pstack-models.mdc",
+    "replace": "Keel `roles` tool",
+    "why": "Same as above, short mentions."
+  },
+  {
+    "find": "scripts/watch-pr/watch-pr",
+    "replace": "Keel `pr_status` / `pr_wait` tools",
+    "why": "watch-pr is ported into the Keel Node worker; no shell wrapper."
+  },
+  {
+    "find": "scripts/worktree-audit.sh",
+    "replace": "Keel `worktree({op:\"audit\"})` tool",
+    "why": "worktree-audit is ported into the Node worker."
+  },
+  {
+    "find": "scripts/log.sh",
+    "replace": "Keel `pstack_ledger({op:\"log\"})` tool",
+    "why": "Decision log lives in the plugin data dir."
+  },
+  {
+    "find": "node pstack/skills/poteto-mode/scripts/check-plan.mjs",
+    "replace": "node <keel>/node/check-plan.mjs",
+    "why": "check-plan ships as a Node CLI inside the installed plugin (<keel> is resolved in keel/MANUAL.md)."
+  },
+  {
+    "find": "scripts/check-plan.mjs",
+    "replace": "`<keel>/node/check-plan.mjs`",
+    "why": "Short mentions of the same CLI."
+  },
+  {
+    "find": "bun scripts/orch/orch.ts",
+    "replace": "node <keel>/node/orch.mjs",
+    "why": "The orch CLI ships inside the installed plugin; no bun needed."
+  },
+  {
+    "regex": "(?<![\\w/.])/loop\\b",
+    "replace": "a Cindy `schedule_create` heartbeat (or a `pr_wait` loop)",
+    "why": "Cursor /loop does not exist in Cindy; long cadences use the Cindy scheduler, short waits use pr_wait. check-plan accepts schedule_create as the heartbeat marker."
+  },
+  {
+    "regex": "\\bdeslop\\b",
+    "replace": "unslop",
+    "why": "cursor-team-kit deslop is not ported; pstack's own unslop skill covers it."
+  },
+  {
+    "regex": "\\bcontrol-ui\\b",
+    "replace": "Cindy browser tools",
+    "why": "cursor-team-kit control-ui is replaced by Cindy's browser automation."
+  },
+  {
+    "regex": "\\bcontrol-cli\\b",
+    "replace": "Cindy desktop/terminal tools",
+    "why": "cursor-team-kit control-cli is replaced by Cindy's desktop tools and Bash."
+  }
 ]

@@ -1,7 +1,9 @@
 // @ts-nocheck
 // Ported from pstack skills/poteto-mode/scripts/check-plan.mjs @ e43c7ee (MIT, (c) 2026 Lauren Tan).
 // Keel change: the CLI wrapper (argv, fs read, console, process.exit) becomes a pure
-// function `checkPlan(text, file)` served over the Node RPC `plan/check`. Rules unchanged.
+// function `checkPlan(text, file)`, run by agents as `node <keel>/node/check-plan.mjs <plan.md>`.
+// One host substitution: the heartbeat marker accepts Cindy's scheduler (`schedule_create`)
+// as well as Cursor's `/loop 1h`. All other rules unchanged.
 
 const RULE =
 	"Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.";
@@ -91,7 +93,9 @@ export function checkPlan(text: string, file = "plan.md"): { report: string[]; p
 			else cursor = at + 1;
 		}
 		for (const marker of PROGRAM_MARKERS) {
-			if (!bodyText(program).includes(marker)) fail(program.n, `Program checklist lacks "${marker}"`);
+			const text = bodyText(program);
+			const hit = marker === "/loop 1h" ? text.includes(marker) || text.includes("schedule_create") : text.includes(marker);
+			if (!hit) fail(program.n, `Program checklist lacks "${marker}"${marker === "/loop 1h" ? " (or a Cindy schedule_create heartbeat)" : ""}`);
 		}
 	}
 

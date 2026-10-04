@@ -29,6 +29,17 @@ export async function resolvePr(args: SnapshotArgs): Promise<T.PrContext> {
   }
 }
 
+/** The open PR for this branch, if any; `null` when the branch has none yet. */
+export async function resolveExisting(args: SnapshotArgs): Promise<{ repo: string; number: number } | null> {
+  try {
+    const c = await resolvePr(args);
+    return { repo: `${c.owner}/${c.repo}`, number: c.number };
+  } catch (e) {
+    if (e instanceof ToolError && e.code === "NO_PR") return null;
+    throw e;
+  }
+}
+
 export async function readBaseFile(repo: string, base: string, path: string): Promise<string | null> {
   const res = await ghRaw(["api", `repos/${repo}/contents/${path}?ref=${encodeURIComponent(base)}`, "-H", "Accept: application/vnd.github.raw"], { timeoutMs: 30_000 });
   return res.code === 0 ? res.stdout : null;
@@ -78,10 +89,10 @@ const LABEL: Record<string, string> = {
   "closed-without-merge": "已关闭未合并",
 };
 
-export function renderZh(s: Pick<PrStatus, "pr" | "decision" | "checks" | "unresolvedThreads" | "gate" | "preset">): string {
+export function renderZh(s: Pick<PrStatus, "pr" | "decision" | "checks" | "unresolvedThreads" | "gate" | "preset"> & { rule?: { mergeLabel?: string } }): string {
   const head = `${s.pr.repo}#${s.pr.number}「${s.pr.title}」`;
   const state =
-    s.decision.kind === "ready" ? "可合并（请在 GitHub 合并，插件不提供合并）"
+    s.decision.kind === "ready" ? (s.rule?.mergeLabel && !s.pr.labels.includes(s.rule.mergeLabel) ? `就绪，待 ${s.rule.mergeLabel} 标签后才算可合并` : "可合并（请在 GitHub 合并，插件不提供合并）")
     : s.decision.kind === "merged" ? "已合并"
     : s.decision.kind === "closed" ? "已关闭"
     : s.decision.kind === "waiting" ? `等待 CI（${s.checks.pending.length} 项进行中）`

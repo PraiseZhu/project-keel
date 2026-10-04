@@ -7,10 +7,14 @@ import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { assertNotHandedOff, readHandoff, writeHandoff } from "../handoff.ts";
-import { judge } from "../judge.ts";
+import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
 
 type Snapshot = Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">;
+
+/** Ready by the upstream classifier, plus the lane's merge label when it has one. */
+export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr">): boolean =>
+  s.decision.kind === "ready" && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel));
 
 function prArgs(args: Record<string, unknown>) {
   return {
@@ -20,7 +24,7 @@ function prArgs(args: Record<string, unknown>) {
   };
 }
 
-export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { jev?: unknown; merge_hint?: string }> {
+export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { mergeable: boolean; jev?: unknown; merge_hint?: string }> {
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
   const handedOff = Boolean(await readHandoff(ctx.host, snap.pr.repo, snap.pr.number));
   const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff });
@@ -37,8 +41,12 @@ export async function status(ctx: ToolContext, args: Record<string, unknown>, op
       jev = o.answers ? o.judgements.map((j) => ({ template: j.template, value: j.interpretation?.value, confidence: j.interpretation?.confidence, policy: j.policy.action })) : { unavailable: o.fallback_reason };
     }
   }
-  const out = { ...snap, handedOff, allowedActions: allowed, nextAction: next, ...(jev !== undefined ? { jev } : {}) };
-  return snap.decision.kind === "ready" ? { ...out, merge_hint: `可合并：请在 GitHub 打开 ${snap.pr.url} 自行合并。Keel 不提供合并。` } : out;
+  const mergeable = isMergeable(snap);
+  const out = { ...snap, handedOff, allowedActions: allowed, nextAction: next, mergeable, ...(jev !== undefined ? { jev } : {}) };
+  if (snap.decision.kind !== "ready") return out;
+  return mergeable
+    ? { ...out, merge_hint: `可合并：请在 GitHub 打开 ${snap.pr.url} 自行合并。Keel 不提供合并。` }
+    : { ...out, merge_hint: `CI 与评审已就绪，但还没有 ${snap.rule.mergeLabel} 标签，按车道规则暂不算可合并。` };
 }
 
 export async function prStatus(ctx: ToolContext, args: Record<string, unknown>) {
@@ -89,6 +97,9 @@ export async function prOpen(ctx: ToolContext, args: Record<string, unknown>) {
   const title = requireString(args, "title");
   if (args.sections === undefined) throw new KeelError("INVALID_INPUT", "缺少 sections（PR 正文各段，对象或字符串）。");
   const auth = requireAuth(args, "开 PR");
+  // A branch whose PR was already handed off must not be pushed, even through pr_open.
+  const existing = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: repoDir });
+  if (existing) await assertNotHandedOff(ctx.host, existing.repo, existing.number);
   const r = await node(ctx, "pr/open", { repo_dir: repoDir, title, sections: args.sections, ...(typeof args.base === "string" ? { base: args.base } : {}), ...(typeof args.draft === "boolean" ? { draft: args.draft } : {}), push: args.push === true });
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_open ${r.url}（授权：${auth}）`, evidence: r });
   return { ...r, authorization_source: auth };
@@ -101,11 +112,16 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const pre = await node<Snapshot>(ctx, "pr/snapshot", snapArgs);
   if (!dry) await assertNotHandedOff(ctx.host, pre.pr.repo, pre.pr.number);
   const handed = Boolean(await readHandoff(ctx.host, pre.pr.repo, pre.pr.number));
+  // Handing off also needs the review machine's entry condition, which no API exposes:
+  // the agent states the evidence it checked, the same way it states authorization.
+  const entry = typeof args.review_entry_evidence === "string" ? args.review_entry_evidence.trim() : "";
+  if (!dry && pre.rule.postReadyOwner === "automation" && entry.length < 4)
+    throw new KeelError("GATE_NOT_MET", "这个车道转 Ready 后交给自动化接管，还需要 review_entry_evidence：写明核对过的服务器审查机进场证据（例如进场 run 链接与结论）。没有就先别转 Ready。", { missing: ["review_entry_evidence"] });
   const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry });
   if (!r.gate.passed) throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。`, { missing: r.gate.missing, gate: r.gate });
   let handoff = null;
   if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {
-    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth } };
+    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry_evidence: entry || null } };
     await writeHandoff(ctx.host, handoff);
   }
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_ready ${dry ? "dry-run" : "执行"} ${pre.pr.repo}#${pre.pr.number} → ready=${r.ready}`, evidence: r.gate });
@@ -117,11 +133,12 @@ export async function prThreads(ctx: ToolContext, args: Record<string, unknown>)
   if (!t.threads.length) return { ...t, triage: [], summary: "没有未解决的评审线程。" };
   const items = t.threads.map((x) => ({ id: x.id, author: x.author, path: x.path, line: x.line, body: x.body.slice(0, 1500) }));
   const bots = items.filter((_, i) => t.threads[i]!.is_bot);
-  const specs: Parameters<typeof judge>[1] = [{ id: "J4", state: { items } }];
-  if (bots.length) specs.push({ id: "J5", state: { items: bots } });
-  const o = await judge(ctx, specs, typeof args.run_id === "string" ? { runId: args.run_id } : {});
-  const sev = o.judgements.find((j) => j.template === "J4")?.interpretation?.items ?? [];
-  const bot = o.judgements.find((j) => j.template === "J5")?.interpretation?.items ?? [];
+  const runOpts = typeof args.run_id === "string" ? { runId: args.run_id } : {};
+  const j4 = await judgeItems(ctx, "J4", items, runOpts);
+  const j5 = bots.length ? await judgeItems(ctx, "J5", bots, runOpts) : { items: [] };
+  const o = { fallback_reason: j4.fallback_reason ?? ("fallback_reason" in j5 ? j5.fallback_reason : undefined) };
+  const sev = j4.items;
+  const bot = j5.items;
   const triage = items.map((it, i) => {
     const s = sev[i];
     const botIdx = bots.findIndex((b) => b.id === it.id);
@@ -156,7 +173,7 @@ export async function prBoard(ctx: ToolContext, args: Record<string, unknown>) {
   for (const r of rows.slice(0, 15)) {
     try {
       const s = await status(ctx, { repo: r.repo, pr: r.number }, { jev: false });
-      detailed.push({ repo: r.repo, number: r.number, title: r.title, url: r.url, preset: r.preset, decision: s.decision, next_action: s.nextAction, handed_off: s.handedOff, mergeable: s.decision.kind === "ready" });
+      detailed.push({ repo: r.repo, number: r.number, title: r.title, url: r.url, preset: r.preset, decision: s.decision, next_action: s.nextAction, handed_off: s.handedOff, mergeable: s.mergeable });
     } catch (e) {
       detailed.push({ repo: r.repo, number: r.number, title: r.title, url: r.url, preset: r.preset, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
     }

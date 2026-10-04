@@ -16,6 +16,8 @@ export interface LaneRule {
   readonly postReadyOwner: "automation" | "self";
   /** Local multi-model review default. */
   readonly localInterrogate: "off" | "on-demand";
+  /** Label the review machine sets when a PR may be merged; without it the PR is not reported mergeable. */
+  readonly mergeLabel?: string;
   /** Repo-relative rule files read from the base branch, never from the PR worktree. */
   readonly baseRuleFiles?: {
     readonly requiredChecks?: string;
@@ -31,6 +33,7 @@ export const LANE_PRESETS: Readonly<Record<LanePreset, LaneRule>> = {
     readyGate: "required-checks",
     postReadyOwner: "automation",
     localInterrogate: "off",
+    mergeLabel: "review:merge-ready",
   },
   "gated-handoff": {
     preset: "gated-handoff",

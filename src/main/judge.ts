@@ -4,7 +4,7 @@
 
 import { evaluate, type EvaluateArgs } from "./jev/client.ts";
 import { decide, type PolicyResult } from "./jev/policy.ts";
-import { template, type Interpretation, type TemplateId } from "./jev/templates.ts";
+import { MAX_BATCH, template, type Interpretation, type TemplateId } from "./jev/templates.ts";
 import { KeelError } from "./host.ts";
 import type { ToolContext } from "./context.ts";
 import { append, sha256 } from "./ledger.ts";
@@ -60,4 +60,17 @@ export async function judge(ctx: ToolContext, specs: { id: TemplateId; state: Re
     judgements.push({ template: b.t.id, interpretation, policy, ...(ledger_row ? { ledger_row } : {}) });
   }
   return { judgements, answers, ...(fallback ? { fallback_reason: fallback } : {}), ...(errorCode ? { error_code: errorCode } : {}) };
+}
+
+/** Per-item batch templates (J4/J5) cap each call at MAX_BATCH items; run as many calls as needed. */
+export async function judgeItems(ctx: ToolContext, id: "J4" | "J5", items: readonly Record<string, unknown>[], opts: { runId?: string } = {}): Promise<{ items: { value: string; confidence: number }[]; fallback_reason?: string }> {
+  const out: { value: string; confidence: number }[] = [];
+  let fallback: string | undefined;
+  for (let i = 0; i < items.length; i += MAX_BATCH) {
+    const o = await judge(ctx, [{ id, state: { items: items.slice(i, i + MAX_BATCH) } }], opts);
+    const got = o.judgements[0]?.interpretation?.items ?? [];
+    for (let k = 0; k < Math.min(MAX_BATCH, items.length - i); k++) out.push(got[k] ?? { value: "", confidence: 0 });
+    fallback ??= o.fallback_reason;
+  }
+  return { items: out, ...(fallback ? { fallback_reason: fallback } : {}) };
 }

@@ -48,6 +48,8 @@ export interface RawRow {
   readonly remote: string;
   readonly prState: string | null;
   readonly prNumber: number | null;
+  /** The matched PR's head equals this worktree's HEAD (a reused branch name does not count). */
+  readonly prHeadMatches?: boolean;
   readonly recentDays: number | null;
 }
 
@@ -64,18 +66,20 @@ export function bucketOf(r: RawRow): WorktreeAuditRow["bucket"] {
   if (dirty.startsWith("wip:")) return "hold-wip";
   if (r.prState === "OPEN") return "hold-open-pr";
   if (r.recentDays !== null && r.recentDays <= 4) return "review";
-  if (dirty === "clean" && (r.merged || r.prState === "MERGED")) return "safe";
+  if (/^ahead[1-9]/.test(r.remote)) return "review";
+  if (dirty === "clean" && (r.merged || (r.prState === "MERGED" && r.prHeadMatches === true))) return "safe";
   return "review";
 }
 
-export async function audit(repoDir: string): Promise<WorktreeAuditRow[]> {
+/** Read-only unless `refresh` (prune refreshes origin/<main> before deciding what is merged). */
+export async function audit(repoDir: string, opts: { refresh?: boolean } = {}): Promise<WorktreeAuditRow[]> {
   const root = await repoRoot(repoDir);
   const main = await defaultBranch(root);
-  await gitRaw(["fetch", "origin", main, "--quiet"], { cwd: root, timeoutMs: 120_000 });
+  if (opts.refresh) await gitRaw(["fetch", "origin", main, "--quiet"], { cwd: root, timeoutMs: 120_000 });
   const list = await git(["worktree", "list", "--porcelain"], { cwd: root });
   const paths = list.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9));
-  const prsRaw = await ghRaw(["pr", "list", "--author", "@me", "--state", "all", "--limit", "500", "--json", "number,state,headRefName"], { cwd: root });
-  let prs: { number: number; state: string; headRefName: string }[] = [];
+  const prsRaw = await ghRaw(["pr", "list", "--author", "@me", "--state", "all", "--limit", "500", "--json", "number,state,headRefName,headRefOid"], { cwd: root });
+  let prs: { number: number; state: string; headRefName: string; headRefOid?: string }[] = [];
   try {
     prs = JSON.parse(prsRaw.stdout || "[]");
   } catch {
@@ -99,21 +103,22 @@ export async function audit(repoDir: string): Promise<WorktreeAuditRow[]> {
       const rr = await gitRaw(["rev-parse", `origin/${branch}`], { cwd: wt });
       remote = rr.code !== 0 ? "no-remote" : rr.stdout.trim() === head ? "pushed" : `ahead${(await gitRaw(["rev-list", "--count", `origin/${branch}..HEAD`], { cwd: wt })).stdout.trim()}`;
     }
-    const pr = branch ? prs.find((x) => x.headRefName === branch) ?? null : null;
+    // Prefer the PR whose head is this commit; a branch name reused after a merge must not inherit "MERGED".
+    const pr = branch ? prs.find((x) => x.headRefName === branch && x.headRefOid === head) ?? prs.find((x) => x.headRefName === branch && x.state === "OPEN") ?? prs.find((x) => x.headRefName === branch) ?? null : null;
     let recentDays: number | null = null;
     try {
       recentDays = Math.floor((now - statSync(wt).mtimeMs) / 86_400_000);
     } catch {
       recentDays = null;
     }
-    const raw: RawRow = { path: wt, branch, ageDays: ts ? Math.floor((now - ts * 1000) / 86_400_000) : null, merged, porcelain, remote, prState: pr?.state ?? null, prNumber: pr?.number ?? null, recentDays };
+    const raw: RawRow = { path: wt, branch, ageDays: ts ? Math.floor((now - ts * 1000) / 86_400_000) : null, merged, porcelain, remote, prState: pr?.state ?? null, prNumber: pr?.number ?? null, prHeadMatches: pr?.headRefOid === head, recentDays };
     rows.push({ path: wt, branch, ageDays: raw.ageDays, merged, dirty: dirtyOf(porcelain), remote, pr: pr ? `#${pr.number}/${pr.state}` : "-", bucket: bucketOf(raw) });
   }
   return rows;
 }
 
 export async function prune(repoDir: string, paths: readonly string[]) {
-  const rows = await audit(repoDir);
+  const rows = await audit(repoDir, { refresh: true });
   const root = await repoRoot(repoDir);
   const removed: string[] = [];
   const refused: { path: string; reason: string }[] = [];

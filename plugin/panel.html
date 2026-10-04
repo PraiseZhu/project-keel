@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="panel.css"></head>
+<body>
+<nav><button data-tab="prs" class="on">我的 PR</button><button data-tab="fanout">并行</button><button data-tab="ledger">决策</button></nav>
+<section id="prs"><div class="bar"><button id="refresh">刷新</button><button id="schedule">巡检</button><span id="at"></span></div><div id="board" class="list">点「刷新」读取你名下的 open PR。</div></section>
+<section id="fanout" hidden><div class="list" id="fanout-list">还没有并行车道。用 fanout_plan 规划后，这里显示每条车道的状态。</div></section>
+<section id="ledger" hidden><div class="bar"><button id="ledger-refresh">刷新</button></div><div class="list" id="ledger-list"></div></section>
+<p id="msg" role="status"></p>
+<script src="panel.js"></script></body></html>

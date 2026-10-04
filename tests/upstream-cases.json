@@ -1,0 +1,50 @@
+{
+  "upstream": "cursor/plugins pstack/skills/poteto-mode/scripts/watch-pr",
+  "sha": "e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a",
+  "files": {
+    "cli.test.ts": [
+      "parseArgs > uses the specified defaults",
+      "parseArgs > parses a frozen queued stack bottom-to-top",
+      "parseArgs > rejects every invalid mode and numeric shape as usage",
+      "rendering > emits compact valid JSON by default",
+      "rendering > renders the Markdown table from the same verdict only",
+      "main > returns EX_USAGE 64 and writes usage errors only to stderr",
+      "main > bypasses the queue machine for queued-stack status-only",
+      "main > returns exit 4 for a hidden GitHub-side CI refusal",
+      "main > shows help without touching the reader"
+    ],
+    "github.test.ts": [
+      "checks fallback chain > uses a non-empty fast-path result without a rollup query",
+      "checks fallback chain > paginates GraphQL when the fast path is unusable",
+      "checks fallback chain > falls back when valid fast-path JSON represented an empty list",
+      "checks fallback chain > fails closed when both paths are empty",
+      "rollup node mapping > maps terminal and non-terminal CheckRun states fail closed",
+      "rollup node mapping > classifies an in-progress Code Review Gate from the rollup as the gate",
+      "rollup node mapping > maps StatusContext states and drops unknown typenames",
+      "closed enum parsing > accepts mergeStateStatus CONFLICTING",
+      "closed enum parsing > reads gh's empty reviewDecision as no decision rather than a parse failure",
+      "closed enum parsing > still rejects an unknown reviewDecision",
+      "closed enum parsing > rejects unknown enum values as retryable errors carrying the raw value",
+      "annotates Bugbot threads with distinct review-pass counts",
+      "context and stack discovery > returns a fully explicit context without any reader call",
+      "context and stack discovery > uses the local origin before currentPr for an explicit number",
+      "context and stack discovery > orders the connected stack bottom-to-top"
+    ],
+    "policy.test.ts": [
+      "readiness truth table > covers every specified row and every UNKNOWN rollup value",
+      "readiness truth table > turns a clean visible list plus GitHub refusal into an explicit CI blocker",
+      "snapshot query planning > does not query commit rollups while queued checks are pending",
+      "snapshot query planning > queries rollups for settled and failed lists",
+      "snapshot query planning > short-circuits merged rows before threads and checks",
+      "scans stacks tier-major so an upstack conflict outranks frontier CI",
+      "attributes a stack wait to the PR whose checks are pending, not the bottom",
+      "waits on a draft while checks are pending, then reports the draft gate",
+      "queued-stack cadence > drops a sweep head only after its snapshot succeeds",
+      "queued-stack cadence > resumes the sweep at the PR whose read failed",
+      "queued-stack cadence > emits a completed sweep only after its final successful snapshot",
+      "queued-stack cadence > ADVANCE continues directly to the new frontier without sleeping",
+      "queued-stack cadence > deduplicates identical waits and schedules the next due sweep",
+      "uses the specified retry floor and cap"
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+body { margin:0; padding:12px; font:inherit; color:var(--text-primary,inherit); }
+label { display:block; margin-bottom:8px; }
+input { width:100%; box-sizing:border-box; padding:9px; border:1px solid var(--border-default,#8888); border-radius:6px; background:var(--surface,transparent); color:inherit; }
+button { margin:10px 8px 0 0; padding:7px 12px; border:1px solid var(--border-default,#8888); border-radius:6px; color:inherit; background:var(--surface,transparent); cursor:pointer; }
+a { color:inherit; } #status { min-height:1.4em; } .hint { opacity:.75; font-size:.92em; } h3 { margin:18px 0 6px; font-size:1em; }

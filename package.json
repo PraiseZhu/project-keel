@@ -1,0 +1,24 @@
+{
+  "name": "keel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keel 龙骨：Cindy 插件——日常可单独调用的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "sync": "node tools/sync.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint:manual": "node scripts/manual-lint.mjs plugin/manual",
+    "port-check": "node scripts/port-check.mjs --phase all",
+    "verify": "npm run build && npm run typecheck && npm test && npm run lint:manual && npm run port-check"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "commander": "14.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}

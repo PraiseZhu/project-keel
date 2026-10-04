@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="/settings.css"></head>
+<body>
+<p>Keel 用 Typesafe Jev 做判断。API Key 只交给主机保险库，插件和 AI 都拿不到明文。</p>
+<form id="form"><label for="key">Typesafe API Key</label><input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="输入 API Key">
+<div><button type="submit">保存凭证</button><button type="button" id="clear">清除凭证</button></div></form>
+<p id="status" role="status"></p>
+<a href="https://console.typesafe.ai/home">前往 Typesafe 控制台</a>
+<h3>车道与派工路由</h3>
+<p class="hint">车道表、routing.json 路径来自本机个人配置（构建时注入），可在聊天里用 <code>ghost_manual({ghost_id:"keel", path:"keel/profile.md"})</code> 查看；角色路由用 <code>roles</code> 工具现读。</p>
+<script src="/settings.js"></script></body></html>

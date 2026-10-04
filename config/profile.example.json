@@ -1,0 +1,30 @@
+{
+  "lanes": [
+    {
+      "repo": "example-org/gated-app",
+      "preset": "draft-gated-handoff"
+    },
+    {
+      "repo": "example-org/client",
+      "preset": "gated-handoff",
+      "preflight": "/path/to/preflight.sh"
+    }
+  ],
+  "routingPath": "/path/to/orca-fanout/routing.json",
+  "boardRepos": [
+    "your-name/your-repo"
+  ],
+  "plansDir": "/path/to/plans",
+  "overlayNote": "",
+  "privateTerms": [],
+  "upstreamDir": "/path/to/cursor-plugins/pstack",
+  "jevRefs": {
+    "files": [
+      "/path/to/rules/CLAUDE.md"
+    ],
+    "repos": [
+      "/path/to/approve-exec"
+    ],
+    "checkOnly": []
+  }
+}

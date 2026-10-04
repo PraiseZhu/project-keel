@@ -52,3 +52,13 @@ _backup/
 _tmp/
 
 # === Tip: 大数据目录建议加 .nosync 后缀 ===
+
+# === Keel 本地临时与构建产物 ===
+_tmp/
+plugin/main.js
+plugin/node/worker.cjs
+plugin/panel.js
+plugin/settings.js
+*.cindy
+config/profile.local.json
+plugin/manual/keel/profile.md

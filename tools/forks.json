@@ -1,0 +1,21 @@
+[
+  { "path": "skills/poteto-mode/playbooks/babysit.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/babysit.md", "why": "Stop by lane; never merge; automation-owned lanes hand off at Ready." },
+  { "path": "skills/poteto-mode/playbooks/opening-a-pr.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/opening-a-pr.md", "why": "Draft follows the lane (draft-first lanes forced Draft, otherwise non-Draft); title/body follow the target repo rules." },
+  { "path": "skills/poteto-mode/playbooks/shipping.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/shipping.md", "why": "Keel has no merge capability: shipping ends at a mergeable report and the user merges on GitHub." },
+  { "path": "skills/poteto-mode/playbooks/autopilot-full.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/autopilot.md", "why": "Multi-PR runs go to the user's existing task-priority → approve-exec pipeline; owners stop at merge-ready." },
+  { "path": "skills/poteto-mode/playbooks/autopilot-stack.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/autopilot.md", "why": "Same as autopilot-full." },
+  { "path": "skills/poteto-mode/playbooks/orchestrate.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/autopilot.md", "why": "Same as autopilot-full." },
+  { "path": "skills/poteto-mode/playbooks/multi-phase-plan.md", "kind": "port-feature", "mode": "prepend", "overlay": "overlays/multi-phase-plan.md", "why": "check-plan runs as Keel RPC; plans live in the configured plans dir or the target repo docs/." },
+  { "path": "skills/poteto-mode/playbooks/worktree-cleanup.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/worktree-cleanup.md", "why": "Only clean + merged worktrees are pruned, with confirmation; no --force / rm -rf." },
+  { "path": "skills/poteto-mode/SKILL.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/poteto-mode.md", "why": "User rule overlay (severity, authorization, lanes) takes precedence over upstream defaults." },
+  { "path": "skills/interrogate/SKILL.md", "kind": "port-feature", "mode": "prepend", "overlay": "overlays/fanout.md", "why": "Reviewers run as Orca workers from routing.json via fanout_plan; findings use the unified P0–P3 scale." },
+  { "path": "skills/arena/SKILL.md", "kind": "port-feature", "mode": "prepend", "overlay": "overlays/fanout.md", "why": "Candidates run as Orca workers in <repo>/.worktrees/pstack-*; Jev J3 picks the base." },
+  { "path": "skills/swarm/SKILL.md", "kind": "port-feature", "mode": "prepend", "overlay": "overlays/fanout.md", "why": "Cloud agents become local Orca workers." },
+  { "path": "skills/architect/SKILL.md", "kind": "port-feature", "mode": "prepend", "overlay": "overlays/fanout.md", "why": "Runners go through Orca lanes." },
+  { "path": "skills/setup-pstack/SKILL.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/setup-pstack.md", "why": "Roles come from routing.json via the roles tool; nothing is written to ~/.cursor." },
+  { "path": "skills/reflect/SKILL.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/proposal-only.md", "why": "Skill/rule edits are proposals; writing needs explicit authorization." },
+  { "path": "skills/correct/SKILL.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/proposal-only.md", "why": "Same as reflect." },
+  { "path": "skills/automate-me/SKILL.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/proposal-only.md", "why": "Same as reflect; reading history needs user consent." },
+  { "path": "skills/no-comments/SKILL.md", "kind": "policy", "mode": "prepend", "overlay": "overlays/report-only.md", "why": "Findings are mostly P3: report only, change only when the user asks." },
+  { "path": "skills/why/SKILL.md", "kind": "port-feature", "mode": "prepend", "overlay": "overlays/why.md", "why": "Source discovery uses installed Cindy plugins; missing connectors are recorded as gaps." }
+]

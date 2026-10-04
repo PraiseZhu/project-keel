@@ -49,11 +49,13 @@ export async function collect(p: { repo_dir: string; lanes: { label: string; wor
   const out = [];
   for (const l of p.lanes) {
     if (!existsSync(l.working_dir)) { out.push({ label: l.label, error: "worktree 不存在" }); continue; }
-    await gitRaw(["add", "-A", "--intent-to-add"], { cwd: l.working_dir });
+    // Tracked changes only; untracked files are listed apart so lead-side helpers (e.g. a
+    // node_modules symlink) neither inflate the stat nor get staged in the candidate's index.
     const stat = (await gitRaw(["diff", "--stat", p.base_ref], { cwd: l.working_dir })).stdout;
     const patch = (await gitRaw(["diff", p.base_ref], { cwd: l.working_dir })).stdout;
     const head = (await gitRaw(["rev-parse", "HEAD"], { cwd: l.working_dir })).stdout.trim();
-    out.push({ label: l.label, head, stat: stat.slice(0, 4000), patch: patch.slice(0, 12_000), truncated: patch.length > 12_000 });
+    const untracked = (await gitRaw(["ls-files", "--others", "--exclude-standard"], { cwd: l.working_dir })).stdout.split("\n").filter(Boolean);
+    out.push({ label: l.label, head, stat: stat.slice(0, 4000), patch: patch.slice(0, 12_000), truncated: patch.length > 12_000, untracked: untracked.slice(0, 50) });
   }
   return out;
 }

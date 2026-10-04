@@ -42,7 +42,7 @@ const uniq = [...new Map(hits.map((h) => [`${h.where}|${h.rule}`, h])).values()]
 const redact = (s) => privateTerms.reduce((acc, t) => acc.split(t).join("«private»"), s).replace(/\/Users\/[A-Za-z0-9._-]+/g, "/Users/«user»");
 const md = `# 公开前隐私扫描
 
-- 时间：${new Date().toISOString()}
+- 日期：${new Date().toISOString().slice(0, 10)}
 - 范围：\`git ls-files\` ${files.length} 个文件 + HEAD 可达的全部提交（逐行扫描新增内容）
 - 规则：本机绝对路径、邮箱、GitHub/sk token、Bearer 字面量、.env 文件、个人 profile 的私有名单（${privateTerms.length} 项，名单本身不入库）
 - 结果：${uniq.length ? `**命中 ${uniq.length} 处，阻断公开**` : "未命中"}

@@ -22,6 +22,20 @@ describe("interrogate ingest", () => {
     const d = dedupe([{ label: "r1", findings: findingsOf(r1) }, { label: "r3", findings: findingsOf(r3) }]);
     expect(classifyAgreement(d[0]!)).toBe("disputed");
   });
+  it("merges the same Chinese finding without merging a different issue at the same location", () => {
+    const file = "src/main/jev/client.ts";
+    const m = dedupe([
+      { label: "r1", findings: [{ file, line: 119, title: "凭证错误消息可能失去填写指引" }] },
+      { label: "r3", findings: [
+        { file, line: 119, title: "中继路径假设 host 凭证消息自带填写指引，若消息匹配凭证正则但无指引则丢失去向提示" },
+        { file, line: 119, title: "凭证错误消息可能泄露密钥" },
+      ] },
+    ]);
+    expect(m).toHaveLength(2);
+    expect(m[0]?.lanes).toEqual(["r1", "r3"]);
+    expect(classifyAgreement(m[0]!)).toBe("consensus");
+    expect(classifyAgreement(m[1]!)).toBe("single");
+  });
 });
 
 describe("arena and swarm ingest", () => {

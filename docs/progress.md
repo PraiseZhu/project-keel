@@ -20,3 +20,9 @@
 | 20:46 | Step 11 三机：两台远端 Cindy 0.1.97、routing.json 同 sha；未安装 Keel；Syncthing 同步了 Keel 的 .git | `node scripts/triad-check.mjs` | TRIAD_MISMATCH 2 | — |
 | 20:47 | Step 12：只交付检查与迁移脚本 + dry-run（11 文件 14 处），未改引用文件 | `node scripts/jev-refs-check.mjs` | JEV_REFS_REMAINING 14 | — |
 | 20:49 | 自审修复：git 引用参数拒绝以 `-` 开头等非法形态 | `npx vitest run` | 130 passed | 998c237 |
+
+## Lead 验收（2026-10-04）
+
+- SC-0..17 由 lead 原样重跑：通过 14 项；SC-11/14 待三 harness 回放，SC-15 待两台远端导入，SC-16 待三机就绪后迁移。
+- 删除 PR #2 上误发的探针评论；PR #2 合入 feat/keel-v1（c713c9c），`npm run verify` 131 passed。
+- 重新打包并原位更新本机安装；远端导入用 `_tmp/dist/keel-0.1.0.cindy`（sha256 aaabe9ae78536472fc1118eb2ba433deb43bc62eaf34a8e0e62b1c3f51cad24d）。

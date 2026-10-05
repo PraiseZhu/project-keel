@@ -33,7 +33,7 @@ Keel 把两件事装进一个 Cindy 插件：**日常随时可问的 Jev**（`je
 7. **Orca 派工读 routing.json**（`roles` / `fanout_plan`），Worker 一律 `bypassPermissions`；只按配置里的 fallbacks 降级，配置不可读即停。
 8. **多 PR 任务交给现有流水线**：task-priority（汇总任务优先级）→ approve-exec（批准执行）。Keel 不另起编排。
 9. **Jev 是判断参考，不是事实证明。** 事实与门禁由确定性代码给出；Jev 只在策略允许的选项里排序。confidence ≥ 0.75 执行（J7 ≥ 0.8）；低于阈值补上下文重问一次，仍低就取改动最小、可撤回的选项；Jev 不可用且判断涉及连带文件时停下回报。
-10. **当前提交要有非作者验证。** 车道配了 `verifyCheck`（如 `agent-verify`）时，当前 head 没有该状态通过，`pr_status` 只给 `verify_current_head`，`pr_ready` 返回 `GATE_NOT_MET`。做法：派一个不是作者的模型（`roles` 的 e2e 档，或 `fanout_plan({ kind: "swarm" })`）在当前 head 上跑测试、操作改动的功能、专门找反例；通过后 `gh api repos/<owner>/<repo>/statuses/<sha> -f state=success -f context=agent-verify -f description="<模型> <方法>"`，不通过写 `state=failure` 并修复。有新提交就重验。只改文档或配置时可由作者自查后写状态。建议在仓库分支保护里把该状态设为必需，绕开 Keel 的合并也会被拦住。
+10. **当前提交要有非作者验证。** 车道配了 `verifyCheck`（如 `agent-verify`）时，当前 head 没有该状态通过，`pr_status` 只给 `verify_current_head`，`pr_ready` 返回 `GATE_NOT_MET`。作者：派一个不是作者的模型（`roles` 的 e2e 档，或 `fanout_plan({ kind: "swarm" })`）验证当前 head，自己不写这个状态。验证者：在自己的会话里跑测试、操作改动的功能、专门找反例；通过后执行 `gh api repos/<owner>/<repo>/statuses/<sha> -f state=success -f "context=<verifyCheck>" -f "description=<模型> <方法>"`，不通过写 `state=failure` 并说明原因。有新提交就重验。只改文档或配置时可由作者自查后写状态。信任边界：Keel 不核验状态由谁写入；本机所有 agent 共用同一个 GitHub 账号，这道门防疏忽、不防蓄意伪造，靠用户抽查兜底。要真正隔离，需给验证者独立的 GitHub 身份。建议在仓库分支保护里把该状态设为必需，绕开 Keel 的合并也会被拦住。
 
 ## Cursor → Cindy 对照
 

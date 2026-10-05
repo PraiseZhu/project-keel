@@ -16,10 +16,10 @@ type Snapshot = Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">;
 export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr"> & { verification?: Snapshot["verification"] }): boolean =>
   s.decision.kind === "ready" && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel)) && (!s.verification || s.verification.state === "pass");
 
-/** The exact next step when the lane's verify status is missing on the current head. */
-export function verifyHint(check: string, pr: { repo: string; headSha: string | null }): string {
-  const sha = pr.headSha ?? "<当前 head>";
-  return `当前提交 ${sha.slice(0, 12)} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（跑测试、操作改动的功能、专门找反例）。通过后执行 gh api repos/${pr.repo}/statuses/${sha} -f state=success -f context=${check} -f description="<模型> <方法>"；不通过写 state=failure 并修复。之后有新提交要重新验证。`;
+/** Next step when the lane's verify status is missing on the current head. The status-writing command stays with the verifier (keel/MANUAL.md rule 10), not in the author's hint. */
+export function verifyHint(check: string, pr: { headSha: string | null }): string {
+  const sha = (pr.headSha ?? "").slice(0, 12) || "当前 head";
+  return `当前提交 ${sha} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（fanout_plan({ kind: "swarm" }) 或 roles 的 e2e 档）。由验证者在自己的会话里跑测试、操作改动的功能、专门找反例，并按 keel/MANUAL.md 第 10 条写状态；作者不要自己写这个状态。之后有新提交要重新验证。`;
 }
 
 function prArgs(args: Record<string, unknown>) {

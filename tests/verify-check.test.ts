@@ -73,12 +73,15 @@ function nodeFake(verification: Verification) {
 }
 
 describe("pr_status / pr_ready with a verify check", () => {
-  it("pr_status points at verification and gives the exact status command", async () => {
+  it("pr_status points at a non-author verifier and gives the author no status command", async () => {
     const r: any = await runTool(makeContext(fakeHost({ node: nodeFake(missing) }), "c1", profile), "pr_status", { repo: "acme/solo", pr: 3 });
     expect(r.ok).toBe(true);
     expect(r.result).toMatchObject({ nextAction: "verify_current_head", allowedActions: ["verify_current_head"], mergeable: false });
-    expect(r.result.merge_hint).toContain("gh api repos/acme/solo/statuses/abc123def456789");
-    expect(r.result.merge_hint).toContain("context=agent-verify");
+    expect(r.result.merge_hint).toContain("fanout_plan");
+    // The author's hint must not carry a ready-made status write: that would let the author skip the verifier.
+    expect(r.result.merge_hint).toContain("作者不要自己写这个状态");
+    expect(r.result.merge_hint).not.toContain("gh api");
+    expect(r.result.merge_hint).not.toContain("state=success");
   });
 
   it("pr_status reports mergeable once the current head is verified", async () => {
@@ -92,5 +95,6 @@ describe("pr_status / pr_ready with a verify check", () => {
     expect(r).toMatchObject({ ok: false, errorCode: "GATE_NOT_MET" });
     expect(r.message).toContain("agent-verify（当前提交未验证）");
     expect(r.message).toContain("派一个不是作者的模型验证这一版");
+    expect(r.message).not.toContain("gh api");
   });
 });

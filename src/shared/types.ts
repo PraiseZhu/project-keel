@@ -57,8 +57,16 @@ export interface LaneMatch {
   readonly preset: LanePreset;
   /** Absolute path of a preflight script the agent should run before pushing. */
   readonly preflight?: string;
+  /** Commit status a non-author verifier posts on the head it checked (e.g. `agent-verify`). When set, Keel reports neither Ready nor mergeable until it passes on the current head. */
+  readonly verifyCheck?: string;
   /** Optional per-repo rule-file overrides. */
   readonly baseRuleFiles?: LaneRule["baseRuleFiles"];
+}
+
+/** State of the lane's `verifyCheck` on the current head. */
+export interface Verification {
+  readonly check: string;
+  readonly state: "pass" | "missing" | "pending" | "failing";
 }
 
 export interface KeelProfile {
@@ -98,6 +106,7 @@ export type PrAction =
   | "mark_ready"
   | "handoff"
   | "report_mergeable"
+  | "verify_current_head"
   | "stopped_after_handoff";
 
 export interface RequiredGate {
@@ -137,6 +146,8 @@ export interface PrStatus {
   readonly checks: { readonly failed: readonly string[]; readonly pending: readonly string[]; readonly passed: number };
   readonly unresolvedThreads: number;
   readonly gate: RequiredGate;
+  /** Null when the lane has no `verifyCheck`. */
+  readonly verification: Verification | null;
   readonly mergeReadyLabel: boolean;
   readonly handedOff: boolean;
   readonly allowedActions: readonly PrAction[];

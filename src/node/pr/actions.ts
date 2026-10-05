@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { draftFor, resolveLane } from "../../shared/lanes.ts";
-import type { KeelProfile } from "../../shared/types.ts";
+import type { KeelProfile, Verification } from "../../shared/types.ts";
 import { ToolError, gh, ghJson, git, gitRaw } from "../env.ts";
 import { withCwd } from "../context.ts";
 import { originRepo, readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
@@ -71,7 +71,7 @@ export async function prOpen(profile: KeelProfile, p: { repo_dir: string; title:
 }
 
 /** Ready needs the lane gate, every check green, and nothing ahead of the Draft flag. */
-export function readyVerdict(s: Pick<Awaited<ReturnType<typeof snapshot>>, "gate" | "decision" | "checks">): { passed: boolean; missing: string[] } {
+export function readyVerdict(s: Pick<Awaited<ReturnType<typeof snapshot>>, "gate" | "decision" | "checks"> & { verification?: Verification | null }): { passed: boolean; missing: string[] } {
   const gate = s.gate;
   const missing = gate.applies ? [...gate.missing, ...gate.failing.map((n) => `${n}（失败）`), ...gate.pending.map((n) => `${n}（进行中）`)] : [];
   // Required checks alone are not "CI green": the upstream classifier must see nothing ahead
@@ -80,7 +80,9 @@ export function readyVerdict(s: Pick<Awaited<ReturnType<typeof snapshot>>, "gate
   if (!blockerOk) missing.push(`PR 状态未就绪（${s.decision.kind === "blocker" ? s.decision.blocker : s.decision.kind}）`);
   for (const n of s.checks.failed) if (!missing.includes(`${n}（失败）`)) missing.push(`${n}（失败）`);
   for (const n of s.checks.pending) if (!missing.includes(`${n}（进行中）`)) missing.push(`${n}（进行中）`);
-  return { passed: (!gate.applies || gate.ok) && blockerOk && s.checks.failed.length === 0 && s.checks.pending.length === 0, missing };
+  const verified = !s.verification || s.verification.state === "pass";
+  if (!verified && !missing.some((m) => m.startsWith(`${s.verification!.check}（`))) missing.push(`${s.verification!.check}（当前提交未验证）`);
+  return { passed: (!gate.applies || gate.ok) && blockerOk && verified && s.checks.failed.length === 0 && s.checks.pending.length === 0, missing };
 }
 
 export async function prReady(profile: KeelProfile, p: { repo_dir?: string; repo?: string; pr?: number; dry_run?: boolean; expected_head?: string | null }) {

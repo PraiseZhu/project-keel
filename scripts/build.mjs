@@ -36,15 +36,15 @@ await build({ ...common, entryPoints: [join(root, "src/panel/panel.ts")], outfil
 await build({ ...common, entryPoints: [join(root, "src/panel/settings.ts")], outfile: join(root, "plugin/settings.js"), format: "iife", platform: "browser" });
 
 // Profile page for the keel manual unit (generated, gitignored).
-const lanes = (profile.lanes ?? []).map((l) => `| \`${l.repo}\` | ${l.preset} | ${l.preflight ? "`" + l.preflight + "`" : "—"} |`).join("\n") || "| （未配置） | personal | — |";
+const lanes = (profile.lanes ?? []).map((l) => `| \`${l.repo}\` | ${l.preset} | ${l.preflight ? "`" + l.preflight + "`" : "—"} | ${l.verifyCheck ? "`" + l.verifyCheck + "`" : "—"} |`).join("\n") || "| （未配置） | personal | — | — |";
 const md = `# 本机配置（构建时生成）
 
 > 由 \`scripts/build.mjs\` 从个人 profile 生成；源文件不入库。
 
 ## 车道表
 
-| 仓库 | 车道预设 | 推送前预检 |
-|---|---|---|
+| 仓库 | 车道预设 | 推送前预检 | 验证状态 |
+|---|---|---|---|
 ${lanes}
 
 未列出的仓一律按 \`personal\` 车道处理。

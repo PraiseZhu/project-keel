@@ -1,7 +1,7 @@
 // Pure lane logic shared by main.js and the Node worker.
 // Lane = how the user's rules treat a repo: draft policy, Ready gate, post-Ready owner.
 
-import { LANE_PRESETS, type DecisionKind, type KeelProfile, type LaneMatch, type LaneRule, type PrAction, type RequiredGate } from "./types.ts";
+import { LANE_PRESETS, type DecisionKind, type KeelProfile, type LaneMatch, type LaneRule, type PrAction, type RequiredGate, type Verification } from "./types.ts";
 
 export function resolveLane(profile: KeelProfile, repo: string): { match: LaneMatch | null; rule: LaneRule } {
   const key = repo.toLowerCase();
@@ -42,6 +42,8 @@ export interface ActionInput {
   readonly isDraft: boolean;
   readonly gate: RequiredGate;
   readonly handedOff: boolean;
+  /** False when the lane's `verifyCheck` has not passed on the current head; omitted when the lane has none. */
+  readonly verified?: boolean;
 }
 
 /** Actions the policy allows next. Jev (J8) may only rank inside this list. Merging is never an action. */
@@ -52,13 +54,24 @@ export function allowedActions(i: ActionInput): PrAction[] {
     if (i.blocker === "merge-conflicts") return ["report_conflict_rebase_needed"];
     if (i.blocker === "review-threads") return ["triage_review_threads"];
     if (i.blocker === "failing-checks") return ["classify_ci_failure"];
-    if (i.blocker === "draft-pr") return i.gate.ok || !i.gate.applies ? ["mark_ready", "wait_for_ci"] : ["wait_for_ci"];
+    if (i.blocker === "draft-pr") {
+      if (i.verified === false) return ["verify_current_head"];
+      return i.gate.ok || !i.gate.applies ? ["mark_ready", "wait_for_ci"] : ["wait_for_ci"];
+    }
     return ["wait_for_review"];
   }
   if (i.decision === "waiting") return ["wait_for_ci"];
   // ready
+  if (i.verified === false) return ["verify_current_head"];
   if (i.rule.postReadyOwner === "automation") return ["handoff"];
   return ["report_mergeable"];
+}
+
+/** Where the lane's verify status stands on the head the checks were read from. Absent = never posted for this head. */
+export function verificationOf(check: string, checks: readonly { name: string; kind: string }[]): Verification {
+  const hit = checks.find((c) => c.name === check);
+  const state = hit?.kind === "passed" ? "pass" : hit?.kind === "failed" ? "failing" : hit?.kind === "pending" ? "pending" : "missing";
+  return { check, state };
 }
 
 export const PUSH_LIKE_ACTIONS = new Set(["pr_reply", "pr_open_push", "pr_ready", "worktree_prune_pr"]);

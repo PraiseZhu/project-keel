@@ -8,6 +8,11 @@
       "repo": "example-org/client",
       "preset": "gated-handoff",
       "preflight": "/path/to/preflight.sh"
+    },
+    {
+      "repo": "your-name/your-repo",
+      "preset": "personal",
+      "verifyCheck": "agent-verify"
     }
   ],
   "routingPath": "/path/to/orca-fanout/routing.json",

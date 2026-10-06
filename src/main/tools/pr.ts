@@ -12,9 +12,15 @@ import { append } from "../ledger.ts";
 
 type Snapshot = Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">;
 
-/** Ready by the upstream classifier, plus the lane's merge label when it has one. */
-export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr">): boolean =>
-  s.decision.kind === "ready" && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel));
+/** Ready by the upstream classifier, plus the lane's merge label and verify status when it has them. */
+export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr"> & { verification?: Snapshot["verification"] }): boolean =>
+  s.decision.kind === "ready" && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel)) && (!s.verification || s.verification.state === "pass");
+
+/** Next step when the lane's verify status is missing on the current head. The status-writing command stays with the verifier (keel/MANUAL.md rule 10), not in the author's hint. */
+export function verifyHint(check: string, pr: { headSha: string | null }): string {
+  const sha = (pr.headSha ?? "").slice(0, 12) || "当前 head";
+  return `当前提交 ${sha} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（fanout_plan({ kind: "swarm" }) 或 roles 的 e2e 档）。由验证者在自己的会话里跑测试、操作改动的功能、专门找反例，并按 keel/MANUAL.md 第 10 条写状态；作者不要自己写这个状态。之后有新提交要重新验证。`;
+}
 
 function prArgs(args: Record<string, unknown>) {
   return {
@@ -27,7 +33,7 @@ function prArgs(args: Record<string, unknown>) {
 export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { mergeable: boolean; jev?: unknown; merge_hint?: string }> {
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
   const handedOff = Boolean(await readHandoff(ctx.host, snap.pr.repo, snap.pr.number));
-  const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff });
+  const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff, ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}) });
   let next: PrAction = allowed[0]!;
   let jev: unknown;
   if (opts.jev !== false) {
@@ -43,6 +49,8 @@ export async function status(ctx: ToolContext, args: Record<string, unknown>, op
   }
   const mergeable = isMergeable(snap);
   const out = { ...snap, handedOff, allowedActions: allowed, nextAction: next, mergeable, ...(jev !== undefined ? { jev } : {}) };
+  if (snap.verification && snap.verification.state !== "pass" && (snap.decision.kind === "ready" || snap.decision.blocker === "draft-pr"))
+    return { ...out, merge_hint: verifyHint(snap.verification.check, snap.pr) };
   if (snap.decision.kind !== "ready") return out;
   return mergeable
     ? { ...out, merge_hint: `可合并：请在 GitHub 打开 ${snap.pr.url} 自行合并。Keel 不提供合并。` }
@@ -137,7 +145,11 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   if (!dry && entry && !entry.ok)
     throw new KeelError("GATE_NOT_MET", `这个车道转 Ready 后交给自动化接管，服务器审查机进场证据不成立：${entry.problem}`, { missing: ["review_entry"], review_entry: entry });
   const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
-  if (!r.gate.passed) throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。`, { missing: r.gate.missing, gate: r.gate });
+  if (!r.gate.passed) {
+    const v = pre.verification;
+    const hint = v && v.state !== "pass" ? verifyHint(v.check, pre.pr) : "";
+    throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。${hint}`, { missing: r.gate.missing, gate: r.gate });
+  }
   let handoff = null;
   if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {
     handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null } };

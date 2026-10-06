@@ -58,5 +58,30 @@
     "regex": "\\bcontrol-cli\\b",
     "replace": "Cindy desktop/terminal tools",
     "why": "cursor-team-kit control-cli is replaced by Cindy's desktop tools and Bash."
+  },
+  {
+    "find": "squash it with `origin pr merge <pr> --squash` or `gh pr merge <pr> --squash`.",
+    "replace": "report it as mergeable with its link and stop; the user merges it in GitHub (Keel has no merge).",
+    "why": "The shipping overlay forbids merging, but the body still carried copyable merge commands."
+  },
+  {
+    "find": "Cursor cloud agent",
+    "replace": "local Orca worker",
+    "why": "Cindy has no Cursor cloud agents; per-PR verifiers are local Orca workers."
+  },
+  {
+    "find": "Always `environment: \"cloud\"` unless the task needs this machine",
+    "replace": "Always a local Orca worker (Cindy has no cloud agents), including tasks that need this machine",
+    "why": "Same as above for orchestrate workers and verifiers."
+  },
+  {
+    "find": "the cloud agent's status in the Cursor dashboard",
+    "replace": "the Orca worker's status (`list_workers` / `worker_status`)",
+    "why": "There is no Cursor dashboard in Cindy; Orca exposes read-only worker status."
+  },
+  {
+    "find": "If requirements are still running and the user asked for merge-when-ready, arm only that PR with `origin pr merge <pr> --squash --auto` or `gh pr merge <pr> --squash --auto`. Origin's `--auto` is Origin merge-when-ready.",
+    "replace": "If requirements are still running, keep waiting with `pr_wait`; Keel never arms auto-merge or merge-when-ready.",
+    "why": "Same as the squash line: no copyable auto-merge command in an active step."
   }
 ]

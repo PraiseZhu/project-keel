@@ -1,8 +1,8 @@
 // PR snapshot: upstream watch-pr facts + classification, plus the lane's Ready gate.
 // Rule files are read from the base branch on GitHub, never from the PR worktree.
 
-import { evaluateGate, resolveLane } from "../../shared/lanes.ts";
-import type { DecisionKind, KeelProfile, PrStatus, PrSummary, RequiredGate } from "../../shared/types.ts";
+import { evaluateGate, resolveLane, verificationOf } from "../../shared/lanes.ts";
+import type { DecisionKind, KeelProfile, PrStatus, PrSummary, RequiredGate, Verification } from "../../shared/types.ts";
 import { ToolError, ghJson, ghRaw, git } from "../env.ts";
 import { withCwd } from "../context.ts";
 import { ChecksUnavailable, GhGitHubReader, resolveContext } from "./upstream/github.ts";
@@ -95,16 +95,20 @@ const LABEL: Record<string, string> = {
   "closed-without-merge": "已关闭未合并",
 };
 
-export function renderZh(s: Pick<PrStatus, "pr" | "decision" | "checks" | "unresolvedThreads" | "gate" | "preset"> & { rule?: { mergeLabel?: string } }): string {
+const VERIFY_STATE: Record<Verification["state"], string> = { pass: "已通过", missing: "当前提交还没有", pending: "进行中", failing: "未通过" };
+
+export function renderZh(s: Pick<PrStatus, "pr" | "decision" | "checks" | "unresolvedThreads" | "gate" | "preset"> & { rule?: { mergeLabel?: string }; verification?: Verification | null }): string {
   const head = `${s.pr.repo}#${s.pr.number}「${s.pr.title}」`;
+  const unverified = s.verification && s.verification.state !== "pass";
   const state =
-    s.decision.kind === "ready" ? (s.rule?.mergeLabel && !s.pr.labels.includes(s.rule.mergeLabel) ? `就绪，待 ${s.rule.mergeLabel} 标签后才算可合并` : "可合并（请在 GitHub 合并，插件不提供合并）")
+    s.decision.kind === "ready" ? (unverified ? `CI 与评审就绪，但当前提交还没有 ${s.verification!.check} 通过状态，验证前不算可合并` : s.rule?.mergeLabel && !s.pr.labels.includes(s.rule.mergeLabel) ? `就绪，待 ${s.rule.mergeLabel} 标签后才算可合并` : "可合并（请在 GitHub 合并，插件不提供合并）")
     : s.decision.kind === "merged" ? "已合并"
     : s.decision.kind === "closed" ? "已关闭"
     : s.decision.kind === "waiting" ? `等待 CI（${s.checks.pending.length} 项进行中）`
     : `阻塞：${LABEL[s.decision.blocker ?? ""] ?? s.decision.blocker}`;
   const gate = s.gate.applies ? `；Ready 门禁${s.gate.ok ? "已满足" : `未满足（缺 ${[...s.gate.missing, ...s.gate.failing, ...s.gate.pending].join("、") || "—"}）`}` : "";
-  return `${head}：${state}。车道 ${s.preset}；失败 ${s.checks.failed.length} 项，通过 ${s.checks.passed} 项，未解决线程 ${s.unresolvedThreads} 条${gate}。`;
+  const verify = s.verification ? `；验证状态 ${s.verification.check}：${VERIFY_STATE[s.verification.state]}` : "";
+  return `${head}：${state}。车道 ${s.preset}；失败 ${s.checks.failed.length} 项，通过 ${s.checks.passed} 项，未解决线程 ${s.unresolvedThreads} 条${gate}${verify}。`;
 }
 
 export async function snapshot(profile: KeelProfile, args: SnapshotArgs): Promise<Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">> {
@@ -117,7 +121,7 @@ export async function snapshot(profile: KeelProfile, args: SnapshotArgs): Promis
   });
   const repo = `${context.owner}/${context.repo}`;
   const meta = await ghJson<{ title: string; url: string; labels: { name: string }[] }>(["pr", "view", String(context.number), "--repo", repo, "--json", "title,url,labels"]);
-  const { rule } = resolveLane(profile, repo);
+  const { match, rule } = resolveLane(profile, repo);
   const facts = row.facts;
   const pr: PrSummary = {
     repo, number: context.number, url: meta.url, title: meta.title,
@@ -143,7 +147,11 @@ export async function snapshot(profile: KeelProfile, args: SnapshotArgs): Promis
     gate = evaluateGate(rule, names, req.results, sources);
   }
   const unresolvedThreads = row.kind === "open" ? row.threads.length : 0;
-  const base = { preset: rule.preset, rule, pr, decision, checks, unresolvedThreads, gate, mergeReadyLabel: pr.labels.includes("review:merge-ready") };
+  // A repo with no CI has no check list yet: the verify status is simply not posted.
+  const verification: Verification | null = match?.verifyCheck
+    ? verificationOf(match.verifyCheck, row.kind === "open" && !("noChecks" in row) ? row.ci.all : [])
+    : null;
+  const base = { preset: rule.preset, rule, pr, decision, checks, unresolvedThreads, gate, verification, mergeReadyLabel: pr.labels.includes("review:merge-ready") };
   return { ...base, rendered: renderZh(base) };
 }
 

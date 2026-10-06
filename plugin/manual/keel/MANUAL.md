@@ -72,4 +72,4 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖（弹确认）。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。
 4. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
-完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable` / `handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；其余情况照 `nextAction` 继续。
+完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。

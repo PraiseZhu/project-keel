@@ -1360,6 +1360,7 @@ async function computeNext(
 export async function createRun(host: Host, opts: InitRunOpts): Promise<GraphRunState> {
   return withRun(host, opts.run_id, (raw) => {
     const init = initGraphState({ ...opts, now: opts.now ?? host.now() });
+    for (const k of Object.keys(raw)) delete (raw as Record<string, unknown>)[k];
     Object.assign(raw, init);
     return init;
   });

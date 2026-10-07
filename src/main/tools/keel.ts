@@ -1111,6 +1111,9 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         const s = raw as unknown as GraphRunState;
         s.astra_calls = calls;
         s.budget.astra_left = left;
+        delete s.g_route_choice;
+        delete s.consult_node;
+        delete s.pending_astra_gate;
       });
       return { run_id: runId, next: remat.next };
     }

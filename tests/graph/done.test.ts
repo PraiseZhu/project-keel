@@ -37,9 +37,39 @@ describe("mapOrchLevel", () => {
   it("FAIL is verifier-failed; PASS wording does not upgrade type-check evidence", () => {
     expect(mapOrchLevel({ verdict: "FAIL", status: "failed" })).toBe("verifier-failed");
     expect(mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "npx tsc --noEmit", exit_code: 0 }] })).toBe("type-check-only");
-    expect(mapOrchLevel({ verdict: "PASS+NOTES", surface: "unit-test" })).toBe("unit-test-verified");
-    expect(mapOrchLevel({ verdict: "PASS", surface: "live-ui" })).toBe("live-ui-verified");
+    expect(mapOrchLevel({ verdict: "PASS+NOTES", ran: [{ cmd: "npx vitest run", exit_code: 0 }] })).toBe("unit-test-verified");
+    expect(
+      mapOrchLevel({ verdict: "PASS", surface: "live-ui", ran: [{ cmd: "npx playwright test", exit_code: 0 }], ui_evidence: ["shots/home.png"] }),
+    ).toBe("live-ui-verified");
     expect(mapOrchLevel({ status: "blocked", verdict: "PASS" })).toBe("verifier-blocked");
+  });
+
+  it("a self-reported surface never raises the level above the evidence", () => {
+    expect(mapOrchLevel({ verdict: "PASS", surface: "unit-test" })).toBe("type-check-only");
+    expect(mapOrchLevel({ verdict: "PASS", surface: "live-ui" })).toBe("type-check-only");
+    expect(mapOrchLevel({ verdict: "PASS", surface: "live-ui", ran: [{ cmd: "npm test", exit_code: 0 }] })).toBe("unit-test-verified");
+    // Self-report can still lower it.
+    expect(mapOrchLevel({ verdict: "PASS", surface: "type-check", ran: [{ cmd: "npm test", exit_code: 0 }] })).toBe("type-check-only");
+  });
+
+  it("command names that are not real test runs give no test evidence", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    expect(pass("npx tsc --noEmit -p tsconfig.e2e.json")).toBe("type-check-only");
+    expect(pass("npx playwright --version")).toBe("type-check-only");
+    expect(pass("npx vitest --version")).toBe("type-check-only");
+    expect(pass("npx jest --listTests")).toBe("type-check-only");
+    expect(pass("pytest -v tests/")).toBe("unit-test-verified");
+    // A UI runner without UI artifacts is only unit-level evidence.
+    expect(pass("npx playwright test")).toBe("unit-test-verified");
+  });
+
+  it("a failing test run is verifier-failed even with PASS and a claimed surface", () => {
+    expect(mapOrchLevel({ verdict: "PASS", surface: "unit-test", ran: [{ cmd: "npx vitest run", exit_code: 1 }] })).toBe("verifier-failed");
+    expect(
+      mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "npx vitest run", exit_code: 1 }, { cmd: "npx vitest run", exit_code: 0 }] }),
+    ).toBe("verifier-failed");
+    // A non-test command that exits non-zero (grep with no match) is not a failure, just no evidence.
+    expect(mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "grep -n foo src", exit_code: 1 }, { cmd: "npm test", exit_code: 0 }] })).toBe("unit-test-verified");
   });
 
   it("buildVerdict records family from the actual route", () => {
@@ -50,7 +80,7 @@ describe("mapOrchLevel", () => {
       base_sha: "b",
       head_sha: "h",
       patch_id: "p",
-      report: { verdict: "PASS", surface: "unit-test" },
+      report: { verdict: "PASS", surface: "unit-test", ran: [{ cmd: "npm test", exit_code: 0 }] },
       route: { agent: "codex", model: "openai/gpt-6-luna", provider_id: "xd" },
     });
     expect(v.by_family).toBe(family("openai/gpt-6-luna"));
@@ -75,6 +105,15 @@ describe("isChangeGraphDone", () => {
     const r = isChangeGraphDone(input({ author_families: ["gpt"] }));
     expect(r.done).toBe(false);
     expect(r.missing.some((m) => m.includes("作者族"))).toBe(true);
+  });
+
+  it("an unknown verifier route or unknown author family is not a different family", () => {
+    const noRoute = isChangeGraphDone(input({ verdict: verdict({ by_family: "", by_route: { agent: "codex", model: "", provider_id: "" } }) }));
+    expect(noRoute.done).toBe(false);
+    expect(noRoute.missing.some((m) => m.includes("路线身份未知"))).toBe(true);
+    const noAuthor = isChangeGraphDone(input({ author_families: [] }));
+    expect(noAuthor.done).toBe(false);
+    expect(noAuthor.missing.some((m) => m.includes("作者"))).toBe(true);
   });
 
   it("rejects a level below unit-test-verified", () => {

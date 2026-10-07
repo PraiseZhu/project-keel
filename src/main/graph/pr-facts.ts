@@ -38,7 +38,9 @@ export interface PrFacts {
 export async function readPrFacts(ctx: ToolContext, args: Record<string, unknown>): Promise<PrFacts> {
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
   const raw = await node<{ threads?: PrThread[] }>(ctx, "pr/threads", prArgs(args));
-  const handedOff = Boolean(await readHandoff(ctx.host, snap.pr.repo, snap.pr.number));
+  // A pending record (Ready not yet confirmed) is not a handoff; records without status are complete.
+  const rec = (await readHandoff(ctx.host, snap.pr.repo, snap.pr.number)) as { status?: string } | null;
+  const handedOff = Boolean(rec) && rec!.status !== "pending";
   const allowed = allowedActions({
     rule: snap.rule,
     decision: snap.decision.kind,

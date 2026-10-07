@@ -58,6 +58,8 @@ export interface LeadOpts {
   setupWorkflowId?: string;
   stopWhen?: (next: Next, state: GraphRunState, steps: Next[]) => boolean;
   beforeStep?: (next: Next, state: GraphRunState, host: FakeHost, runId: string) => void;
+  /** 每次原样执行 wait.call 之后、假 worker 写报告之前。 */
+  afterWait?: (state: GraphRunState, next: Next, waitRound: number) => void;
   gateAnswer?: (next: Extract<Next, { kind: "decide" }>) => string;
 }
 
@@ -477,6 +479,7 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
       if (pending) {
         const key = pending.dispatch_key;
         waitRounds.set(key, (waitRounds.get(key) ?? 0) + 1);
+        opts.afterWait?.(readGraph(host, runId), next, waitRounds.get(key)!);
         if (next.kind !== "wait") {
           pending = undefined;
         } else if ((waitRounds.get(key) ?? 0) >= WORKER_WAIT_ROUNDS) {

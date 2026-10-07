@@ -72,12 +72,13 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
       },
       stopWhen: (next) => next.kind === "decide" && next.gate_id === "done",
     });
-    expect(run.next.kind).not.toBe("done");
-    if (run.next.kind === "decide") {
-      expect(run.next.question).toMatch(/作者族|模型族/);
-    } else {
-      expect(run.next.kind, `期望 decide/stop，实际 ${JSON.stringify(run.next)}`).toBe("stop");
-    }
+    expect(run.next.kind, `必须进入完成检查，实际 ${JSON.stringify(run.next)}`).toBe("decide");
+    if (run.next.kind !== "decide") throw new Error("unreachable");
+    expect(run.next.gate_id).toBe("done");
+    const missing = Array.isArray((run.next.context as { missing?: unknown })?.missing)
+      ? ((run.next.context as { missing: string[] }).missing).join("；")
+      : "";
+    expect(`${run.next.question}；${missing}`).toMatch(/作者族|模型族/);
   });
 
   it("本地 head 未推送或与 PR head 不一致不能 done", async () => {
@@ -195,6 +196,34 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
       expect(run.last.message).toMatch(/越界|outside/);
     }
     expect(run.next.kind).not.toBe("done");
+  });
+
+  it("F26-05：验证者 running 时 keel_wait 不得提前完成 verify-head", async () => {
+    const world = makeWorld();
+    const host = makeE2eHost(world);
+    const started = await startRun(host, {
+      goal: "修登录报错",
+      repo_dir: world.repoDir,
+      lead: "codex",
+      sc: [...SC],
+      scope: ["src/**"],
+    });
+    const snapshots: { cursor: string; status?: string; last_report?: unknown }[] = [];
+    const run = await leadLoop(host, started, world, {
+      afterWait: (state) => {
+        if (state.cursor !== "verify-head") return;
+        const node = state.nodes["verify-head"];
+        if (node?.dispatch_state === "running" || node?.dispatch_state === "accepted") {
+          snapshots.push({ cursor: state.cursor, status: node.status, last_report: node.last_report });
+        }
+      },
+    });
+    expect(snapshots.length, `必须在 verify-head running 下至少等两轮，实际 ${snapshots.length}；next=${JSON.stringify(run.next)} cursor=${run.state.cursor}`).toBeGreaterThanOrEqual(2);
+    for (const snap of snapshots) {
+      expect(snap.cursor).toBe("verify-head");
+      expect(snap.status).not.toBe("succeeded");
+      expect(snap.last_report).toBeUndefined();
+    }
   });
 });
 

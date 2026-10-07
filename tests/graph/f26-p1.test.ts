@@ -274,11 +274,11 @@ describe("F26-07 plugin task ids pass through accepted", () => {
       phase: "accepted",
       dispatch_key: key,
       task_id: "task-9",
-      revision: "3",
+      revision: 3,
     });
     expect(created.ok).toBe(true);
     const afterCreate = JSON.parse(h.files.get(graphStatePath("run-plug"))!) as GraphRunState;
-    expect(afterCreate.nodes.research?.task).toMatchObject({ task_id: "task-9", revision: "3", phase: "send" });
+    expect(afterCreate.nodes.research?.task).toMatchObject({ task_id: "task-9", revision: 3, phase: "send" });
     const sent: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
       run_id: "run-plug",
       phase: "accepted",

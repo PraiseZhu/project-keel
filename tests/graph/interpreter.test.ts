@@ -120,7 +120,7 @@ describe("interpreter next kinds", () => {
     if (research.next.kind !== "dispatch") throw new Error("plugin");
     expect(research.next.plugin_task?.phase).toBe("create");
     await advance(h3, "run4", {
-      type: "report", phase: "accepted", dispatch_key: research.next.dispatch_key, task_id: "task-1", revision: "1",
+      type: "report", phase: "accepted", dispatch_key: research.next.dispatch_key, task_id: "task-1", revision: 1,
     }, { spec: s3 });
     const send = await advance(h3, "run4", { type: "tick" }, { spec: s3 });
     expect(send.next.kind).toBe("dispatch");

@@ -34,9 +34,9 @@ describe("plugin_task → cindy.tasks", () => {
       method: "getRun",
       args: { runId: "run-abc" },
     });
-    expect(toCindyTasksCall({ phase: "getRun", request_key: "create:k" })).toEqual({
-      method: "getRun",
-      args: { requestKey: "create:k" },
+    expect(toCindyTasksCall({ phase: "list" })).toEqual({
+      method: "list",
+      args: { limit: 100 },
     });
     expect(toCindyTasksCall({ phase: "readMessages", task_id: "t1" })).toEqual({
       method: "readMessages",
@@ -62,6 +62,10 @@ describe("plugin_task → cindy.tasks", () => {
       async readMessages(args) {
         calls.push({ method: "readMessages", args });
         return { messages: [] };
+      },
+      async list(args) {
+        calls.push({ method: "list", args });
+        return { items: [] };
       },
     };
     const created = await invokeCindyTasks(api, {

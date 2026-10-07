@@ -493,21 +493,58 @@ function rec(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 }
 
-function pickId(...vals: unknown[]): string | undefined {
-  for (const v of vals) {
-    if (typeof v === "string" && v) return v;
-    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+function pickStrId(...vals: unknown[]): string | undefined {
+  for (const v of vals) if (typeof v === "string" && v) return v;
+  return undefined;
+}
+
+function pickRevision(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined;
+}
+
+function pluginReceipt(data: unknown): { task_id?: string; revision?: number; task_run_id?: string } {
+  const o = rec(data);
+  const task_id = pickStrId(o.task_id, o.taskId);
+  const task_run_id = pickStrId(o.task_run_id, o.taskRunId, o.run_id, o.runId);
+  const revision = pickRevision(o.revision);
+  return {
+    ...(task_id ? { task_id } : {}),
+    ...(revision !== undefined ? { revision } : {}),
+    ...(task_run_id ? { task_run_id } : {}),
+  };
+}
+
+function reportFromMessages(data: unknown): Record<string, unknown> | undefined {
+  const o = rec(data);
+  const msgs = Array.isArray(o.messages) ? o.messages : Array.isArray(o.items) ? o.items : [];
+  for (const m of [...msgs].reverse()) {
+    const row = rec(m);
+    const text = pickStrId(row.text, row.content, row.body);
+    if (!text) continue;
+    const fence = text.match(/```json\s*([\s\S]*?)```/);
+    const raw = fence?.[1] ?? (text.trim().startsWith("{") ? text : undefined);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch { /* next message */ }
   }
   return undefined;
 }
 
-function pluginReceipt(data: unknown): { task_id?: string; revision?: string; task_run_id?: string } {
-  const o = rec(data);
-  return {
-    ...(pickId(o.task_id, o.taskId) ? { task_id: pickId(o.task_id, o.taskId) } : {}),
-    ...(pickId(o.revision) ? { revision: pickId(o.revision) } : {}),
-    ...(pickId(o.task_run_id, o.taskRunId, o.run_id, o.runId) ? { task_run_id: pickId(o.task_run_id, o.taskRunId, o.run_id, o.runId) } : {}),
-  };
+async function findTaskByRequestKey(api: NonNullable<Host["tasks"]>, requestKey: string | undefined): Promise<{ task_id?: string; revision?: number } | undefined> {
+  if (!requestKey) return undefined;
+  const invoked = await invokeCindyTasks(api, { phase: "list" });
+  if (!invoked.ok) return undefined;
+  const items = rec(invoked.data).items;
+  if (!Array.isArray(items)) return undefined;
+  for (const it of items) {
+    const row = rec(it);
+    if (pickStrId(row.requestKey, row.request_key) === requestKey) {
+      return { task_id: pickStrId(row.taskId, row.task_id), revision: pickRevision(row.revision) };
+    }
+  }
+  return undefined;
 }
 
 async function drainPluginOps(ctx: ToolContext, runId: string, out: AdvanceResult, opts: AdvanceOpts): Promise<AdvanceResult> {
@@ -536,25 +573,33 @@ async function drainPluginOps(ctx: ToolContext, runId: string, out: AdvanceResul
       continue;
     }
     if (n.kind === "reconcile" && n.queries.every((q) => q.tool === "getRun" || q.tool === "readMessages")) {
+      const node = Object.values(current.state.nodes).find((x) => x.dispatch_key === n.dispatch_key);
       const queries_result: ReconcileQueries = {};
-      for (const q of n.queries) {
-        if (q.tool === "getRun") {
-          const invoked = await invokeCindyTasks(api, { phase: "getRun", run_id: q.run_id, request_key: q.request_key, task_run_id: q.run_id });
-          const data = invoked.ok ? rec(invoked.data) : {};
-          const receipt = pluginReceipt(data);
-          queries_result.getRun = {
-            ok: invoked.ok,
-            complete: invoked.ok,
-            ...(receipt.task_run_id ? { run_id: receipt.task_run_id } : {}),
-            ...(receipt.task_id ? { task_id: receipt.task_id } : {}),
-            ...(receipt.revision ? { revision: receipt.revision } : {}),
-            ...(typeof data.status === "string" ? { status: data.status } : {}),
-            ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}),
-          };
-        }
-        if (q.tool === "readMessages") {
-          const invoked = await invokeCindyTasks(api, { phase: "readMessages", task_id: q.task_id });
-          queries_result.readMessages = { ok: invoked.ok, complete: invoked.ok, ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}) };
+      if (node?.task?.phase === "create" || !n.queries.some((q) => q.tool === "getRun" && q.run_id)) {
+        const found = await findTaskByRequestKey(api, node?.task?.create_request_key);
+        queries_result.getRun = found?.task_id
+          ? { ok: true, complete: true, task_id: found.task_id, ...(found.revision !== undefined ? { revision: found.revision } : {}) }
+          : { ok: true, complete: true, errorCode: "TASK_NOT_FOUND" };
+      } else {
+        for (const q of n.queries) {
+          if (q.tool === "getRun" && q.run_id) {
+            const invoked = await invokeCindyTasks(api, { phase: "getRun", task_run_id: q.run_id });
+            const data = invoked.ok ? rec(invoked.data) : {};
+            const receipt = pluginReceipt(data);
+            queries_result.getRun = {
+              ok: invoked.ok,
+              complete: invoked.ok,
+              ...(receipt.task_run_id ? { run_id: receipt.task_run_id } : {}),
+              ...(receipt.task_id ? { task_id: receipt.task_id } : {}),
+              ...(receipt.revision !== undefined ? { revision: receipt.revision } : {}),
+              ...(typeof data.status === "string" ? { status: data.status } : {}),
+              ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}),
+            };
+          }
+          if (q.tool === "readMessages") {
+            const invoked = await invokeCindyTasks(api, { phase: "readMessages", task_id: q.task_id });
+            queries_result.readMessages = { ok: invoked.ok, complete: invoked.ok, ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}) };
+          }
         }
       }
       current = await advance(ctx.host, runId, {
@@ -684,10 +729,10 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     Object.assign(base, mapped);
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
     const task_id = str(args.task_id);
-    const revision = str(args.revision);
+    const revision = pickRevision(args.revision);
     const task_run_id = str(args.task_run_id);
     if (task_id) base.task_id = task_id;
-    if (revision) base.revision = revision;
+    if (revision !== undefined) base.revision = revision;
     if (task_run_id) base.task_run_id = task_run_id;
   }
   if (phase === "reconcile") {
@@ -770,20 +815,20 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
     }
     if (parsed) {
-      let headMatches: boolean | undefined;
-      if (parsed.head_sha && (worktree || st?.worktree)) {
-        try {
-          const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: worktree ?? st?.worktree ?? "" });
-          if (stGit.head) headMatches = stGit.head === parsed.head_sha;
-        } catch { /* unknown head is not a match */ }
-      }
+      const gh = st ? ghRepoOf(st) : undefined;
+      let facts: PrFacts | undefined;
+      try {
+        if (st?.pr != null) facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: st.pr, repo_dir: st.worktree });
+      } catch { facts = undefined; }
+      const prHead = facts?.snapshot.pr.headSha ?? undefined;
+      const headMatches = Boolean(parsed.head_sha && prHead && parsed.head_sha === prHead);
       const snap: NodeReportSnap = {
         status: parsed.status,
         summary: parsed.summary,
         ran: parsed.ran,
         files_changed: parsed.files_changed,
         ...(parsed.head_sha ? { head_sha: parsed.head_sha } : {}),
-        ...(headMatches !== undefined ? { head_matches: headMatches } : {}),
+        ...(parsed.head_sha && prHead ? { head_matches: headMatches } : {}),
         ...(parsed.findings ? { findings: parsed.findings } : {}),
         ...(parsed.citation ? { citation: parsed.citation } : {}),
         ...(parsed.sc_evidence ? { sc_evidence: parsed.sc_evidence } : {}),
@@ -793,33 +838,27 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         fresh: true,
       };
       base.report = snap;
-      if (nodeState?.planned_params?.role === "keel-verifier" && st?.worktree) {
+      if (nodeState?.planned_params?.role === "keel-verifier" && st?.worktree && headMatches && parsed.head_sha) {
         const route = nodeState.actual_route ?? {
           agent: nodeState.planned_params.agent as Harness,
           model: nodeState.planned_params.model,
           provider_id: nodeState.planned_params.provider_id,
           effort: nodeState.planned_params.effort,
         };
-        const gh = ghRepoOf(st);
-        let facts: PrFacts | undefined;
-        try {
-          if (st.pr != null) facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: st.pr, repo_dir: st.worktree });
-        } catch { facts = undefined; }
-        const headSha = facts?.snapshot.pr.headSha ?? undefined;
         const baseRef = facts?.snapshot.pr.baseRef ?? st.pr_binding?.base_ref;
         const computed = baseRef
           ? await node<{ base_sha?: string }>(ctx, "git/base-sha", { repo_dir: st.worktree, base_ref: baseRef }).catch(() => ({ base_sha: undefined as string | undefined }))
           : { base_sha: undefined as string | undefined };
-        const baseSha = st.pr_binding?.base_sha ?? computed.base_sha;
-        if (baseSha && headSha && route.model) {
-          const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: headSha }).catch(() => ({ ok: false, patch_id: undefined }));
+        const baseSha = computed.base_sha ?? st.pr_binding?.base_sha;
+        if (baseSha && route.model) {
+          const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: parsed.head_sha }).catch(() => ({ ok: false, patch_id: undefined }));
           if (pid.ok && pid.patch_id) {
             const gv = buildVerdict({
               repo: gh ?? "",
               pr: st.pr ?? st.pr_binding?.number ?? 0,
               base_ref: baseRef ?? "",
               base_sha: baseSha,
-              head_sha: headSha,
+              head_sha: parsed.head_sha,
               patch_id: pid.patch_id,
               report: verdictReportFromNode(parsed),
               route,
@@ -846,7 +885,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
 }
 
 const CI_WAIT_NODES = new Set(["wait-ci", "ci-rerun-once"]);
-const TOOL_PASS_NODES = new Set(["report", "report-ready", "verify-head"]);
+const TOOL_PASS_NODES = new Set(["report", "report-ready"]);
 
 async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: string): Promise<{ bound: boolean; next?: Next }> {
   const found = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: worktree }).catch(() => null);
@@ -900,6 +939,50 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
     return { run_id: runId, next, waited_seconds: waited() };
   }
 
+  const spec = PSTACK_GRAPHS[(st?.spec_id ?? st?.task_type) as GraphTaskType];
+  const specNode = spec?.nodes.find((n) => n.id === cursor);
+  const inflightNode = Object.values(st?.nodes ?? {}).find((n) => n.dispatch_state && n.dispatch_state !== "terminal" && n.dispatch_state !== "reported");
+  if (specNode && (specNode.kind === "dispatch" || specNode.kind === "plugin_task") && inflightNode) {
+    ctx.host.progress(ctx.callId);
+    if (inflightNode.task?.run_id && ctx.host.tasks) {
+      for (;;) {
+        ctx.host.progress(ctx.callId);
+        const invoked = await invokeCindyTasks(ctx.host.tasks, { phase: "getRun", task_run_id: inflightNode.task.run_id });
+        const status = pickStrId(rec(invoked.ok ? invoked.data : {}).status);
+        if (status === "completed" || status === "failed" || status === "cancelled") {
+          const msgs = inflightNode.task.task_id
+            ? await invokeCindyTasks(ctx.host.tasks, { phase: "readMessages", task_id: inflightNode.task.task_id })
+            : { ok: false as const, errorCode: "NO_TASK", message: "no task_id" };
+          const inline = reportFromMessages(msgs.ok ? msgs.data : {}) ?? { status: status === "completed" ? "done" : "failed", summary: status };
+          if (status !== "completed") inline.status = "failed";
+          const { next } = await step(ctx, runId, {
+            type: "report",
+            phase: "final",
+            dispatch_key: inflightNode.dispatch_key,
+            inline_report: {
+              status: (inline.status === "partial" || inline.status === "blocked" || inline.status === "failed" ? inline.status : "done") as "done" | "partial" | "blocked" | "failed",
+              summary: typeof inline.summary === "string" ? inline.summary : status,
+            },
+            report: {
+              status: typeof inline.status === "string" ? inline.status : status === "completed" ? "done" : "failed",
+              summary: typeof inline.summary === "string" ? inline.summary : status,
+              citation: typeof inline.citation === "string" ? inline.citation : undefined,
+              sc_evidence: inline.sc_evidence && typeof inline.sc_evidence === "object" ? inline.sc_evidence as Record<string, boolean> : undefined,
+              ran: Array.isArray(inline.ran) ? inline.ran as NodeReportSnap["ran"] : undefined,
+              files_changed: Array.isArray(inline.files_changed) ? inline.files_changed as string[] : undefined,
+              fresh: true,
+            },
+          });
+          return { run_id: runId, next, waited_seconds: waited() };
+        }
+        if (ctx.host.now() + 15_000 > deadline) return keepWait();
+        await ctx.host.sleep(15_000);
+      }
+    }
+    const { next } = await step(ctx, runId, { type: "tick" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
   if (CI_WAIT_NODES.has(cursor)) {
     if (st?.pr == null && st?.worktree) {
       ctx.host.progress(ctx.callId);
@@ -925,15 +1008,6 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   if (TOOL_PASS_NODES.has(cursor)) {
     ctx.host.progress(ctx.callId);
     const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
-    return { run_id: runId, next, waited_seconds: waited() };
-  }
-
-  const spec = PSTACK_GRAPHS[(st?.spec_id ?? st?.task_type) as GraphTaskType];
-  const specNode = spec?.nodes.find((n) => n.id === cursor);
-  const inflight = Object.values(st?.nodes ?? {}).some((n) => n.dispatch_state && n.dispatch_state !== "terminal" && n.dispatch_state !== "reported");
-  if (specNode && (specNode.kind === "dispatch" || specNode.kind === "plugin_task") && inflight) {
-    ctx.host.progress(ctx.callId);
-    const { next } = await step(ctx, runId, { type: "tick" });
     return { run_id: runId, next, waited_seconds: waited() };
   }
 

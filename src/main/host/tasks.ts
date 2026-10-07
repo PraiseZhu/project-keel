@@ -1,13 +1,14 @@
 // Map interpreter plugin_task ops onto Cindy §4.11.3 cindy.tasks.
 // KEEL's electron brain calls this itself; the lead does not invoke cindy.tasks.
 
-export type PluginTaskPhase = "create" | "send" | "getRun" | "readMessages";
+export type PluginTaskPhase = "create" | "send" | "getRun" | "readMessages" | "list";
 
 export interface CindyTasksApi {
   create(args: Record<string, unknown>): Promise<unknown>;
   send(args: Record<string, unknown>): Promise<unknown>;
   getRun(args: Record<string, unknown>): Promise<unknown>;
   readMessages(args: Record<string, unknown>): Promise<unknown>;
+  list(args: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface PluginTaskInput {
@@ -15,7 +16,7 @@ export interface PluginTaskInput {
   readonly request_key?: string;
   readonly body?: Record<string, unknown>;
   readonly task_id?: string;
-  readonly expected_revision?: string | number;
+  readonly expected_revision?: number;
   readonly text?: string;
   readonly run_id?: string;
   readonly task_run_id?: string;
@@ -43,22 +44,20 @@ export function toCindyTasksCall(input: PluginTaskInput): { method: PluginTaskPh
     };
   }
   if (input.phase === "send") {
-    return {
-      method: "send",
-      args: {
-        taskId: input.task_id,
-        expectedRevision: input.expected_revision,
-        requestKey: input.request_key,
-        text: input.text ?? "",
-      },
+    const rev = input.expected_revision;
+    const args: Record<string, unknown> = {
+      taskId: input.task_id,
+      requestKey: input.request_key,
+      text: input.text ?? "",
     };
+    if (typeof rev === "number" && Number.isSafeInteger(rev) && rev >= 0) args.expectedRevision = rev;
+    return { method: "send", args };
   }
   if (input.phase === "getRun") {
-    const args: Record<string, unknown> = {};
-    const runId = input.task_run_id ?? input.run_id;
-    if (runId) args.runId = runId;
-    if (input.request_key) args.requestKey = input.request_key;
-    return { method: "getRun", args };
+    return { method: "getRun", args: { runId: input.task_run_id ?? input.run_id } };
+  }
+  if (input.phase === "list") {
+    return { method: "list", args: { limit: 100 } };
   }
   return {
     method: "readMessages",

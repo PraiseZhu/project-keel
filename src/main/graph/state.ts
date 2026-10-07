@@ -66,10 +66,10 @@ export interface PluginTaskRecord {
   create_request_key: string;
   create_body: Record<string, unknown>;
   task_id?: string;
-  revision?: string;
+  revision?: number;
   send_request_key?: string;
   send_text?: string;
-  expected_revision?: string;
+  expected_revision?: number;
   run_id?: string;
   phase: "create" | "send";
   send_initial_attempted?: boolean;
@@ -168,7 +168,7 @@ export type Next =
         request_key: string;
         body?: Record<string, unknown>;
         task_id?: string;
-        expected_revision?: string;
+        expected_revision?: number;
         text?: string;
       };
       note?: string;

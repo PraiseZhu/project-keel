@@ -17,6 +17,7 @@ function recordingTasks(over: Partial<CindyTasksApi> = {}): { api: CindyTasksApi
     async send() { return { runId: "trun-1", revision: 2 }; },
     async getRun() { return { ok: true, taskId: "task-1", revision: 1, status: "idle" }; },
     async readMessages() { return { messages: [] }; },
+    async list() { return { items: [] }; },
     ...over,
   };
   const api: CindyTasksApi = {
@@ -24,6 +25,7 @@ function recordingTasks(over: Partial<CindyTasksApi> = {}): { api: CindyTasksApi
     async send(args) { calls.push({ method: "send", args }); return impl.send(args); },
     async getRun(args) { calls.push({ method: "getRun", args }); return impl.getRun(args); },
     async readMessages(args) { calls.push({ method: "readMessages", args }); return impl.readMessages(args); },
+    async list(args) { calls.push({ method: "list", args }); return impl.list(args); },
   };
   return { api, calls };
 }
@@ -79,15 +81,15 @@ describe("plugin_task executes inside KEEL", () => {
     expect(JSON.parse(h.files.get(graphStatePath("run-pt"))!).nodes.research.status).toBe("succeeded");
   });
 
-  it("lost create receipt reconcilies via getRun and does not replay create", async () => {
+  it("lost create receipt reconcilies via list requestKey and does not replay create", async () => {
     let creates = 0;
     const { api, calls } = recordingTasks({
       async create() {
         creates += 1;
         return {};
       },
-      async getRun() {
-        return { taskId: "task-recovered", revision: 1, status: "idle" };
+      async list() {
+        return { items: [{ taskId: "task-recovered", revision: 1, requestKey: "create:run-pt:research:1" }] };
       },
     });
     const h = fakeHost({
@@ -104,9 +106,48 @@ describe("plugin_task executes inside KEEL", () => {
     });
     expect(tick.ok).toBe(true);
     expect(creates).toBe(1);
-    expect(calls.map((c) => c.method)).toEqual(["create", "getRun", "send"]);
+    expect(calls.map((c) => c.method)).toEqual(["create", "list", "send"]);
+    expect(calls.find((c) => c.method === "getRun")).toBeUndefined();
     const st = JSON.parse(h.files.get(graphStatePath("run-pt"))!) as GraphRunState;
     expect(st.nodes.research?.task?.task_id).toBe("task-recovered");
+    expect(st.nodes.research?.task?.revision).toBe(1);
     expect(st.nodes.research?.task?.run_id).toBe("trun-1");
+  });
+
+  it("polls getRun by runId until completed then finals from readMessages", async () => {
+    let polls = 0;
+    const { api, calls } = recordingTasks({
+      async getRun(args) {
+        expect(args).toEqual({ runId: "trun-1" });
+        polls += 1;
+        return { status: polls === 1 ? "running" : "completed", runId: "trun-1" };
+      },
+      async readMessages() {
+        return { messages: [{ text: JSON.stringify({ status: "done", summary: "ok", citation: "notes.md:1", sc_evidence: { "SC-1": true } }) }] };
+      },
+    });
+    const h = fakeHost({
+      tasks: api,
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "a".repeat(40) } };
+        if (method === "git/content-fingerprint") return { ok: true, result: { head: "a".repeat(40), status_digest: "d", content_hash: "h" } };
+        return { ok: false, message: method };
+      },
+    });
+    await plantResearch(h);
+    await withRun(h, "run-pt", (raw) => {
+      (raw as unknown as GraphRunState).sc = [{ id: "SC-1", text: "根因" }];
+      (raw as unknown as GraphRunState).start_state = { head: "a".repeat(40), status_digest: "d", content_hash: "h" };
+    });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_gate", {
+      run_id: "run-pt", gate_id: "unused", answer: "x",
+    });
+    expect(started.ok).toBe(true);
+    const waited: any = await runTool(makeContext(h, "c2", profile), "keel_wait", { run_id: "run-pt" });
+    expect(waited.ok).toBe(true);
+    expect(calls.filter((c) => c.method === "getRun").every((c) => Object.keys(c.args as object).join() === "runId")).toBe(true);
+    const st = JSON.parse(h.files.get(graphStatePath("run-pt"))!) as GraphRunState;
+    expect(st.nodes.research?.last_report?.citation).toBe("notes.md:1");
+    expect(typeof st.nodes.research?.task?.revision).toBe("number");
   });
 });

@@ -153,21 +153,46 @@ function mergeBase(repoDir: string, baseRef: string, fallback: string): string {
   }
 }
 
-function fakeTasks(): CindyTasksApi {
+function fakeTasks(world?: { citation?: string }): CindyTasksApi {
   let n = 0;
+  let lastKey = "";
   return {
-    async create() {
+    async create(args) {
       n += 1;
+      lastKey = typeof args.requestKey === "string" ? args.requestKey : lastKey;
       return { taskId: `task-${n}`, revision: 1 };
     },
-    async send() {
+    async send(args) {
+      if (args.expectedRevision !== undefined && !Number.isSafeInteger(args.expectedRevision)) {
+        throw Object.assign(new Error("expectedRevision must be an integer"), { code: "INVALID_REQUEST" });
+      }
       return { runId: `trun-${n || 1}`, revision: 2 };
     },
-    async getRun() {
-      return { ok: true, taskId: `task-${n || 1}`, revision: 1, status: "running" };
+    async getRun(args) {
+      if (typeof args.runId !== "string" || !args.runId) {
+        throw Object.assign(new Error("getRun requires runId"), { code: "INVALID_REQUEST" });
+      }
+      if ("requestKey" in args) {
+        throw Object.assign(new Error("getRun does not accept requestKey"), { code: "INVALID_REQUEST" });
+      }
+      return { status: "completed", runId: args.runId };
     },
     async readMessages() {
-      return { messages: [] };
+      return {
+        messages: [{
+          text: JSON.stringify({
+            status: "done",
+            summary: "research 完成",
+            files_changed: [],
+            ran: [],
+            sc_evidence: { "SC-1": true },
+            ...(world?.citation ? { citation: world.citation } : {}),
+          }),
+        }],
+      };
+    },
+    async list() {
+      return { items: n ? [{ taskId: `task-${n}`, revision: 1, requestKey: lastKey }] : [] };
     },
   };
 }
@@ -193,7 +218,7 @@ export function makeWorld(over: Partial<World> = {}): World {
 export function makeE2eHost(world: World): FakeHost {
   return fakeHost({
     fetch: typesafeAnswering(0.9),
-    tasks: fakeTasks(),
+    tasks: fakeTasks(world),
     node: async (method: string, params: Record<string, unknown>) => {
       if (method === "git/state") return nodeOk(() => gitState(String(params.repo_dir)));
       if (method === "git/content-fingerprint") return nodeOk(() => contentFingerprint({ repo_dir: String(params.repo_dir) }));
@@ -305,17 +330,6 @@ function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): 
   return report;
 }
 
-function pluginFinalReport(world: World): Record<string, unknown> {
-  return {
-    status: "done",
-    summary: "research 完成",
-    files_changed: [],
-    ran: [],
-    sc_evidence: { "SC-1": true },
-    ...(world.citation ? { citation: world.citation } : {}),
-  };
-}
-
 async function call(ctx: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
   return runTool(ctx, tool, args);
 }
@@ -325,15 +339,6 @@ function nextOf(r: ToolResult): Next {
   const n = (r.result as { next?: Next }).next;
   if (!n) throw new Error("missing next");
   return n;
-}
-
-function inflightPlugin(state: GraphRunState): { key: string } | undefined {
-  for (const n of Object.values(state.nodes)) {
-    if (n.task && n.dispatch_key && n.dispatch_state !== "terminal" && n.dispatch_state !== "reported") {
-      return { key: n.dispatch_key };
-    }
-  }
-  return undefined;
 }
 
 export async function leadLoop(host: FakeHost, started: { run_id: string; next: Next; worktree?: string }, world: World, opts: LeadOpts = {}): Promise<LeadRun> {
@@ -416,20 +421,6 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
           inline_report: inlineReport(pending, world),
         });
         pending = undefined;
-        if (!last.ok) {
-          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
-        }
-        next = nextOf(last);
-        continue;
-      }
-      const plugin = inflightPlugin(state);
-      if (plugin) {
-        last = await call(c, "keel_report", {
-          run_id: runId,
-          phase: "final",
-          dispatch_key: plugin.key,
-          inline_report: pluginFinalReport(world),
-        });
         if (!last.ok) {
           return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
         }

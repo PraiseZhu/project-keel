@@ -46,6 +46,7 @@ const host: Host = {
           send: (args: Record<string, unknown>) => cindy.tasks.send(args),
           getRun: (args: Record<string, unknown>) => cindy.tasks.getRun(args),
           readMessages: (args: Record<string, unknown>) => cindy.tasks.readMessages(args),
+          list: (args: Record<string, unknown>) => cindy.tasks.list(args),
         },
       }
     : {}),

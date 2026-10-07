@@ -70,7 +70,7 @@ export interface ReconcileQueries {
     complete?: boolean;
     run_id?: string;
     task_id?: string;
-    revision?: string;
+    revision?: number;
     status?: string;
     errorCode?: string;
   };
@@ -107,7 +107,7 @@ export type AdvanceEvent =
       verdict?: GraphRunState["verdict"];
       session_id?: string;
       task_id?: string;
-      revision?: string;
+      revision?: number;
       task_run_id?: string;
       start_sha?: string;
     };
@@ -257,7 +257,7 @@ async function planOrca(
   if (node.attempts >= specNode.max_attempts) {
     return nextDecide(state, `human:${specNode.id}`, `节点 ${specNode.id} 已达 max_attempts`, ["stop"], true);
   }
-  const workingDir = specNode.writes || specNode.role !== "researcher" ? state.worktree : undefined;
+  const workingDir = state.worktree ?? state.invocation_dir;
   let start_sha: string | undefined;
   if (specNode.writes) {
     start_sha = await worktreeHead(host, workingDir ?? state.invocation_dir);
@@ -341,6 +341,19 @@ function planPlugin(state: GraphRunState, specNode: GraphNode, node: ReturnType<
   return next;
 }
 
+export function prOpenSections(state: GraphRunState): Record<string, string> {
+  const sc = (state.sc ?? []).map((s) => `- ${s.id}: ${s.text}`).join("\n") || "（无单独 SC）";
+  const notes = Object.entries(state.nodes)
+    .map(([id, n]) => `${id}: ${n.last_report?.summary ?? n.status}`)
+    .join("\n") || "（尚无节点摘要）";
+  return {
+    summary: state.goal,
+    goal: state.goal,
+    acceptance: sc,
+    notes,
+  };
+}
+
 function nextWait(state: GraphRunState): Next {
   if (state.cursor === "open-pr") {
     const next: Next = {
@@ -350,6 +363,7 @@ function nextWait(state: GraphRunState): Next {
         args: {
           repo_dir: state.worktree ?? state.invocation_dir ?? "",
           ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
+          sections: prOpenSections(state),
           ...(state.pr_binding?.base_ref ? { base: state.pr_binding.base_ref } : {}),
         },
       },
@@ -381,14 +395,13 @@ function emitReconcile(state: GraphRunState, node: ReturnType<typeof ensureNode>
   const queries: Array<
     | { tool: "list_workers"; team_id?: string }
     | { tool: "get_worker_queue_status"; worker_id: string }
-    | { tool: "getRun"; run_id?: string; request_key?: string }
+    | { tool: "getRun"; run_id?: string }
     | { tool: "readMessages"; task_id?: string }
   > = [];
   if (node.task) {
     queries.push({
       tool: "getRun",
       ...(node.task.run_id ? { run_id: node.task.run_id } : {}),
-      request_key: node.task.send_request_key ?? node.task.create_request_key,
     });
     if (node.task.task_id) queries.push({ tool: "readMessages", task_id: node.task.task_id });
   } else {
@@ -942,9 +955,24 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
   state.status = "running";
   if (gid.startsWith("human:")) {
     const nodeId = gid.slice("human:".length);
+    const retry = answer === "retry" || answer === "retry_verify" || answer === "retry_reconcile" || answer === "retry_setup";
+    if (retry) {
+      if (spec.nodes.some((n) => n.id === nodeId)) {
+        const node = ensureNode(state, nodeId);
+        node.status = "pending";
+        node.dispatch_state = undefined;
+        node.dispatch_key = undefined;
+        node.task = undefined;
+        node.expected_recover_action = undefined;
+        state.cursor = nodeId;
+      }
+      if (answer === "retry_setup") state.team = { ready: false };
+      state.next = undefined;
+      return;
+    }
     if (spec.nodes.some((n) => n.id === nodeId)) {
       if (answer === "fail") failNode(state, spec, nodeId, now);
-      else succeed(state, spec, nodeId, now);
+      else if (answer === "ok") succeed(state, spec, nodeId, now);
     }
     state.next = undefined;
     return;

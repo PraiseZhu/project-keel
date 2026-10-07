@@ -195,6 +195,7 @@ describe("verifier verdict uses pr_binding.base_sha", () => {
         ran: [{ cmd: "npm test", exit_code: 0 }],
         files_changed: [],
         verdict: "PASS",
+        head_sha: HEAD,
       },
     });
     expect(r.ok).toBe(true);
@@ -228,7 +229,7 @@ describe("verifier verdict uses pr_binding.base_sha", () => {
       });
       await runTool(makeContext(h, "c2", profile), "keel_report", {
         run_id: runId, phase: "final", dispatch_key: key,
-        inline_report: { status: "done", summary: "ok", ran, files_changed: [], verdict: "PASS" },
+        inline_report: { status: "done", summary: "ok", ran, files_changed: [], verdict: "PASS", head_sha: HEAD },
       });
       return JSON.parse(h.files.get(graphStatePath(runId))!).verdict?.level as string;
     }

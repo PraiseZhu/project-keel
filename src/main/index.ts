@@ -4,8 +4,8 @@ import { invalidateRuntimeConfig } from "./config.ts";
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
-import { asNudgeRun, handleCardActionMessage, handleTurnEndMessage, presentNudgeCard, tickNudgeClockFor } from "./host-bridge.ts";
-import { NudgeController, NUDGE_INTERVAL_MS, type NudgeRun } from "./graph/nudge.ts";
+import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleTurnEndMessage, markPendingCard, tickNudgeClockFor, type HostNudgeRun } from "./host-bridge.ts";
+import { NudgeController, NUDGE_INTERVAL_MS } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
@@ -62,7 +62,8 @@ const nudge = new NudgeController(
       return cindy.agent.run(req);
     },
     presentCard(card) {
-      presentNudgeCard((m) => cindy.send(m), card);
+      // Clock / turn-end have no tool-call slot; record pending and wait for keel_run/status/wait.
+      void markPendingCard(host, card.run_id);
     },
     notifyUser(message) {
       cindy.send({ type: "notify", message });
@@ -74,16 +75,25 @@ const nudge = new NudgeController(
 cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "tool-call") {
     const out = await runTool(makeContext(host, msg.callId), msg.tool, msg.args ?? {});
-    if (out.ok) cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result: out.result });
-    else cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: out.errorCode, message: out.message });
+    if (out.ok) {
+      await flushNudgeCardOnToolCall({
+        host,
+        send: (m) => cindy.send(m),
+        tool: String(msg.tool ?? ""),
+        callId: String(msg.callId ?? ""),
+        args: msg.args ?? {},
+        result: out.result,
+      });
+      cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result: out.result });
+    } else cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: out.errorCode, message: out.message });
     return;
   }
-  const card = await handleCardActionMessage(nudge, host, msg);
+  const card = await handleCardActionMessage(nudge, host, msg, (m) => cindy.send(m));
   if (card.handled) {
     cindy.send({ type: "card-action-result", ...card.result as object });
     return;
   }
-  const mapped = (await loadGraphStates(host)).map(asNudgeRun).filter((r): r is NudgeRun => r != null);
+  const mapped = (await loadGraphStates(host)).map(asNudgeRun).filter((r): r is HostNudgeRun => r != null);
   const turn = await handleTurnEndMessage(nudge, host, mapped, msg);
   if (turn.handled) return;
   if (msg.type === "nudge-clock") {
@@ -93,7 +103,7 @@ cindy.onHostMessage(async (msg: any) => {
 
 async function tickNudgeClock(): Promise<void> {
   const runs = await loadGraphStates(host);
-  const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => r != null);
+  const mapped = runs.map(asNudgeRun).filter((r): r is HostNudgeRun => r != null);
   await tickNudgeClockFor(nudge, host, mapped);
 }
 

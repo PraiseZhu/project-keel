@@ -22,6 +22,7 @@ export interface CardActionEvent {
   readonly actionId: string;
   readonly userActionToken?: string;
   readonly callId?: string;
+  readonly spawnCallId?: string;
   readonly run_id?: string;
   readonly cardId?: string;
 }
@@ -46,7 +47,8 @@ function runIdFromNudgeId(id?: string): string | undefined {
 
 export function runIdFromCardAction(ev: CardActionEvent): string | undefined {
   if (ev.run_id) return ev.run_id;
-  return runIdFromNudgeId(ev.cardId) ?? runIdFromNudgeId(ev.callId);
+  // callId is an opaque host tool-call id — never parse keel-nudge-* from it.
+  return runIdFromNudgeId(ev.cardId);
 }
 
 function esc(s: unknown): string {
@@ -76,18 +78,20 @@ export function parseCardActionEvent(msg: any): CardActionEvent | null {
     actionId,
     ...(typeof pick("userActionToken") === "string" ? { userActionToken: pick("userActionToken") } : {}),
     ...(typeof pick("callId") === "string" ? { callId: pick("callId") } : {}),
+    ...(typeof pick("spawnCallId") === "string" ? { spawnCallId: pick("spawnCallId") } : {}),
     ...(typeof pick("run_id") === "string" ? { run_id: pick("run_id") } : typeof pick("runId") === "string" ? { run_id: pick("runId") } : {}),
     ...(typeof pick("cardId") === "string" ? { cardId: pick("cardId") } : {}),
   };
 }
 
-/** Handbook §4.6: {type:"event", name:"did-turn-end", data:{endReason}}. */
-export function parseTurnEndEvent(msg: any): { endReason: "completed" | "interrupted" | "error" } | null {
+/** Handbook §4.6: data = { sessionId, endReason, ... }. */
+export function parseTurnEndEvent(msg: any): { endReason: "completed" | "interrupted" | "error"; sessionId?: string } | null {
   const handbook = msg?.type === "event" && msg.name === "did-turn-end";
   const legacy = msg?.type === "did-turn-end" || msg?.topic === "turn";
   if (!handbook && !legacy) return null;
   const d = msg.data && typeof msg.data === "object" ? msg.data : {};
   const raw = handbook ? (d.endReason ?? msg.endReason) : (msg.endReason ?? d.endReason);
   const endReason = raw === "interrupted" || raw === "error" ? raw : "completed";
-  return { endReason };
+  const sessionId = typeof d.sessionId === "string" ? d.sessionId : typeof msg.sessionId === "string" ? msg.sessionId : undefined;
+  return { endReason, ...(sessionId ? { sessionId } : {}) };
 }

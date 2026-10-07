@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { makeContext, type ToolContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
-import type { GraphRunState, Next } from "../../src/main/graph/state.ts";
+import { parseDispatchKey, type GraphRunState, type Next } from "../../src/main/graph/state.ts";
 import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { ToolError } from "../../src/node/env.ts";
@@ -24,7 +24,9 @@ export const PR_NUMBER = 42;
 export const PR_REPO = "acme/app";
 export const TEAM_ID = "team-e2e";
 export const SC = [{ id: "SC-1", text: "登录不再报错", verify: "npx vitest run" }] as const;
-const RAN_OK = [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }];
+/** 合成输入：只验证编排是否读取 tests_passed，不代表目标仓真的跑过测试。 */
+export const RAN_OK = [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }];
+const WORKER_WAIT_ROUNDS = 3;
 
 const GIT_FLAGS = ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "commit.gpgsign=false"];
 
@@ -56,6 +58,8 @@ export interface LeadOpts {
   setupWorkflowId?: string;
   stopWhen?: (next: Next, state: GraphRunState, steps: Next[]) => boolean;
   beforeStep?: (next: Next, state: GraphRunState, host: FakeHost, runId: string) => void;
+  /** 每次原样执行 wait.call 之后、假 worker 写报告之前。 */
+  afterWait?: (state: GraphRunState, next: Next, waitRound: number) => void;
   gateAnswer?: (next: Extract<Next, { kind: "decide" }>) => string;
 }
 
@@ -153,46 +157,82 @@ function mergeBase(repoDir: string, baseRef: string, fallback: string): string {
   }
 }
 
-function fakeTasks(world?: { citation?: string }): CindyTasksApi {
+function invalidTask(message: string): never {
+  const e = new Error(message) as Error & { code: string };
+  e.name = "PluginTaskError";
+  e.code = "INVALID_REQUEST";
+  throw e;
+}
+
+function taskText(v: unknown, max: number): v is string {
+  return typeof v === "string" && v.trim().length > 0 && v.length <= max;
+}
+
+function exactKeys(args: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const k of Object.keys(args)) {
+    if (!allowed.includes(k)) invalidTask("Invalid task request");
+  }
+}
+
+/** Cindy pluginTasks 请求校验（taskSlot.validPluginTaskRequest）的测试替身，不 import 外仓。 */
+function fakeTasks(world: World): CindyTasksApi {
   let n = 0;
-  let lastKey = "";
+  const runs = new Map<string, { taskId: string; polls: number; status: "running" | "completed" }>();
+  const tasks = new Map<string, { revision: number }>();
   return {
     async create(args) {
+      exactKeys(args, ["requestKey", "title", "route", "isolatedWorkspace", "callId"]);
+      if (!taskText(args.requestKey, 128) || !taskText(args.title, 100)) invalidTask("Invalid task request");
+      if (args.isolatedWorkspace !== undefined && typeof args.isolatedWorkspace !== "boolean") invalidTask("Invalid task request");
+      if (args.route !== undefined) {
+        const r = args.route as Record<string, unknown>;
+        if (!r || typeof r !== "object" || Array.isArray(r)) invalidTask("Invalid task request");
+        if (Object.keys(r).some((k) => !["agentKind", "providerId", "model", "effort", "fastMode"].includes(k))) invalidTask("Invalid task request");
+        if (!["cc", "codex", "pi"].includes(String(r.agentKind)) || !taskText(r.providerId, 128) || !taskText(r.model, 256) || typeof r.effort !== "string" || r.effort.length > 32 || typeof r.fastMode !== "boolean") {
+          invalidTask("Invalid task request");
+        }
+      }
       n += 1;
-      lastKey = typeof args.requestKey === "string" ? args.requestKey : lastKey;
-      return { taskId: `task-${n}`, revision: 1 };
+      const taskId = `task-${n}`;
+      tasks.set(taskId, { revision: 1 });
+      return { taskId, revision: 1 };
     },
     async send(args) {
-      if (args.expectedRevision !== undefined && !Number.isSafeInteger(args.expectedRevision)) {
-        throw Object.assign(new Error("expectedRevision must be an integer"), { code: "INVALID_REQUEST" });
+      exactKeys(args, ["taskId", "requestKey", "expectedRevision", "text"]);
+      if (!taskText(args.taskId, 128) || !taskText(args.requestKey, 128) || !taskText(args.text, 32768)) invalidTask("Invalid task request");
+      if (!Number.isSafeInteger(args.expectedRevision) || (args.expectedRevision as number) < 0) {
+        invalidTask("expectedRevision must be a non-negative safe integer");
       }
-      return { runId: `trun-${n || 1}`, revision: 2 };
+      const taskId = String(args.taskId);
+      const runId = `trun-${taskId}`;
+      runs.set(runId, { taskId, polls: 0, status: "running" });
+      return { runId, revision: 2 };
     },
     async getRun(args) {
-      if (typeof args.runId !== "string" || !args.runId) {
-        throw Object.assign(new Error("getRun requires runId"), { code: "INVALID_REQUEST" });
-      }
-      if ("requestKey" in args) {
-        throw Object.assign(new Error("getRun does not accept requestKey"), { code: "INVALID_REQUEST" });
-      }
-      return { status: "completed", runId: args.runId };
+      exactKeys(args, ["runId"]);
+      if (!taskText(args.runId, 128)) invalidTask("Invalid task request");
+      const runId = String(args.runId);
+      const row = runs.get(runId) ?? { taskId: "task-unknown", polls: 0, status: "running" as const };
+      row.polls += 1;
+      if (row.polls >= 2) row.status = "completed";
+      runs.set(runId, row);
+      return { runId, taskId: row.taskId, status: row.status, revision: 2 };
     },
-    async readMessages() {
-      return {
-        messages: [{
-          text: JSON.stringify({
-            status: "done",
-            summary: "research 完成",
-            files_changed: [],
-            ran: [],
-            sc_evidence: { "SC-1": true },
-            ...(world?.citation ? { citation: world.citation } : {}),
-          }),
-        }],
+    async readMessages(args) {
+      exactKeys(args, ["taskId", "after", "limit"]);
+      if (!taskText(args.taskId, 128)) invalidTask("Invalid task request");
+      if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 100)) {
+        invalidTask("Invalid task request");
+      }
+      const body = {
+        status: "done",
+        summary: "research 完成",
+        files_changed: [],
+        ran: [],
+        sc_evidence: { "SC-1": true },
+        ...(world.citation ? { citation: world.citation } : {}),
       };
-    },
-    async list() {
-      return { items: n ? [{ taskId: `task-${n}`, revision: 1, requestKey: lastKey }] : [] };
+      return { messages: [{ role: "assistant", text: JSON.stringify(body) }] };
     },
   };
 }
@@ -330,6 +370,15 @@ function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): 
   return report;
 }
 
+function writeKeelReport(pending: Extract<Next, { kind: "dispatch" }>, world: World): void {
+  const parsed = parseDispatchKey(pending.dispatch_key);
+  if (!parsed) throw new Error(`bad dispatch_key ${pending.dispatch_key}`);
+  const dir = pending.create_worker?.working_dir ?? world.worktree ?? world.repoDir;
+  mkdirSync(join(dir, ".keel"), { recursive: true });
+  const body = { dispatch_key: pending.dispatch_key, ...inlineReport(pending, world) };
+  writeFileSync(join(dir, ".keel", `${parsed.nodeId}-${parsed.attempt}.md`), `\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\`\n`);
+}
+
 async function call(ctx: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
   return runTool(ctx, tool, args);
 }
@@ -347,6 +396,7 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
   const steps: Next[] = [];
   const models: { role: string; model: string }[] = [];
   let pending: Extract<Next, { kind: "dispatch" }> | undefined;
+  const waitRounds = new Map<string, number>();
   let last: ToolResult = { ok: true, result: started };
   let seq = 0;
 
@@ -409,36 +459,47 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
     }
 
     if (next.kind === "wait") {
-      if (pending) {
-        if (pending.create_worker?.role === "keel-worker") {
-          if (world.outOfScope) writeOutOfScope(world);
-          else if (!world.committedFix && !world.outOfScopeBeforeAccepted) commitFix(world);
-        }
-        last = await call(c, "keel_report", {
-          run_id: runId,
-          phase: "final",
-          dispatch_key: pending.dispatch_key,
-          inline_report: inlineReport(pending, world),
-        });
-        pending = undefined;
-        if (!last.ok) {
-          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
-        }
-        next = nextOf(last);
-        continue;
+      const waitCall = next.call;
+      const extra: Record<string, unknown> = {};
+      if (waitCall.tool === "pr_open") {
+        extra.authorization_source = "用户 2026-10-04：提交 PR";
+        extra.run_id = runId;
       }
-      if (next.call.tool === "pr_open") {
-        const openArgs = { ...next.call.args, sections: "e2e sim", authorization_source: "用户 2026-10-04：提交 PR", run_id: runId };
-        last = await call(c, "pr_open", openArgs);
-        if (!last.ok) {
-          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
-        }
+      last = await call(c, waitCall.tool, { ...waitCall.args, ...extra });
+      if (!last.ok) {
+        return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
+      }
+      if (waitCall.tool === "pr_open") {
         last = await call(c, "keel_wait", { run_id: runId, max_minutes: 15 });
-        next = nextOf(last);
-        continue;
+        if (!last.ok) {
+          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
+        }
       }
-      last = await call(c, "keel_wait", { run_id: runId, max_minutes: 15 });
       next = nextOf(last);
+      if (pending) {
+        const key = pending.dispatch_key;
+        waitRounds.set(key, (waitRounds.get(key) ?? 0) + 1);
+        opts.afterWait?.(readGraph(host, runId), next, waitRounds.get(key)!);
+        if (next.kind !== "wait") {
+          pending = undefined;
+        } else if ((waitRounds.get(key) ?? 0) >= WORKER_WAIT_ROUNDS) {
+          if (pending.create_worker?.role === "keel-worker") {
+            if (world.outOfScope) writeOutOfScope(world);
+            else if (!world.committedFix && !world.outOfScopeBeforeAccepted) commitFix(world);
+          }
+          writeKeelReport(pending, world);
+          last = await call(c, "keel_report", {
+            run_id: runId,
+            phase: "final",
+            dispatch_key: pending.dispatch_key,
+          });
+          pending = undefined;
+          if (!last.ok) {
+            return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
+          }
+          next = nextOf(last);
+        }
+      }
       continue;
     }
 
@@ -501,7 +562,7 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
 
     throw new Error(`unhandled next.kind ${(next as Next).kind}`);
   }
-  throw new Error(`lead loop hit ${LOOP_LIMIT} steps; last=${JSON.stringify(steps.slice(-8).map((s) => s.kind))}`);
+  return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
 }
 
 export async function startRun(host: FakeHost, args: Record<string, unknown>): Promise<{ run_id: string; next: Next; worktree?: string }> {

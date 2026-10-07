@@ -1,6 +1,7 @@
 // Build the Cindy plugin bundles from src/ into plugin/.
 // The personal profile (config/profile.local.json, gitignored) is injected here so
 // the public source tree never carries personal paths or internal repo names.
+import { spawnSync } from "node:child_process";
 import { build } from "esbuild";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,6 +35,16 @@ await build({ ...common, entryPoints: [join(root, "src/node/worker.ts")], outfil
 for (const bin of ["orch", "check-plan"]) await build({ ...common, define: { ...define, "import.meta.main": "false" }, entryPoints: [join(root, `src/node/bin/${bin}.ts`)], outfile: join(root, `plugin/node/${bin}.mjs`), format: "esm", platform: "node", target: "node20", banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" } });
 await build({ ...common, entryPoints: [join(root, "src/panel/panel.ts")], outfile: join(root, "plugin/panel.js"), format: "iife", platform: "browser" });
 await build({ ...common, entryPoints: [join(root, "src/panel/settings.ts")], outfile: join(root, "plugin/settings.js"), format: "iife", platform: "browser" });
+
+const graphValidateOut = join(root, "plugin/node/graph-validate.mjs");
+await build({ ...common, entryPoints: [join(root, "src/shared/graph/validate-cli.ts")], outfile: graphValidateOut, format: "esm", platform: "node", target: "node20" });
+const graphCheck = spawnSync(process.execPath, [graphValidateOut], { cwd: root, encoding: "utf8" });
+if (graphCheck.stdout) process.stdout.write(graphCheck.stdout);
+if (graphCheck.stderr) process.stderr.write(graphCheck.stderr);
+if (graphCheck.status !== 0) {
+  console.error("graph spec invalid; build failed");
+  process.exit(graphCheck.status ?? 1);
+}
 
 // Profile page for the keel manual unit (generated, gitignored).
 const lanes = (profile.lanes ?? []).map((l) => `| \`${l.repo}\` | ${l.preset} | ${l.preflight ? "`" + l.preflight + "`" : "—"} | ${l.verifyCheck ? "`" + l.verifyCheck + "`" : "—"} |`).join("\n") || "| （未配置） | personal | — | — |";

@@ -948,7 +948,8 @@
   },
   "agent": {
     "schedule": true,
-    "background": true
+    "background": true,
+    "tasks": true
   },
   "manual": {
     "items": [

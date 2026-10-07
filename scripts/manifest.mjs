@@ -146,7 +146,7 @@ const manifest = {
   fs: true,
   card: true,
   subscribe: { topics: ["turn"] },
-  agent: { schedule: true, background: true },
+  agent: { schedule: true, background: true, tasks: true },
   manual: {
     items: [
       { dir: "manual/keel", name: "keel", description: "中文入口：工具地图、车道、用户规则覆盖层、Cursor→Cindy 对照、并行派工协议。" },

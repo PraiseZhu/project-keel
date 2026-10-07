@@ -1,5 +1,6 @@
 // Fake lead + real temp git repo for keel_* tool-surface e2e.
 // Orca / gh / Jev stay on fakeHost. Local git is real under _tmp/test-runs/.
+// Plugin research goes through host.tasks (cindy.tasks); the lead does not proxy it.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -7,13 +8,14 @@ import { join, resolve } from "node:path";
 import { makeContext, type ToolContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
 import type { GraphRunState, Next } from "../../src/main/graph/state.ts";
+import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { ToolError } from "../../src/node/env.ts";
 import { changedFiles } from "../../src/node/git/files.ts";
 import { contentFingerprint } from "../../src/node/git/fingerprint.ts";
 import { patchId } from "../../src/node/git/patch.ts";
 import { readNodeReportFile } from "../../src/node/git/report-file.ts";
-import { gitState, originBaseSha } from "../../src/node/git/worktree.ts";
+import { gitState } from "../../src/node/git/worktree.ts";
 import { LANE_PRESETS, EMPTY_PROFILE } from "../../src/shared/types.ts";
 import { fakeHost, typesafeAnswering, type FakeHost } from "../helpers/fakeHost.ts";
 
@@ -22,6 +24,7 @@ export const PR_NUMBER = 42;
 export const PR_REPO = "acme/app";
 export const TEAM_ID = "team-e2e";
 export const SC = [{ id: "SC-1", text: "登录不再报错", verify: "npx vitest run" }] as const;
+const RAN_OK = [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }];
 
 const GIT_FLAGS = ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "commit.gpgsign=false"];
 
@@ -36,11 +39,14 @@ export interface World {
   syncPrHead: boolean;
   ci: "green" | "red";
   citation?: string;
-  /** Write an out-of-scope file before the next writing-node final. */
+  /** Uncommitted out-of-scope file at final time. */
   outOfScope: boolean;
+  /** Commit an out-of-scope file after plan, before accepted. */
+  outOfScopeBeforeAccepted: boolean;
   committedFix: boolean;
   workerSeq: number;
   teamId: string;
+  prOpened: boolean;
 }
 
 export interface LeadOpts {
@@ -84,10 +90,11 @@ export function makeRepo(): { dir: string; sha: () => string } {
   writeFileSync(join(dir, ".gitignore"), ".keel/\n");
   git(dir, "add", ".");
   git(dir, "commit", "-q", "-m", "init");
+  git(dir, "remote", "add", "origin", `https://github.com/${PR_REPO}.git`);
   return { dir, sha: () => git(dir, "rev-parse", "HEAD").trim() };
 }
 
-function addWorktree(root: string, name: string): string {
+export function addWorktree(root: string, name: string): string {
   mkdirSync(join(root, ".worktrees"), { recursive: true });
   const path = join(root, ".worktrees", name);
   git(root, "worktree", "add", "-q", "-b", `keel/${name}`, path, "HEAD");
@@ -138,6 +145,33 @@ async function nodeOk<T>(fn: () => Promise<T> | T): Promise<{ ok: true; result: 
   }
 }
 
+function mergeBase(repoDir: string, baseRef: string, fallback: string): string {
+  try {
+    return git(repoDir, "merge-base", baseRef, "HEAD").trim();
+  } catch {
+    return fallback;
+  }
+}
+
+function fakeTasks(): CindyTasksApi {
+  let n = 0;
+  return {
+    async create() {
+      n += 1;
+      return { taskId: `task-${n}`, revision: 1 };
+    },
+    async send() {
+      return { runId: `trun-${n || 1}`, revision: 2 };
+    },
+    async getRun() {
+      return { ok: true, taskId: `task-${n || 1}`, revision: 1, status: "running" };
+    },
+    async readMessages() {
+      return { messages: [] };
+    },
+  };
+}
+
 export function makeWorld(over: Partial<World> = {}): World {
   const repo = makeRepo();
   return {
@@ -147,9 +181,11 @@ export function makeWorld(over: Partial<World> = {}): World {
     syncPrHead: true,
     ci: "green",
     outOfScope: false,
+    outOfScopeBeforeAccepted: false,
     committedFix: false,
     workerSeq: 0,
     teamId: TEAM_ID,
+    prOpened: false,
     ...over,
   };
 }
@@ -157,6 +193,7 @@ export function makeWorld(over: Partial<World> = {}): World {
 export function makeE2eHost(world: World): FakeHost {
   return fakeHost({
     fetch: typesafeAnswering(0.9),
+    tasks: fakeTasks(),
     node: async (method: string, params: Record<string, unknown>) => {
       if (method === "git/state") return nodeOk(() => gitState(String(params.repo_dir)));
       if (method === "git/content-fingerprint") return nodeOk(() => contentFingerprint({ repo_dir: String(params.repo_dir) }));
@@ -167,6 +204,11 @@ export function makeE2eHost(world: World): FakeHost {
           base_sha: typeof params.base_sha === "string" ? params.base_sha : undefined,
           head_sha: typeof params.head_sha === "string" ? params.head_sha : undefined,
         }));
+      }
+      if (method === "git/base-sha") {
+        const dir = String(params.repo_dir);
+        const baseRef = typeof params.base_ref === "string" && params.base_ref ? params.base_ref.replace(/^origin\//, "") : "main";
+        return { ok: true, result: { base_ref: baseRef, base_sha: mergeBase(dir, baseRef, world.baseSha), fetched: false } };
       }
       if (method === "worktree/create") {
         return nodeOk(() => {
@@ -182,15 +224,28 @@ export function makeE2eHost(world: World): FakeHost {
           attempt: Number(params.attempt),
         }));
       }
+      if (method === "pr/open") {
+        world.prOpened = true;
+        if (world.syncPrHead) {
+          const dir = typeof params.repo_dir === "string" ? params.repo_dir : (world.worktree ?? world.repoDir);
+          try { world.prHead = git(dir, "rev-parse", "HEAD").trim(); } catch { /* keep frozen head */ }
+        }
+        return {
+          ok: true,
+          result: {
+            url: `https://github.com/${PR_REPO}/pull/${PR_NUMBER}`,
+            number: PR_NUMBER,
+            repo: PR_REPO,
+            head_sha: world.prHead,
+          },
+        };
+      }
+      if (method === "pr/resolve") {
+        if (!world.prOpened) return { ok: true, result: null };
+        return { ok: true, result: { repo: PR_REPO, number: PR_NUMBER } };
+      }
       if (method === "pr/snapshot") return { ok: true, result: prSnapshot(world) };
       if (method === "pr/threads") return { ok: true, result: { threads: [] } };
-      if (method === "pr/resolve") return { ok: true, result: { repo: PR_REPO, number: PR_NUMBER } };
-      if (method === "git/base-sha") {
-        return nodeOk(async () => {
-          const real = await originBaseSha({ repo_dir: String(params.repo_dir), base_ref: typeof params.base_ref === "string" ? params.base_ref : "main" });
-          return { ...real, base_sha: real.base_sha ?? world.baseSha, base_ref: real.base_ref || "main" };
-        });
-      }
       return { ok: false, message: `UNEXPECTED ${method}` };
     },
   });
@@ -225,17 +280,21 @@ function writeOutOfScope(world: World): void {
   writeFileSync(join(dir, "outside.txt"), "leaked\n");
 }
 
+function commitOutOfScope(world: World): void {
+  const dir = world.worktree ?? world.repoDir;
+  writeFileSync(join(dir, "outside.txt"), "leaked\n");
+  git(dir, "add", "outside.txt");
+  git(dir, "commit", "-q", "-m", "leak outside scope");
+}
+
 function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): Record<string, unknown> {
   const role = next.create_worker?.role;
   const head = world.worktree ? localHead(world) : world.prHead;
-  const ran = role === "keel-verifier" || role === "keel-worker"
-    ? [{ cmd: "npx vitest run", exit_code: 0 }]
-    : [];
   const report: Record<string, unknown> = {
     status: "done",
-    summary: `${role ?? next.plugin_task?.phase ?? "node"} 完成`,
+    summary: `${role ?? "node"} 完成`,
     files_changed: role === "keel-worker" ? ["src/app.ts"] : [],
-    ran,
+    ran: role === "keel-verifier" || role === "keel-worker" ? RAN_OK : [],
     sc_evidence: { "SC-1": true },
   };
   if (world.citation) report.citation = world.citation;
@@ -244,6 +303,17 @@ function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): 
   }
   if (role === "keel-verifier" || role === "keel-architect") report.verdict = "PASS";
   return report;
+}
+
+function pluginFinalReport(world: World): Record<string, unknown> {
+  return {
+    status: "done",
+    summary: "research 完成",
+    files_changed: [],
+    ran: [],
+    sc_evidence: { "SC-1": true },
+    ...(world.citation ? { citation: world.citation } : {}),
+  };
 }
 
 async function call(ctx: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -255,6 +325,15 @@ function nextOf(r: ToolResult): Next {
   const n = (r.result as { next?: Next }).next;
   if (!n) throw new Error("missing next");
   return n;
+}
+
+function inflightPlugin(state: GraphRunState): { key: string } | undefined {
+  for (const n of Object.values(state.nodes)) {
+    if (n.task && n.dispatch_key && n.dispatch_state !== "terminal" && n.dispatch_state !== "reported") {
+      return { key: n.dispatch_key };
+    }
+  }
+  return undefined;
 }
 
 export async function leadLoop(host: FakeHost, started: { run_id: string; next: Next; worktree?: string }, world: World, opts: LeadOpts = {}): Promise<LeadRun> {
@@ -300,24 +379,25 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
     }
 
     if (next.kind === "dispatch") {
+      if (next.plugin_task) {
+        throw new Error(`产品缺陷：假主控看到 plugin_task dispatch（${next.plugin_task.phase}），应在 host.tasks 内完成`);
+      }
       pending = next;
-      if (next.create_worker) models.push({ role: next.create_worker.role, model: next.create_worker.model });
+      if (next.create_worker) {
+        models.push({ role: next.create_worker.role, model: next.create_worker.model });
+        if (next.create_worker.role === "keel-worker" && world.outOfScopeBeforeAccepted) {
+          commitOutOfScope(world);
+        }
+      }
       world.workerSeq += 1;
       const accepted: Record<string, unknown> = {
         run_id: runId,
         phase: "accepted",
         dispatch_key: next.dispatch_key,
+        worker_id: `w-${world.workerSeq}`,
+        worker_session_id: `ws-${world.workerSeq}`,
+        dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
       };
-      if (next.plugin_task?.phase === "create") {
-        accepted.task_id = `task-${world.workerSeq}`;
-        accepted.revision = "1";
-      } else if (next.plugin_task?.phase === "send") {
-        accepted.task_run_id = `trun-${world.workerSeq}`;
-      } else {
-        accepted.worker_id = `w-${world.workerSeq}`;
-        accepted.worker_session_id = `ws-${world.workerSeq}`;
-        accepted.dispatch_outcome = { dispatched: true, wakeKind: "immediate" };
-      }
       last = await call(c, "keel_report", accepted);
       next = nextOf(last);
       continue;
@@ -327,7 +407,7 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
       if (pending) {
         if (pending.create_worker?.role === "keel-worker") {
           if (world.outOfScope) writeOutOfScope(world);
-          else if (!world.committedFix) commitFix(world);
+          else if (!world.committedFix && !world.outOfScopeBeforeAccepted) commitFix(world);
         }
         last = await call(c, "keel_report", {
           run_id: runId,
@@ -339,6 +419,30 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
         if (!last.ok) {
           return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
         }
+        next = nextOf(last);
+        continue;
+      }
+      const plugin = inflightPlugin(state);
+      if (plugin) {
+        last = await call(c, "keel_report", {
+          run_id: runId,
+          phase: "final",
+          dispatch_key: plugin.key,
+          inline_report: pluginFinalReport(world),
+        });
+        if (!last.ok) {
+          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
+        }
+        next = nextOf(last);
+        continue;
+      }
+      if (next.call.tool === "pr_open") {
+        const openArgs = { ...next.call.args, sections: "e2e sim", authorization_source: "用户 2026-10-04：提交 PR", run_id: runId };
+        last = await call(c, "pr_open", openArgs);
+        if (!last.ok) {
+          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
+        }
+        last = await call(c, "keel_wait", { run_id: runId, max_minutes: 15 });
         next = nextOf(last);
         continue;
       }
@@ -395,7 +499,6 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
 
     if (next.kind === "decide") {
       const rec = next;
-      // idle + 空队列：KEEL 开 human:reconcile，假主控不自动补投。
       if (rec.gate_id === "human:reconcile" && /不自动补投|队列为空/.test(rec.question)) {
         return { runId, worktree: started.worktree ?? world.worktree, next: rec, steps, models, last, state };
       }

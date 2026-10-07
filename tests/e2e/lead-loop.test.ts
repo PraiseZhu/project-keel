@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { family } from "../../src/shared/fanout.ts";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   SC,
+  addWorktree,
   cleanupRepos,
   leadLoop,
   makeE2eHost,
@@ -151,6 +154,44 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
     expect(run.state.team?.ready).not.toBe(true);
     expect(Object.values(run.state.nodes).some((n) => n.dispatch_key)).toBe(false);
   });
+
+  it("人工门回答 stop 后 run 变为 stopped", async () => {
+    const world = makeWorld();
+    const host = makeE2eHost(world);
+    const started = await startRun(host, {
+      goal: "修登录报错",
+      repo_dir: world.repoDir,
+      lead: "codex",
+      sc: [...SC],
+      scope: ["src/**"],
+    });
+    const run = await leadLoop(host, started, world, {
+      setupTeamId: null,
+      gateAnswer: () => "stop",
+    });
+    expect(run.next.kind).toBe("stop");
+    expect(run.state.status).toBe("stopped");
+    expect(kinds(run)).not.toContain("dispatch");
+  });
+
+  it("accepted 之前已提交域外文件，final 返回 SCOPE_VIOLATION", async () => {
+    const world = makeWorld({ outOfScopeBeforeAccepted: true });
+    const host = makeE2eHost(world);
+    const started = await startRun(host, {
+      goal: "修登录报错",
+      repo_dir: world.repoDir,
+      lead: "codex",
+      sc: [...SC],
+      scope: ["src/**"],
+    });
+    const run = await leadLoop(host, started, world);
+    expect(run.last.ok).toBe(false);
+    if (!run.last.ok) {
+      expect(run.last.errorCode).toBe("SCOPE_VIOLATION");
+      expect(run.last.message).toMatch(/越界|outside/);
+    }
+    expect(run.next.kind).not.toBe("done");
+  });
 });
 
 describe("假主控 e2e：investigation", () => {
@@ -181,6 +222,26 @@ describe("假主控 e2e：investigation", () => {
     });
     expect(bad.next.kind).not.toBe("done");
     if (bad.next.kind === "decide") expect(bad.next.question).toMatch(/引用/);
+  });
+
+  it("linked worktree 启动后调查期间被改动，不能判为 done", async () => {
+    const world = makeWorld({ citation: "https://example.com/timeout" });
+    const linked = addWorktree(world.repoDir, "inv-linked");
+    const host = makeE2eHost(world);
+    const started = await startRun(host, {
+      goal: "调查登录超时的原理",
+      repo_dir: linked,
+      lead: "codex",
+      playbook: "investigation",
+      sc: [{ id: "SC-1", text: "给出根因引用" }],
+    });
+    writeFileSync(join(linked, "src/app.ts"), "mutated during investigation\n");
+    const run = await leadLoop(host, started, world, {
+      stopWhen: (next) => next.kind === "decide" && next.gate_id === "done",
+    });
+    expect(run.next.kind).not.toBe("done");
+    const q = run.next.kind === "decide" ? run.next.question : run.next.kind === "stop" ? run.next.reason : "";
+    expect(q).toMatch(/指纹|源码|Git/);
   });
 });
 

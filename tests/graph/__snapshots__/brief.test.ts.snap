@@ -20,6 +20,6 @@ ACCEPTANCE  SC-1: 复现用例转绿
 VERIFY      npx vitest run tests/login.test.ts
 TIMEBOX     20 分钟；到期交部分发现并停止，不要继续改
 FORBIDDEN   禁止合并；禁止 force-push；禁止 rebase；禁止写域外文件；禁止改配置
-REPORT      用 keel_report({phase:"final", inline_report}) 内联交回完整报告。不要写 .keel/。给主控的回复不超过 20 行摘要。
+REPORT      用 keel_report({phase:"final", inline_report}) 内联交回完整报告。JSON 必须含本节点 dispatch_key、status（done|partial|blocked|failed）、summary。不要写 .keel/。给主控的回复不超过 20 行摘要。
 STANDING    不合并。"
 `;

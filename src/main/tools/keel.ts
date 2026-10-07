@@ -10,7 +10,7 @@ import { GATES, type Evidence, type GateId } from "../graph/gates.ts";
 import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending } from "../graph/route-start.ts";
 import { ASTRA_CONSULT_ID, classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
-import { parseNodeReport, type NodeReport } from "../graph/report.ts";
+import { NODE_REPORT_STATUSES, parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
 import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type SuccessCriterion, type Verdict } from "../graph/state.ts";
 import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
@@ -711,22 +711,48 @@ function pluginReceipt(data: unknown): { task_id?: string; revision?: number; ta
   };
 }
 
-function reportFromMessages(data: unknown): Record<string, unknown> | undefined {
+function looksLikeReportJson(text: string): boolean {
+  return /```json\s*[\s\S]*?```/.test(text) || text.trim().startsWith("{");
+}
+
+function reportJsonPayload(text: string): string | undefined {
+  const fence = text.match(/```json\s*([\s\S]*?)```/);
+  if (fence?.[1]) return fence[1];
+  const trimmed = text.trim();
+  return trimmed.startsWith("{") ? trimmed : undefined;
+}
+
+function isKeelNodeReport(raw: unknown, expectedKey: string): raw is Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.dispatch_key !== "string" || o.dispatch_key !== expectedKey) return false;
+  if (typeof o.status !== "string" || !(NODE_REPORT_STATUSES as readonly string[]).includes(o.status)) return false;
+  if (typeof o.summary !== "string") return false;
+  return true;
+}
+
+function reportFromMessages(data: unknown, expectedKey: string): { report?: Record<string, unknown>; unconfirmed: boolean } {
   const o = rec(data);
   const msgs = Array.isArray(o.messages) ? o.messages : Array.isArray(o.items) ? o.items : [];
-  for (const m of [...msgs].reverse()) {
+  let last: Record<string, unknown> | undefined;
+  let trailingInvalid = false;
+  for (const m of msgs) {
     const row = rec(m);
     const text = pickStrId(row.text, row.content, row.body);
-    if (!text) continue;
-    const fence = text.match(/```json\s*([\s\S]*?)```/);
-    const raw = fence?.[1] ?? (text.trim().startsWith("{") ? text : undefined);
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-    } catch { /* next message */ }
+    if (!text || !looksLikeReportJson(text)) continue;
+    const payload = reportJsonPayload(text);
+    if (!payload) { trailingInvalid = true; continue; }
+    let parsed: unknown;
+    try { parsed = JSON.parse(payload); } catch { trailingInvalid = true; continue; }
+    if (isKeelNodeReport(parsed, expectedKey)) {
+      last = parsed;
+      trailingInvalid = false;
+    } else {
+      trailingInvalid = true;
+    }
   }
-  return undefined;
+  if (trailingInvalid || !last) return { unconfirmed: true };
+  return { report: last, unconfirmed: false };
 }
 
 async function findTaskByRequestKey(api: NonNullable<Host["tasks"]>, requestKey: string | undefined): Promise<{ task_id?: string; revision?: number } | undefined> {
@@ -1245,7 +1271,9 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
             ? await collectTaskMessages(ctx.host.tasks, inflightNode.task.task_id)
             : { ok: false as const, errorCode: "NO_TASK", message: "no task_id" };
           if (!msgs.ok) return keepWait(msgs.message);
-          const inline = reportFromMessages(msgs.data) ?? { status: status === "completed" ? "done" : "failed", summary: status };
+          const selected = reportFromMessages(msgs.data, inflightNode.dispatch_key ?? "");
+          if (selected.unconfirmed) return keepWait("任务报告未确认。");
+          const inline = selected.report ?? { status: status === "completed" ? "done" : "failed", summary: status };
           if (status !== "completed") inline.status = "failed";
           const { next } = await step(ctx, runId, {
             type: "report",

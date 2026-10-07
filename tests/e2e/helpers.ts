@@ -178,6 +178,7 @@ function exactKeys(args: Record<string, unknown>, allowed: readonly string[]): v
 /** Cindy pluginTasks 请求校验（taskSlot.validPluginTaskRequest）的测试替身，不 import 外仓。 */
 function fakeTasks(world: World): CindyTasksApi {
   let n = 0;
+  let lastSendText = "";
   const runs = new Map<string, { taskId: string; polls: number; status: "running" | "completed" }>();
   const tasks = new Map<string, { revision: number }>();
   return {
@@ -204,6 +205,7 @@ function fakeTasks(world: World): CindyTasksApi {
       if (!Number.isSafeInteger(args.expectedRevision) || (args.expectedRevision as number) < 0) {
         invalidTask("expectedRevision must be a non-negative safe integer");
       }
+      lastSendText = String(args.text ?? "");
       const taskId = String(args.taskId);
       const runId = `trun-${taskId}`;
       runs.set(runId, { taskId, polls: 0, status: "running" });
@@ -225,7 +227,9 @@ function fakeTasks(world: World): CindyTasksApi {
       if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 100)) {
         invalidTask("Invalid task request");
       }
+      const key = lastSendText.match(/dispatch_key ([a-z0-9][a-z0-9:_-]*)/i)?.[1];
       const body = {
+        ...(key ? { dispatch_key: key } : {}),
         status: "done",
         summary: "research 完成",
         files_changed: [],

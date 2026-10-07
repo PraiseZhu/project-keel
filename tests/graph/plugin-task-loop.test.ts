@@ -116,6 +116,7 @@ describe("plugin_task executes inside KEEL", () => {
 
   it("polls getRun by runId until completed then finals from readMessages", async () => {
     let polls = 0;
+    let h: ReturnType<typeof fakeHost>;
     const { api, calls } = recordingTasks({
       async getRun(args) {
         expect(args).toEqual({ runId: "trun-1" });
@@ -123,10 +124,12 @@ describe("plugin_task executes inside KEEL", () => {
         return { status: polls === 1 ? "running" : "completed", runId: "trun-1" };
       },
       async readMessages() {
-        return { messages: [{ text: JSON.stringify({ status: "done", summary: "ok", citation: "notes.md:1", sc_evidence: { "SC-1": true } }) }] };
+        const st = JSON.parse(h.files.get(graphStatePath("run-pt"))!) as GraphRunState;
+        const key = st.nodes.research?.dispatch_key ?? "";
+        return { messages: [{ text: JSON.stringify({ dispatch_key: key, status: "done", summary: "ok", citation: "notes.md:1", sc_evidence: { "SC-1": true } }) }] };
       },
     });
-    const h = fakeHost({
+    h = fakeHost({
       tasks: api,
       node: (method: string) => {
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "a".repeat(40) } };

@@ -29,14 +29,16 @@ describe("R29-04 paged messages", () => {
     const world = makeWorld({ citation: "notes:1" });
     const h = makeE2eHost(world);
     let pages = 0;
+    const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     h.tasks!.readMessages = async (args: Record<string, unknown>) => {
       pages++;
+      const st = JSON.parse(h.files.get(`runs/${start.run_id}/graph-state.json`)!) as { nodes: Record<string, { dispatch_key?: string }> };
+      const key = st.nodes.research?.dispatch_key ?? "";
       if (!args.after) {
-        return { items: [{ role: "assistant", text: JSON.stringify({ status: "partial", summary: "provisional finding", citation: "notes:1", sc_evidence: { "SC-1": true } }) }], nextCursor: "final-page" };
+        return { items: [{ role: "assistant", text: JSON.stringify({ dispatch_key: key, status: "partial", summary: "provisional finding", citation: "notes:1", sc_evidence: { "SC-1": true } }) }], nextCursor: "final-page" };
       }
-      return { items: [{ role: "assistant", text: JSON.stringify({ status: "failed", summary: "final conclusion disproved", citation: "notes:1", sc_evidence: { "SC-1": false } }) }], nextCursor: null };
+      return { items: [{ role: "assistant", text: JSON.stringify({ dispatch_key: key, status: "failed", summary: "final conclusion disproved", citation: "notes:1", sc_evidence: { "SC-1": false } }) }], nextCursor: null };
     };
-    const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     const run = await leadLoop(h, start, world);
     expect(pages).toBeGreaterThanOrEqual(2);
     expect(run.next.kind).not.toBe("done");

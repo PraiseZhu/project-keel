@@ -396,7 +396,7 @@ export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Prom
     return { ok: false, next: { kind: "decide", gate_id: "done", question: `尚未完成：${missing.join("；")}`, options: ["wait", "stop"], context: { missing } } };
   }
   const head = prHead ?? git.head ?? "";
-  const base = state.verdict?.base_sha ?? "";
+  const base = state.pr_binding?.base_sha ?? state.verdict?.base_sha ?? "";
   let patch: { patch_id: string | null; patch_ok: boolean } = { patch_id: null, patch_ok: false };
   if (state.worktree && base && head) {
     const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: state.worktree, base_sha: base, head_sha: head }).catch(() => ({ ok: false, patch_id: undefined }));
@@ -634,23 +634,25 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         fresh: true,
       };
       base.report = snap;
-      if (nodeState?.planned_params?.role === "keel-verifier" && parsed.head_sha && st) {
+      if (nodeState?.planned_params?.role === "keel-verifier" && st?.worktree) {
         const route = nodeState.actual_route ?? {
           agent: nodeState.planned_params.agent as Harness,
           model: nodeState.planned_params.model,
           provider_id: nodeState.planned_params.provider_id,
           effort: nodeState.planned_params.effort,
         };
-        const baseSha = st.verdict?.base_sha ?? "";
-        if (baseSha && route.model && st.worktree) {
-          const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: parsed.head_sha }).catch(() => ({ ok: false, patch_id: undefined }));
+        const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: st.worktree }).catch(() => ({ head: undefined }));
+        const headSha = stGit.head;
+        const baseSha = st.pr_binding?.base_sha;
+        if (baseSha && headSha && route.model) {
+          const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: headSha }).catch(() => ({ ok: false, patch_id: undefined }));
           if (pid.ok && pid.patch_id) {
             const gv = buildVerdict({
-              repo: String(st.repo ?? ""),
-              pr: st.pr ?? 0,
-              base_ref: st.verdict?.base_ref ?? "",
+              repo: String(st.repo ?? st.pr_binding?.repo ?? ""),
+              pr: st.pr ?? st.pr_binding?.number ?? 0,
+              base_ref: st.pr_binding?.base_ref ?? "",
               base_sha: baseSha,
-              head_sha: parsed.head_sha,
+              head_sha: headSha,
               patch_id: pid.patch_id,
               report: verdictReportFromNode(parsed),
               route,
@@ -676,6 +678,31 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
   return { run_id: runId, next };
 }
 
+const CI_WAIT_NODES = new Set(["wait-ci", "ci-rerun-once"]);
+const TOOL_PASS_NODES = new Set(["report", "report-ready", "verify-head"]);
+
+async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: string): Promise<{ bound: boolean; next?: Next }> {
+  const found = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: worktree }).catch(() => null);
+  if (!found?.number) return { bound: false };
+  const facts = await readPrFacts(ctx, { repo_dir: worktree, repo: found.repo, pr: found.number });
+  const baseRef = facts.snapshot.pr.baseRef;
+  const head = facts.snapshot.pr.headSha ?? undefined;
+  const base = await node<{ base_sha?: string; base_ref: string }>(ctx, "git/base-sha", { repo_dir: worktree, base_ref: baseRef }).catch(() => ({ base_ref: baseRef, base_sha: undefined as string | undefined }));
+  await withRun(ctx.host, runId, (raw) => {
+    const s = raw as unknown as GraphRunState;
+    s.pr = found.number;
+    s.repo = found.repo;
+    s.pr_binding = {
+      repo: found.repo,
+      number: found.number,
+      ...(head ? { head_sha: head } : {}),
+      ...(baseRef ? { base_ref: baseRef } : {}),
+      ...(base.base_sha ? { base_sha: base.base_sha } : {}),
+    };
+  });
+  return { bound: true };
+}
+
 export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) {
   const runId = requireString(args, "run_id");
   const maxMinutes = Math.min(15, Math.max(1, typeof args.max_minutes === "number" ? args.max_minutes : 15));
@@ -683,28 +710,60 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   const deadline = start + maxMinutes * 60_000;
   const states = await loadGraphStates(ctx.host);
   const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
-  let on: ReturnType<typeof waitOnFromFacts> = "wait";
-  if (st?.pr !== undefined && st.pr !== null) {
+  const cursor = st?.cursor ?? "";
+  const waited = () => Math.round((ctx.host.now() - start) / 1000);
+  const keepWait = (note?: string) => ({
+    run_id: runId,
+    next: {
+      ...(st?.next?.kind === "wait" ? st.next : { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId, max_minutes: maxMinutes } } }),
+      ...(note ? { note } : {}),
+    },
+    waited_seconds: waited(),
+  });
+
+  if (cursor === "open-pr") {
+    ctx.host.progress(ctx.callId);
+    if (!st?.worktree) {
+      return { run_id: runId, next: { kind: "decide" as const, gate_id: "open-pr", question: "open-pr 没有 worktree，无法查 PR。", options: ["retry", "stop"] }, waited_seconds: waited() };
+    }
+    const bind = await bindPrFromWorktree(ctx, runId, st.worktree);
+    if (!bind.bound) return keepWait("尚未开 PR。主控先 pr_open，再 keel_wait。");
+    const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
+  if (CI_WAIT_NODES.has(cursor)) {
+    if (st?.pr == null && st?.worktree) {
+      ctx.host.progress(ctx.callId);
+      const bind = await bindPrFromWorktree(ctx, runId, st.worktree);
+      if (!bind.bound) return keepWait("尚未开 PR。");
+    }
+    const fresh = (await loadGraphStates(ctx.host)).find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+    if (fresh?.pr == null) return keepWait("wait-ci 还没有绑定 PR。");
+    let on: ReturnType<typeof waitOnFromFacts> = "wait";
     for (;;) {
       ctx.host.progress(ctx.callId);
-      const facts = await readPrFacts(ctx, { repo: st.repo, pr: st.pr, repo_dir: st.worktree });
+      const facts = await readPrFacts(ctx, { repo: fresh.repo, pr: fresh.pr, repo_dir: fresh.worktree });
       on = waitOnFromFacts(facts);
       if (on !== "wait") break;
-      if (ctx.host.now() + 15_000 > deadline) {
-        return { run_id: runId, next: st.next ?? { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId, max_minutes: maxMinutes } } }, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
-      }
+      if (ctx.host.now() + 15_000 > deadline) return keepWait();
       await ctx.host.sleep(15_000);
     }
-  } else {
-    ctx.host.progress(ctx.callId);
-    if (ctx.host.now() + 15_000 > deadline) {
-      return { run_id: runId, next: st?.next ?? { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId } } }, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
-    }
-    await ctx.host.sleep(15_000);
-    return { run_id: runId, next: st?.next ?? { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId } } }, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
+    const { next } = await step(ctx, runId, { type: "wait_done", on });
+    return { run_id: runId, next, waited_seconds: waited() };
   }
-  const { next } = await step(ctx, runId, { type: "wait_done", on });
-  return { run_id: runId, next, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
+
+  if (TOOL_PASS_NODES.has(cursor)) {
+    ctx.host.progress(ctx.callId);
+    const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
+  return {
+    run_id: runId,
+    next: { kind: "decide" as const, gate_id: cursor || "wait", question: `不清楚节点 ${cursor || "(空)"} 该如何等待，不要无限等。`, options: ["retry", "stop"], context: { cursor } },
+    waited_seconds: waited(),
+  };
 }
 
 export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) {

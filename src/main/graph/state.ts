@@ -124,6 +124,8 @@ export interface PrBinding {
   head_repo?: string;
   branch?: string;
   head_sha?: string;
+  base_ref?: string;
+  base_sha?: string;
 }
 
 export interface SuccessCriterion {
@@ -186,7 +188,14 @@ export type Next =
       call: { tool: string; args: Record<string, unknown> };
       after: string;
     }
-  | { kind: "wait"; call: { tool: "keel_wait"; args: { run_id: string; max_minutes?: number } } }
+  | {
+      kind: "wait";
+      call:
+        | { tool: "keel_wait"; args: { run_id: string; max_minutes?: number } }
+        | { tool: "pr_open"; args: Record<string, unknown> };
+      note?: string;
+      after?: string;
+    }
   | { kind: "decide"; gate_id: string; question: string; options: string[]; context?: unknown }
   | { kind: "done"; summary: string; pr_url?: string; verdict?: Verdict }
   | { kind: "stop"; reason: string; needs_user: string[] };

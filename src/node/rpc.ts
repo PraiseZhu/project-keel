@@ -8,7 +8,7 @@ import { patchId } from "./git/patch.ts";
 import { failedLog } from "./git/ci.ts";
 import { changedFiles, excludeKeel, gitDiff } from "./git/files.ts";
 import { readNodeReportFile } from "./git/report-file.ts";
-import { audit, createWorktree, gitState, prune } from "./git/worktree.ts";
+import { audit, createWorktree, gitState, originBaseSha, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
 import { roles } from "./routes/routing.ts";
@@ -45,6 +45,7 @@ const methods: Record<string, Method> = {
   "pr/reply": (p) => prReply(p as any),
   "pr/board": (p, profile) => prBoard(profile, p as any),
   "git/state": (p) => gitState(p.repo_dir),
+  "git/base-sha": (p) => originBaseSha(p as any),
   "git/patch-id": (p) => patchId(p as any),
   "git/content-fingerprint": (p) => contentFingerprint(p as any),
   "git/changed-files": (p) => changedFiles(p as any),

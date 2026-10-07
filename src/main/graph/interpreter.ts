@@ -15,8 +15,11 @@ import {
   initGraphState,
   keelRoleFor,
   MAX_RECONCILE_ROUNDS,
+  MAX_RECOVER_TIMEOUTS,
   parseDispatchKey,
   PLANNED_TIMEOUT_MS,
+  RECONCILE_TIMEOUT_MS,
+  RECOVER_TIMEOUT_MS,
   type CreateWorkerParams,
   type ErrorMode,
   type GraphRunState,
@@ -44,6 +47,7 @@ export interface ReconcileQueries {
     ok: boolean;
     complete?: boolean;
     errorCode?: string;
+    team_id?: string;
     workers?: Array<{
       label: string;
       worker_id?: string;
@@ -55,6 +59,18 @@ export interface ReconcileQueries {
     ok: boolean;
     pending?: unknown[];
     consuming?: unknown;
+    errorCode?: string;
+  };
+  getRun?: {
+    ok: boolean;
+    complete?: boolean;
+    run_id?: string;
+    status?: string;
+    errorCode?: string;
+  };
+  readMessages?: {
+    ok: boolean;
+    complete?: boolean;
     errorCode?: string;
   };
 }
@@ -218,6 +234,9 @@ async function planOrca(
     state.next = next;
     return next;
   }
+  if (hasLiveWriter(specNode, node) && node.dispatch_key) {
+    return requestWriterStop(state, node, node.dispatch_key, "retry", now);
+  }
   if (node.attempts >= specNode.max_attempts) {
     return nextDecide(state, `human:${specNode.id}`, `节点 ${specNode.id} 已达 max_attempts`, ["stop"], true);
   }
@@ -244,6 +263,8 @@ async function planOrca(
   node.planned_params = params;
   node.worker_label = label;
   node.expected_recover_action = undefined;
+  node.team_id = state.team?.team_id;
+  node.writer_stopped = false;
   const create_worker: CreateWorkerParams = {
     label: params.label,
     role: params.role,
@@ -312,8 +333,23 @@ function nextSetup(state: GraphRunState): Next {
 function emitReconcile(state: GraphRunState, node: ReturnType<typeof ensureNode>, key: string, now: number): Next {
   node.dispatch_state = "reconciling";
   node.dispatch_state_at = now;
-  const queries: Array<{ tool: "list_workers" } | { tool: "get_worker_queue_status"; worker_id: string }> = [{ tool: "list_workers" }];
-  if (node.worker_id) queries.push({ tool: "get_worker_queue_status", worker_id: node.worker_id });
+  const queries: Array<
+    | { tool: "list_workers"; team_id?: string }
+    | { tool: "get_worker_queue_status"; worker_id: string }
+    | { tool: "getRun"; run_id?: string; request_key?: string }
+    | { tool: "readMessages"; task_id?: string }
+  > = [];
+  if (node.task) {
+    queries.push({
+      tool: "getRun",
+      ...(node.task.run_id ? { run_id: node.task.run_id } : {}),
+      request_key: node.task.send_request_key ?? node.task.create_request_key,
+    });
+    if (node.task.task_id) queries.push({ tool: "readMessages", task_id: node.task.task_id });
+  } else {
+    queries.push({ tool: "list_workers", ...(node.team_id ? { team_id: node.team_id } : {}) });
+    if (node.worker_id) queries.push({ tool: "get_worker_queue_status", worker_id: node.worker_id });
+  }
   const next: Next = { kind: "reconcile", dispatch_key: key, queries, after: AFTER_RECONCILE };
   state.status = "running";
   state.next = next;
@@ -328,12 +364,53 @@ function beginReconcile(state: GraphRunState, node: ReturnType<typeof ensureNode
   return emitReconcile(state, node, key, now);
 }
 
-function nextRecover(state: GraphRunState, node: ReturnType<typeof ensureNode>, key: string, action: RecoverAction, tool: string, args: Record<string, unknown>): Next {
+function nextRecover(state: GraphRunState, node: ReturnType<typeof ensureNode>, key: string, action: RecoverAction, tool: string, args: Record<string, unknown>, now: number): Next {
   node.expected_recover_action = action;
+  node.dispatch_state_at = now;
   const next: Next = { kind: "recover", dispatch_key: key, action, call: { tool, args }, after: AFTER_RECOVER };
   state.status = "running";
   state.next = next;
   return next;
+}
+
+function hasLiveWriter(specNode: GraphNode, node: NodeRunState): boolean {
+  if (!specNode.writes) return false;
+  if (node.writer_stopped) return false;
+  if (!node.dispatch_state || node.dispatch_state === "terminal") return false;
+  return true;
+}
+
+function clearlyStoppedStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  if (status === "archived") return false;
+  return status === "idle" || status === "stopped" || status === "offline";
+}
+
+function isVerifiedStopped(result: Record<string, unknown>, node: NodeRunState): boolean {
+  if (result.ok !== true) return false;
+  if (result.complete !== true) return false;
+  if (result.status === "archived") return false;
+  const workers = result.workers;
+  if (Array.isArray(workers)) {
+    const hit = workers.find((w) => {
+      if (!w || typeof w !== "object") return false;
+      const rec = w as { label?: string; worker_id?: string; status?: string };
+      return rec.label === node.worker_label || (node.worker_id !== undefined && rec.worker_id === node.worker_id);
+    }) as { status?: string } | undefined;
+    if (!hit) return true;
+    return clearlyStoppedStatus(hit.status);
+  }
+  if (result.stopped === true) return true;
+  return clearlyStoppedStatus(typeof result.status === "string" ? result.status : undefined);
+}
+
+function requestWriterStop(state: GraphRunState, node: NodeRunState, key: string, after: "retry" | "escalate" | "stop" | "fail", now: number, fingerprint?: string): Next {
+  node.pending_after_stop = after;
+  if (fingerprint !== undefined) node.pending_fail_fingerprint = fingerprint;
+  if (node.expected_recover_action === "archive" || node.expected_recover_action === "verify_stopped") {
+    return state.next ?? nextRecover(state, node, key, "archive", "archive_worker", { worker_id: node.worker_id }, now);
+  }
+  return nextRecover(state, node, key, "archive", "archive_worker", { worker_id: node.worker_id }, now);
 }
 
 function nextDecide(state: GraphRunState, gateId: string, question: string, options: string[], human: boolean, context?: unknown): Next {
@@ -369,7 +446,12 @@ function succeed(state: GraphRunState, spec: GraphSpec, nodeId: string, now: num
 }
 
 function failNode(state: GraphRunState, spec: GraphSpec, nodeId: string, now: number, fingerprint?: string): void {
+  const specNode = spec.nodes.find((n) => n.id === nodeId);
   const node = ensureNode(state, nodeId);
+  if (specNode && hasLiveWriter(specNode, node) && node.dispatch_key) {
+    requestWriterStop(state, node, node.dispatch_key, "fail", now, fingerprint);
+    return;
+  }
   node.status = "failed";
   node.dispatch_state = "terminal";
   node.ended_at = now;
@@ -407,7 +489,15 @@ function setupMode(outcome: Record<string, unknown> | undefined): string | undef
   return typeof mode === "string" ? mode : undefined;
 }
 
-function applySetup(state: GraphRunState, event: Extract<AdvanceEvent, { type: "report" }>, now: number): void {
+function hasInflightWriter(state: GraphRunState, spec: GraphSpec): boolean {
+  for (const [id, node] of Object.entries(state.nodes)) {
+    const sn = spec.nodes.find((n) => n.id === id);
+    if (sn && hasLiveWriter(sn, node)) return true;
+  }
+  return false;
+}
+
+function applySetup(state: GraphRunState, spec: GraphSpec, event: Extract<AdvanceEvent, { type: "report" }>, now: number): void {
   const code = setupOutcomeCode(event.outcome);
   if (code === "WORKER_CANNOT_NEST") {
     nextStop(state, "当前会话是 worker，不能当主控", ["换主控会话"]);
@@ -424,6 +514,9 @@ function applySetup(state: GraphRunState, event: Extract<AdvanceEvent, { type: "
   }
   const teamId = event.outcome && typeof event.outcome.team_id === "string" ? event.outcome.team_id : undefined;
   const session = event.session_id ?? state.sol_session_id;
+  if (state.team?.ready && hasInflightWriter(state, spec)) {
+    state.prior_teams = [...(state.prior_teams ?? []), state.team];
+  }
   state.team = { ready: true, mode, team_id: teamId, lead_session_id: session, checked_at: now };
   state.sol_session_id = session;
   state.status = "running";
@@ -451,6 +544,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
   }
   const err = event.dispatch_outcome?.errorCode;
   if (err === "NOT_FOUND") {
+    if (state.team?.ready) state.prior_teams = [...(state.prior_teams ?? []), state.team];
     state.team = { ready: false };
     node.dispatch_state = "planned";
     node.dispatch_state_at = now;
@@ -527,6 +621,26 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
     return;
   }
   const q = event.queries_result ?? {};
+  if (node.task) {
+    const run = q.getRun;
+    const msgs = q.readMessages;
+    const complete = (run?.ok === true && run.complete === true) || (msgs?.ok === true && msgs.complete === true);
+    if (!complete) {
+      if ((node.reconcile_rounds ?? 0) >= MAX_RECONCILE_ROUNDS) {
+        nextDecide(state, "human:reconcile", "插件任务对账仍不确定", ["retry_reconcile", "stop"], true, { rounds: node.reconcile_rounds });
+        return;
+      }
+      beginReconcile(state, node, key, now);
+      return;
+    }
+    if (run?.status === "running" || run?.status === "completed") {
+      node.dispatch_state = "running";
+      node.started_at = node.started_at ?? now;
+      return;
+    }
+    nextDecide(state, "human:reconcile", "插件任务回执缺失且查询无法确认", ["stop"], true);
+    return;
+  }
   const list = q.list_workers;
   if (!list || !list.ok || list.complete !== true) {
     if ((node.reconcile_rounds ?? 0) >= MAX_RECONCILE_ROUNDS) {
@@ -536,9 +650,17 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
     beginReconcile(state, node, key, now);
     return;
   }
+  if (node.team_id && list.team_id !== node.team_id) {
+    nextDecide(state, "human:team", "对账结果不属于原团队，不能证明旧 worker 不存在", ["stop"], true, { expected: node.team_id, got: list.team_id });
+    return;
+  }
   const label = node.worker_label;
   const hit = (list.workers ?? []).find((w) => w.label === label);
   if (!hit) {
+    if (node.team_id && state.team?.team_id && node.team_id !== state.team.team_id && !node.writer_stopped) {
+      nextDecide(state, "human:team", "主控或团队已变，旧写入者状态未知，不能重派", ["stop"], true);
+      return;
+    }
     node.dispatch_state = "planned";
     node.dispatch_state_at = now;
     return;
@@ -554,12 +676,19 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
   }
   node.worker_session_id = hit.worker_session_id ?? node.worker_session_id;
   const queue = q.get_worker_queue_status;
-  if (queue && !queue.ok) {
+  const workerBusy = hit.status === "running" || hit.status === "busy";
+  if (workerBusy || queue === undefined) {
+    node.dispatch_state = workerBusy ? "running" : "accepted";
+    if (workerBusy) node.started_at = node.started_at ?? now;
+    node.dispatch_state_at = now;
+    return;
+  }
+  if (!queue.ok) {
     beginReconcile(state, node, key, now);
     return;
   }
-  const pending = queue?.pending?.length ?? 0;
-  const consuming = queue?.consuming != null && queue.consuming !== false;
+  const pending = queue.pending?.length ?? 0;
+  const consuming = queue.consuming != null && queue.consuming !== false;
   if (pending > 0 || consuming) {
     node.dispatch_state = "accepted";
     node.dispatch_state_at = now;
@@ -567,18 +696,23 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
     return;
   }
   if (node.send_initial_attempted) {
-    node.dispatch_state = "reconciling";
+    nextDecide(state, "human:send_initial", "补投结果未知，不能再发", ["stop"], true);
     return;
   }
-  if (!node.started_at && node.dispatch_state !== "running") {
+  if (hit.status === "idle" && !node.started_at && node.dispatch_state !== "running") {
+    node.send_initial_attempted = true;
     nextRecover(state, node, key, "send_initial", "send_to_worker", {
       worker_id: node.worker_id,
       message: node.planned_params?.initial_task ?? "",
-    });
+    }, now);
     return;
   }
-  node.dispatch_state = "running";
-  node.started_at = node.started_at ?? now;
+  if (hit.status === "idle") {
+    node.dispatch_state = "accepted";
+    node.dispatch_state_at = now;
+    return;
+  }
+  nextDecide(state, "human:reconcile", "worker 状态无法确认，不补投", ["stop"], true, { status: hit.status });
 }
 
 function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<AdvanceEvent, { type: "report" }>, gates: GateHooks | undefined, now: number): void {
@@ -587,26 +721,23 @@ function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<Adva
   const found = findNodeByDispatchKey(state, key);
   if (!found) throw new KeelError("DISPATCH_KEY_UNKNOWN", `未知 dispatch_key ${key}`);
   const { id, node } = found;
-  if (node.expected_recover_action && event.action !== node.expected_recover_action) {
-    throw new KeelError("RECOVER_ACTION_MISMATCH", `回报的动作 ${event.action ?? "(缺)"} 不是 next 要求的 ${node.expected_recover_action}`);
+  if (!node.expected_recover_action || event.action !== node.expected_recover_action) {
+    throw new KeelError("RECOVER_ACTION_MISMATCH", `回报的动作 ${event.action ?? "(缺)"} 不是 next 要求的 ${node.expected_recover_action ?? "(无)"}`);
   }
   if (!isCurrentAttempt(node, key)) {
     state.late_reports.push({ dispatch_key: key, at: now });
     return;
   }
-  const action = event.action ?? node.expected_recover_action;
+  const action = node.expected_recover_action;
   const result = event.action_result ?? {};
   if (action === "send_initial") {
+    node.expected_recover_action = undefined;
     if (result.ok === false || result.errorCode) {
-      node.send_initial_attempted = true;
-      node.dispatch_state = "reconciling";
-      node.expected_recover_action = undefined;
+      nextDecide(state, "human:send_initial", "补投失败或结果未知，不能再发", ["stop"], true, { result });
       return;
     }
-    node.send_initial_attempted = true;
     node.dispatch_state = "running";
     node.started_at = now;
-    node.expected_recover_action = undefined;
     return;
   }
   if (action === "diagnose") {
@@ -616,7 +747,7 @@ function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<Adva
     const classified = classifyRetry(node.error_mode ?? (still ? "too_long" : "unknown"), node.consecutive_failures ?? 0);
     const decision = gates?.retry?.({ node: id, error_mode: node.error_mode, consecutive_failures: node.consecutive_failures ?? 0 }) ?? classified.decision;
     if (decision === "retry") {
-      nextRecover(state, node, key, "archive", "archive_worker", { worker_id: node.worker_id });
+      requestWriterStop(state, node, key, "retry", now);
       if (classified.note.includes("换模型")) node.error_mode = "tool_error";
       return;
     }
@@ -625,6 +756,11 @@ function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<Adva
       return;
     }
     if (decision === "stop") {
+      const specNodeStop = nodeById(spec, id);
+      if (hasLiveWriter(specNodeStop, node) && node.dispatch_key) {
+        requestWriterStop(state, node, key, "stop", now);
+        return;
+      }
       failNode(state, spec, id, now);
       state.cursor = "stopped";
       return;
@@ -633,29 +769,47 @@ function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<Adva
     return;
   }
   if (action === "archive") {
-    node.archived = result.ok !== false;
+    node.archived = result.ok === true;
     node.expected_recover_action = undefined;
-    nextRecover(state, node, key, "verify_stopped", "worker_status", { worker_id: node.worker_id });
+    nextRecover(state, node, key, "verify_stopped", "worker_status", { worker_id: node.worker_id }, now);
     return;
   }
   if (action === "verify_stopped") {
-    const stopped = result.stopped === true || result.status === "idle" || result.status === "archived" || result.running === false;
-    const confirmed = result.ok !== false && result.complete !== false && stopped;
+    const confirmed = isVerifiedStopped(result, node);
     node.expected_recover_action = undefined;
     if (!confirmed) {
       nextDecide(state, "human:verify_stopped", "归档后无法确认旧执行已停止，不能开新 attempt", ["retry_verify", "stop"], true, { result });
       return;
     }
+    node.writer_stopped = true;
+    const pending = node.pending_after_stop;
+    const fingerprint = node.pending_fail_fingerprint;
+    node.pending_after_stop = undefined;
+    node.pending_fail_fingerprint = undefined;
     node.dispatch_state = "terminal";
     node.status = "failed";
     node.ended_at = now;
     node.consecutive_failures = (node.consecutive_failures ?? 0) + 1;
+    const oldKey = node.dispatch_key;
     node.dispatch_key = undefined;
     node.worker_id = undefined;
     node.worker_session_id = undefined;
     node.queued_message_id = undefined;
     node.send_initial_attempted = false;
     node.archived = true;
+    if (pending === "stop") {
+      state.cursor = "stopped";
+      return;
+    }
+    if (pending === "escalate" || pending === "fail") {
+      failNode(state, spec, id, now, fingerprint ?? (pending === "escalate" ? "escalate" : undefined));
+      return;
+    }
+    if (pending === "retry") {
+      node.status = "failed";
+      return;
+    }
+    void oldKey;
     return;
   }
 }
@@ -695,25 +849,41 @@ function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceEvent, 
     else succeed(state, spec, id, now, on);
     return;
   }
-  if (event.phase === "setup") return applySetup(state, event, now);
+  if (event.phase === "setup") return applySetup(state, spec, event, now);
   if (event.phase === "accepted") return applyAccepted(state, spec, event, now);
   if (event.phase === "reconcile") return applyReconcile(state, event, now);
   if (event.phase === "recover") return applyRecover(state, spec, event, gates, now);
   if (event.phase === "final") return applyFinal(state, spec, event, now);
 }
 
-function applyTimeouts(state: GraphRunState, spec: GraphSpec, now: number): void {
+function applyTimeouts(state: GraphRunState, spec: GraphSpec, now: number, event: AdvanceEvent): void {
   for (const [id, node] of Object.entries(state.nodes)) {
     if (!node.dispatch_key || node.dispatch_state === "terminal" || node.dispatch_state === "reported") continue;
-    if (node.expected_recover_action) continue;
     const since = node.dispatch_state_at ?? node.started_at ?? 0;
     const specNode = spec.nodes.find((n) => n.id === id);
-    if (node.dispatch_state === "planned" && now - since >= PLANNED_TIMEOUT_MS) {
-      if (specNode?.kind === "plugin_task") {
-        node.dispatch_state = "reconciling";
-        node.dispatch_state_at = now;
+    if (node.expected_recover_action) {
+      if (event.type === "tick" && node.send_initial_attempted && node.expected_recover_action === "send_initial") {
+        nextDecide(state, "human:send_initial", "补投结果未知，不能再发", ["stop"], true);
         return;
       }
+      if (now - since >= RECOVER_TIMEOUT_MS) {
+        node.recover_timeouts = (node.recover_timeouts ?? 0) + 1;
+        const action = node.expected_recover_action;
+        node.expected_recover_action = undefined;
+        if (node.recover_timeouts >= MAX_RECOVER_TIMEOUTS) {
+          nextDecide(state, "human:recover", `恢复动作 ${action} 超时且未收到报告`, ["stop"], true, { action });
+          return;
+        }
+        nextDecide(state, "human:recover", `恢复动作 ${action} 超时，不重发`, ["stop"], true, { action });
+        return;
+      }
+      continue;
+    }
+    if (node.dispatch_state === "reconciling" && now - since >= RECONCILE_TIMEOUT_MS) {
+      beginReconcile(state, node, node.dispatch_key, now);
+      return;
+    }
+    if (node.dispatch_state === "planned" && now - since >= PLANNED_TIMEOUT_MS) {
       beginReconcile(state, node, node.dispatch_key, now);
       return;
     }
@@ -726,11 +896,10 @@ function applyTimeouts(state: GraphRunState, spec: GraphSpec, now: number): void
       const start = node.started_at ?? since;
       if (now - start >= box) {
         node.error_mode = "too_long";
-        nextRecover(state, node, node.dispatch_key, "diagnose", "worker_status", { worker_id: node.worker_id });
+        nextRecover(state, node, node.dispatch_key, "diagnose", "worker_status", { worker_id: node.worker_id }, now);
         return;
       }
     }
-
   }
 }
 
@@ -821,8 +990,20 @@ async function enter(
   }
 
   if (specNode.kind === "tool") {
+    if (id === "done" || id === "stopped") {
+      if (id === "done") return nextDone(state, "图到达 done");
+      return nextStop(state, "图到达 stopped");
+    }
+    if (node.attempts >= specNode.max_attempts) {
+      const to = edgeOn(spec, id, "fail");
+      if (to && to !== id) {
+        failNode(state, spec, id, now);
+        return enter(state, spec, opts, now, depth + 1);
+      }
+      return nextDecide(state, `human:${id}`, `工具节点 ${id} 已达 max_attempts`, ["stop"], true);
+    }
+    node.attempts += 1;
     node.status = "active";
-    if (id === "wait-ci" || id === "ci-rerun-once") return nextWait(state);
     return nextWait(state);
   }
 
@@ -871,10 +1052,13 @@ async function computeNext(
   if (state.next?.kind === "reconcile") return state.next;
 
   const active = inflight(state);
+  if (active && active.node.team_id && state.team?.team_id && active.node.team_id !== state.team.team_id && !active.node.writer_stopped) {
+    return nextDecide(state, "human:team", "主控或团队已变，旧写入者状态未知，不能重派", ["stop"], true);
+  }
   if (active && !state.team?.ready && active.node.planned_params) return nextSetup(state);
   if (active) {
     const { node } = active;
-    if (node.task && (node.dispatch_state === "reconciling" || node.dispatch_state === "planned")) {
+    if (node.task && node.dispatch_state === "planned") {
       const send = pluginSendNext(state, node);
       if (send) return send;
       if (node.task.phase === "create") {
@@ -947,7 +1131,7 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     const now = host.now();
     applyEvent(state, spec, event, opts.gates, now);
     if (state.status !== "stopped" && state.status !== "done" && state.status !== "waiting_human" && state.status !== "await_sol") {
-      applyTimeouts(state, spec, now);
+      applyTimeouts(state, spec, now, event);
     }
     const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models }, now);
     state.next = next;

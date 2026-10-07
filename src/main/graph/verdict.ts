@@ -120,6 +120,11 @@ function isRealTest(cmd: string): boolean {
   return testInvocation(cmd) !== null;
 }
 
+/** Public classify for SC.verify: UI runners (playwright test / cypress run) vs unit. */
+export function classifyVerifyCommand(cmd: string): TestKind | null {
+  return testInvocation(cmd);
+}
+
 /** Highest surface the passing commands and artifacts actually prove. */
 function evidenceSurface(report: NodeReport): EvidenceSurface {
   const ran: Ran = report.ran ?? [];

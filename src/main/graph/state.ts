@@ -136,6 +136,7 @@ export interface SuccessCriterion {
   id: string;
   text: string;
   verify?: string;
+  min_level?: "live-ui-verified" | "unit-test-verified" | "type-check-only";
 }
 
 export interface Verdict {

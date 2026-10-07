@@ -5,16 +5,16 @@ import { family } from "../../shared/fanout.ts";
 import { loadRuntimeConfig } from "../config.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
-import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult } from "../graph/done.ts";
+import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult, type ScRow } from "../graph/done.ts";
 import { GATES, type Evidence, type GateId } from "../graph/gates.ts";
 import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending } from "../graph/route-start.ts";
 import { classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
-import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type Verdict } from "../graph/state.ts";
+import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type SuccessCriterion, type Verdict } from "../graph/state.ts";
 import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
-import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
+import { buildVerdict, classifyVerifyCommand, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
 import { newRunId } from "../ledger.ts";
@@ -453,10 +453,39 @@ function openHumanGates(state: GraphRunState): number {
   return Object.values(state.nodes).filter((n) => n.status === "active" && n.planned_params?.role === undefined).length ? 0 : 0;
 }
 
-function scRows(state: GraphRunState): { id: string; hasEvidence: boolean }[] {
+function asScMinLevel(v: unknown): SuccessCriterion["min_level"] {
+  if (v === "live-ui-verified" || v === "unit-test-verified" || v === "type-check-only") return v;
+  return undefined;
+}
+
+export function normalizeSc(raw: unknown): SuccessCriterion[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SuccessCriterion[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.id !== "string" || !o.id || typeof o.text !== "string") continue;
+    const verify = typeof o.verify === "string" ? o.verify : undefined;
+    const named = asScMinLevel(o.min_level) ?? asScMinLevel(o.minLevel);
+    const inferred = !named && verify && classifyVerifyCommand(verify) === "ui" ? "live-ui-verified" as const : undefined;
+    out.push({
+      id: o.id,
+      text: o.text,
+      ...(verify ? { verify } : {}),
+      ...(named ?? inferred ? { min_level: named ?? inferred } : {}),
+    });
+  }
+  return out;
+}
+
+function scRows(state: GraphRunState): ScRow[] {
   const evidence: Record<string, boolean> = {};
   for (const n of Object.values(state.nodes)) Object.assign(evidence, n.last_report?.sc_evidence ?? {});
-  return (state.sc ?? []).map((s) => ({ id: s.id, hasEvidence: evidence[s.id] === true }));
+  return (state.sc ?? []).map((s) => ({
+    id: s.id,
+    hasEvidence: evidence[s.id] === true,
+    ...(s.min_level ? { minLevel: s.min_level } : {}),
+  }));
 }
 
 function lastCitation(state: GraphRunState): string | undefined {
@@ -719,7 +748,7 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     return pack(runId, undefined, picked.decide!);
   }
   const pr = typeof args.pr === "number" || typeof args.pr === "string" ? args.pr : undefined;
-  const sc = Array.isArray(args.sc) ? (args.sc as { id: string; text: string; verify?: string }[]) : [];
+  const sc = normalizeSc(args.sc);
   const scopeAllow = Array.isArray(args.scope) && args.scope.every((x) => typeof x === "string") ? (args.scope as string[]) : undefined;
   const routed = await resolveGraphTask(ctx, {
     goal,
@@ -901,7 +930,15 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         fresh: true,
       };
       base.report = snap;
-      if (nodeState?.planned_params?.role === "keel-verifier" && st?.worktree && headMatches && parsed.head_sha) {
+      const currentAttempt = Boolean(
+        nodeState
+        && nodeState.dispatch_key === key
+        && nodeState.status !== "succeeded"
+        && nodeState.status !== "failed"
+        && nodeState.status !== "skipped"
+        && nodeState.dispatch_state !== "terminal",
+      );
+      if (currentAttempt && nodeState?.planned_params?.role === "keel-verifier" && st?.worktree && headMatches && parsed.head_sha) {
         const route = nodeState.actual_route ?? {
           agent: nodeState.planned_params.agent as Harness,
           model: nodeState.planned_params.model,

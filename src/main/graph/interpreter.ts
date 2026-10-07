@@ -386,6 +386,7 @@ function nextWait(state: GraphRunState): Next {
           repo_dir: state.worktree ?? state.invocation_dir ?? "",
           ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
           sections: prOpenSections(state),
+          push: true,
           ...(state.pr_binding?.base_ref ? { base: state.pr_binding.base_ref } : {}),
         },
       },

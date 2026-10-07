@@ -39,6 +39,16 @@ const host: Host = {
       : [];
     return { ok: true, status: r.status, models };
   },
+  ...(cindy.tasks && typeof cindy.tasks.create === "function"
+    ? {
+        tasks: {
+          create: (args: Record<string, unknown>) => cindy.tasks.create(args),
+          send: (args: Record<string, unknown>) => cindy.tasks.send(args),
+          getRun: (args: Record<string, unknown>) => cindy.tasks.getRun(args),
+          readMessages: (args: Record<string, unknown>) => cindy.tasks.readMessages(args),
+        },
+      }
+    : {}),
 };
 
 const nudge = new NudgeController(

@@ -34,6 +34,10 @@ describe("plugin_task → cindy.tasks", () => {
       method: "getRun",
       args: { runId: "run-abc" },
     });
+    expect(toCindyTasksCall({ phase: "getRun", request_key: "create:k" })).toEqual({
+      method: "getRun",
+      args: { requestKey: "create:k" },
+    });
     expect(toCindyTasksCall({ phase: "readMessages", task_id: "t1" })).toEqual({
       method: "readMessages",
       args: { taskId: "t1", limit: 50 },

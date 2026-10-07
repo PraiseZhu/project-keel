@@ -69,6 +69,8 @@ export interface ReconcileQueries {
     ok: boolean;
     complete?: boolean;
     run_id?: string;
+    task_id?: string;
+    revision?: string;
     status?: string;
     errorCode?: string;
   };
@@ -658,6 +660,21 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
     const run = q.getRun;
     const msgs = q.readMessages;
     const complete = (run?.ok === true && run.complete === true) || (msgs?.ok === true && msgs.complete === true);
+    const recoveredId = typeof run?.task_id === "string" && run.task_id ? run.task_id : undefined;
+    const recoveredRun = typeof run?.run_id === "string" && run.run_id ? run.run_id : undefined;
+    if (node.task.phase === "create" && complete && recoveredId) {
+      const spec = PSTACK_GRAPHS[state.spec_id as keyof typeof PSTACK_GRAPHS];
+      const specNode = spec?.nodes.find((n) => n.id === found.id);
+      node.task.task_id = recoveredId;
+      if (run?.revision) node.task.revision = run.revision;
+      node.task.phase = "send";
+      node.task.send_request_key = `send:${key}`;
+      node.task.expected_revision = run?.revision ?? node.task.revision;
+      if (specNode) node.task.send_text = brief(state, specNode, key, node.attempts);
+      node.dispatch_state = "planned";
+      node.dispatch_state_at = now;
+      return;
+    }
     if (!complete) {
       if ((node.reconcile_rounds ?? 0) >= MAX_RECONCILE_ROUNDS) {
         nextDecide(state, "human:reconcile", "插件任务对账仍不确定", ["retry_reconcile", "stop"], true, { rounds: node.reconcile_rounds });
@@ -666,6 +683,7 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
       beginReconcile(state, node, key, now);
       return;
     }
+    if (recoveredRun) node.task.run_id = recoveredRun;
     if (run?.status === "running" || run?.status === "completed") {
       node.dispatch_state = "running";
       node.started_at = node.started_at ?? now;

@@ -7,7 +7,7 @@ import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
 import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult } from "../graph/done.ts";
 import { type Evidence, type GateId } from "../graph/gates.ts";
-import { classifyRetry, createRun, advance, type AdvanceEvent, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
+import { classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
@@ -21,6 +21,7 @@ import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
 import { withRun } from "../store/runs.ts";
 import { PSTACK_GRAPHS, TASK_TYPES, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
+import { invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
 import { keywordRoute } from "./pstack.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
@@ -474,6 +475,87 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
   host.broadcast({ type: "graph-delta", run_id: state.run_id, status: state.status, next: state.next, cursor: state.cursor, at: new Date(host.now()).toISOString() });
 }
 
+function rec(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+function pickId(...vals: unknown[]): string | undefined {
+  for (const v of vals) {
+    if (typeof v === "string" && v) return v;
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  }
+  return undefined;
+}
+
+function pluginReceipt(data: unknown): { task_id?: string; revision?: string; task_run_id?: string } {
+  const o = rec(data);
+  return {
+    ...(pickId(o.task_id, o.taskId) ? { task_id: pickId(o.task_id, o.taskId) } : {}),
+    ...(pickId(o.revision) ? { revision: pickId(o.revision) } : {}),
+    ...(pickId(o.task_run_id, o.taskRunId, o.run_id, o.runId) ? { task_run_id: pickId(o.task_run_id, o.taskRunId, o.run_id, o.runId) } : {}),
+  };
+}
+
+async function drainPluginOps(ctx: ToolContext, runId: string, out: AdvanceResult, opts: AdvanceOpts): Promise<AdvanceResult> {
+  const api = ctx.host.tasks;
+  if (!api) return out;
+  let current = out;
+  for (let i = 0; i < 8; i++) {
+    const n = current.next;
+    if (n.kind === "dispatch" && n.plugin_task) {
+      const input: PluginTaskInput = {
+        phase: n.plugin_task.phase,
+        request_key: n.plugin_task.request_key,
+        body: n.plugin_task.body,
+        task_id: n.plugin_task.task_id,
+        expected_revision: n.plugin_task.expected_revision,
+        text: n.plugin_task.text,
+      };
+      const invoked = await invokeCindyTasks(api, input);
+      const receipt = invoked.ok ? pluginReceipt(invoked.data) : {};
+      current = await advance(ctx.host, runId, {
+        type: "report",
+        phase: "accepted",
+        dispatch_key: n.dispatch_key,
+        ...receipt,
+      }, opts);
+      continue;
+    }
+    if (n.kind === "reconcile" && n.queries.every((q) => q.tool === "getRun" || q.tool === "readMessages")) {
+      const queries_result: ReconcileQueries = {};
+      for (const q of n.queries) {
+        if (q.tool === "getRun") {
+          const invoked = await invokeCindyTasks(api, { phase: "getRun", run_id: q.run_id, request_key: q.request_key, task_run_id: q.run_id });
+          const data = invoked.ok ? rec(invoked.data) : {};
+          const receipt = pluginReceipt(data);
+          queries_result.getRun = {
+            ok: invoked.ok,
+            complete: invoked.ok,
+            ...(receipt.task_run_id ? { run_id: receipt.task_run_id } : {}),
+            ...(receipt.task_id ? { task_id: receipt.task_id } : {}),
+            ...(receipt.revision ? { revision: receipt.revision } : {}),
+            ...(typeof data.status === "string" ? { status: data.status } : {}),
+            ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}),
+          };
+        }
+        if (q.tool === "readMessages") {
+          const invoked = await invokeCindyTasks(api, { phase: "readMessages", task_id: q.task_id });
+          queries_result.readMessages = { ok: invoked.ok, complete: invoked.ok, ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}) };
+        }
+      }
+      current = await advance(ctx.host, runId, {
+        type: "report",
+        phase: "reconcile",
+        dispatch_key: n.dispatch_key,
+        queries_result,
+      }, opts);
+      continue;
+    }
+    break;
+  }
+  return current;
+}
+
 async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promise<{ next: Next; state: GraphRunState }> {
   const cfg = await loadRuntimeConfig(ctx.host);
   const states = await loadGraphStates(ctx.host);
@@ -481,10 +563,12 @@ async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promi
   let profile;
   try { profile = st?.profile_id ? findProfile(cfg.manual, st.profile_id) : undefined; } catch { profile = undefined; }
   const graph = (st?.task_type ?? "bug-fix") as GraphKind;
-  const out = await advance(ctx.host, runId, event, {
+  const opts: AdvanceOpts = {
     gates: makeGates(ctx, runId, graph, profile?.direction_gate === "astra" ? "astra" : "lead"),
     doneCheck: (state) => runDoneCheck(ctx, state),
-  });
+  };
+  let out = await advance(ctx.host, runId, event, opts);
+  out = await drainPluginOps(ctx, runId, out, opts);
   await persistSideEffects(ctx.host, out.state);
   return out;
 }

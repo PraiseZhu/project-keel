@@ -54,7 +54,11 @@ export function toCindyTasksCall(input: PluginTaskInput): { method: PluginTaskPh
     };
   }
   if (input.phase === "getRun") {
-    return { method: "getRun", args: { runId: input.task_run_id ?? input.run_id } };
+    const args: Record<string, unknown> = {};
+    const runId = input.task_run_id ?? input.run_id;
+    if (runId) args.runId = runId;
+    if (input.request_key) args.requestKey = input.request_key;
+    return { method: "getRun", args };
   }
   return {
     method: "readMessages",

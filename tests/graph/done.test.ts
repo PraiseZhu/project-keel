@@ -63,6 +63,39 @@ describe("mapOrchLevel", () => {
     expect(pass("npx playwright test")).toBe("unit-test-verified");
   });
 
+  it("a runner name as an argument of another command is not a test run", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    for (const cmd of ["rg -n vitest package.json", "grep -r jest src", "cat node_modules/.bin/vitest", "echo npm test", "ls tests | grep pytest"]) {
+      expect(pass(cmd)).toBe("type-check-only");
+    }
+  });
+
+  it("an exit code that may hide a failing test proves nothing", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    for (const cmd of ["npm test | tail -20", "npm test || true", "npx vitest run; echo done", "bash -c \"$(echo npm test)\""]) {
+      expect(pass(cmd)).toBe("type-check-only");
+    }
+  });
+
+  it("recognises real invocations through wrappers and && chains", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    for (const cmd of [
+      "npx vitest run tests/a.test.ts",
+      "./node_modules/.bin/vitest run",
+      "CI=1 npm run test:unit",
+      "pnpm exec jest",
+      "python3 -m pytest -q",
+      "uv run pytest",
+      "go test ./...",
+      "cargo test",
+      "node --test tests",
+      "npm run build && npm test",
+      "yarn test",
+    ]) {
+      expect(pass(cmd), cmd).toBe("unit-test-verified");
+    }
+  });
+
   it("a failing test run is verifier-failed even with PASS and a claimed surface", () => {
     expect(mapOrchLevel({ verdict: "PASS", surface: "unit-test", ran: [{ cmd: "npx vitest run", exit_code: 1 }] })).toBe("verifier-failed");
     expect(

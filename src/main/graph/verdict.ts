@@ -54,22 +54,63 @@ export function levelMeets(actual: OrchLevel, required: OrchLevel = "unit-test-v
 
 type Ran = readonly { readonly cmd: string; readonly exit_code: number }[];
 
-const INFO_ONLY = /(^|\s)(--version|--help|--list|--listtests|--collect-only)(\s|$)/;
-const TEST_RUNNER = /\b(vitest|jest|pytest|mocha|playwright test|cypress run|cargo test|go test|node --test|(npm|pnpm|yarn|bun)( run)? test(:[\w-]+)?)\b/;
-const UI_RUNNER = /\b(playwright test|cypress run)\b/;
+const INFO_ONLY = new Set(["--version", "--help", "--list", "--listtests", "--collect-only", "--showconfig"]);
+const PM = new Set(["npm", "pnpm", "yarn", "bun"]);
+const RUNNERS = new Set(["vitest", "jest", "mocha", "pytest"]);
+
+type TestKind = "unit" | "ui";
+
+/** Classify one simple command by its executable, not by words anywhere in the text. */
+function classifySimple(tokens: string[]): TestKind | null {
+  let t = tokens.filter(Boolean);
+  while (t.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t[0]!)) t = t.slice(1);
+  if (t[0] === "env") return classifySimple(t.slice(1));
+  if (!t.length) return null;
+  const exe = t[0]!.split("/").pop()!.toLowerCase();
+  const rest = t.slice(1);
+  const args = rest.map((a) => a.toLowerCase());
+  if (args.some((a) => INFO_ONLY.has(a))) return null;
+  if (exe === "npx" || exe === "bunx") return classifySimple(rest.filter((a, i) => !(i === 0 && a.startsWith("-"))));
+  if (exe === "uv" && args[0] === "run") return classifySimple(rest.slice(1));
+  if (PM.has(exe) && (args[0] === "exec" || args[0] === "dlx")) return classifySimple(rest.slice(1));
+  if (RUNNERS.has(exe)) return "unit";
+  if ((exe === "python" || exe === "python3") && args[0] === "-m" && args[1] === "pytest") return "unit";
+  if ((exe === "go" || exe === "cargo") && args[0] === "test") return "unit";
+  if (exe === "node" && args[0] === "--test") return "unit";
+  if (exe === "playwright" && args[0] === "test") return "ui";
+  if (exe === "cypress" && args[0] === "run") return "ui";
+  if (PM.has(exe)) {
+    const script = args[0] === "run" ? args[1] : args[0];
+    if (script && /^test(:[\w-]+)?$/.test(script)) return "unit";
+  }
+  return null;
+}
+
+/**
+ * A command proves a test run only when a test runner is the executable of a segment and
+ * the exit code covers it: pipes, `||` and `;` let a failing test still exit 0, so they prove nothing.
+ */
+function testInvocation(cmd: string): TestKind | null {
+  if (/\|\||\||;|`|\$\(/.test(cmd)) return null;
+  let kind: TestKind | null = null;
+  for (const seg of cmd.split("&&")) {
+    const k = classifySimple(seg.trim().split(/\s+/));
+    if (k === "ui" || (k === "unit" && kind === null)) kind = k;
+  }
+  return kind;
+}
 
 function isRealTest(cmd: string): boolean {
-  const c = cmd.toLowerCase();
-  return TEST_RUNNER.test(c) && !INFO_ONLY.test(c) && !/\btsc\b/.test(c);
+  return testInvocation(cmd) !== null;
 }
 
 /** Highest surface the passing commands and artifacts actually prove. */
 function evidenceSurface(report: NodeReport): EvidenceSurface {
   const ran: Ran = report.ran ?? [];
   if (ran.some((r) => r.exit_code !== 0 && isRealTest(r.cmd))) return "type-check";
-  const tests = ran.filter((r) => r.exit_code === 0 && isRealTest(r.cmd)).map((r) => r.cmd.toLowerCase());
+  const tests = ran.filter((r) => r.exit_code === 0).map((r) => testInvocation(r.cmd)).filter((k): k is TestKind => k !== null);
   const ui = (report.ui_evidence ?? []).some((e) => e.trim().length > 0);
-  if (ui && (report.surface === "live-ui" || tests.some((c) => UI_RUNNER.test(c)))) return "live-ui";
+  if (ui && (report.surface === "live-ui" || tests.includes("ui"))) return "live-ui";
   if (tests.length) return "unit-test";
   return "type-check";
 }

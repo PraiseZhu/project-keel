@@ -351,7 +351,7 @@ export function waitOnFromFacts(facts: PrFacts): Extract<AdvanceEvent, { type: "
   return "ok";
 }
 
-async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Promise<DoneCheckResult> {
+export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Promise<DoneCheckResult> {
   if (state.task_type === "investigation") {
     const start = completeStartState(state.start_state);
     const current = await readContentFingerprint(ctx, state.repo ?? state.worktree ?? "");
@@ -378,7 +378,13 @@ async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Promise<Don
     facts = undefined;
   }
   const git = state.worktree ? await node<{ head?: string }>(ctx, "git/state", { repo_dir: state.worktree }).catch(() => ({ head: undefined })) : { head: undefined };
-  const head = git.head ?? facts?.snapshot.pr.headSha ?? state.verdict?.head ?? "";
+  // The PR head is what would be merged; a verified local commit that is not pushed does not count.
+  const prHead = facts?.snapshot.pr.headSha ?? undefined;
+  if (state.pr != null && (!prHead || (git.head && git.head !== prHead))) {
+    const missing = !prHead ? ["读不到 PR 当前 head"] : [`本地 head ${git.head!.slice(0, 7)} 与 PR head ${prHead.slice(0, 7)} 不一致（未推送或已被他人更新）`];
+    return { ok: false, next: { kind: "decide", gate_id: "done", question: `尚未完成：${missing.join("；")}`, options: ["wait", "stop"], context: { missing } } };
+  }
+  const head = prHead ?? git.head ?? "";
   const base = state.verdict?.base_sha ?? "";
   let patch: { patch_id: string | null; patch_ok: boolean } = { patch_id: null, patch_ok: false };
   if (state.worktree && base && head) {

@@ -10,6 +10,7 @@ import {
   advanceEvidenceForNode,
   authorFamiliesFromRoutes,
   mapChangeDoneFailure,
+  runDoneCheck,
   waitOnFromFacts,
 } from "../../src/main/tools/keel.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
@@ -312,5 +313,55 @@ describe("P1-5 write scope is not caller-supplied **", () => {
     });
     expect(outside).toMatchObject({ ok: false, errorCode: "SCOPE_VIOLATION" });
     expect(outside.message).toMatch(/docs\/a.md|写域/);
+  });
+});
+
+describe("done uses the PR head, not an unpushed local head", () => {
+  function hostWith(prHead: string, localHead: string) {
+    const snapshot = {
+      preset: "personal" as const,
+      rule: LANE_PRESETS.personal,
+      pr: { repo: "o/r", number: 1, url: "u", title: "t", state: "OPEN" as const, isDraft: false, headSha: prHead, headRef: "f", baseRef: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: null, labels: [] },
+      decision: { kind: "ready" as const },
+      checks: { failed: [], pending: [], passed: 1 },
+      unresolvedThreads: 0,
+      gate: { applies: false, required: [], passed: [], failing: [], pending: [], missing: [], ok: true, sources: [] },
+      verification: null,
+      mergeReadyLabel: false,
+      rendered: "x",
+    };
+    return fakeHost({
+      node: (method) => {
+        if (method === "pr/snapshot") return { ok: true, result: snapshot };
+        if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+        if (method === "git/state") return { ok: true, result: { head: localHead } };
+        if (method === "git/patch-id") return { ok: true, result: { ok: true, patch_id: "patch-1" } };
+        return { ok: false, message: method };
+      },
+    });
+  }
+  const state = {
+    run_id: "r1",
+    task_type: "bug-fix",
+    spec_id: "bug-fix",
+    repo: "o/r",
+    pr: 1,
+    worktree: "/repo/wt",
+    sc: [],
+    status: "running",
+    nodes: { implement: { attempts: 1, planned_params: { writes: true }, actual_route: { model: "gpt-6-luna" } } },
+    verdict: { head: verdict.head_sha, base_sha: verdict.base_sha, base_ref: "main", patch_id: "patch-1", level: "unit-test-verified", surface: "unit-test", by_route: verdict.by_route, by_family: "grok" },
+  } as unknown as GraphRunState;
+
+  it("a verified local commit that is not pushed is not done", async () => {
+    const h = hostWith("c".repeat(40), verdict.head_sha);
+    const r = await runDoneCheck(makeContext(h, "c1"), structuredClone(state));
+    expect(r.ok).toBe(false);
+  });
+
+  it("the same verified head locally and on the PR is done", async () => {
+    const h = hostWith(verdict.head_sha, verdict.head_sha);
+    const r = await runDoneCheck(makeContext(h, "c1"), structuredClone(state));
+    expect(r.ok).toBe(true);
   });
 });

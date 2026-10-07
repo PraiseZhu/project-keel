@@ -174,7 +174,8 @@ export type CardActionResult =
 
 interface BackgroundPending {
   lastAttemptAt: number | null;
-  lastSeenAt: number;
+  /** Send window (controller epoch) in which this run last asked to continue. */
+  lastSeenEpoch: number;
 }
 
 export class NudgeController {
@@ -185,6 +186,8 @@ export class NudgeController {
   private pluginLastSentAt: number | null = null;
   /** Runs waiting to background-continue; fairness uses oldest lastAttemptAt. */
   private readonly bgPending = new Map<string, BackgroundPending>();
+  /** Increments on every background send attempt; a send window is the time between two attempts. */
+  private epoch = 0;
 
   constructor(
     private readonly ports: NudgePorts,
@@ -195,17 +198,26 @@ export class NudgeController {
     return this.byRun.get(runId) ?? newNudgeState();
   }
 
-  private prunePending(now: number, intervalMs: number): void {
-    const ttl = 2 * intervalMs;
-    for (const [id, p] of this.bgPending) {
-      if (now - p.lastSeenAt > ttl) this.bgPending.delete(id);
-    }
+  /**
+   * The clock calls this once per pass with every run it still drives. A waiter that is no
+   * longer driven (deleted, finished elsewhere) leaves the queue here, so it can never hold
+   * a fairness turn it will not use.
+   */
+  syncActive(runIds: Iterable<string>): void {
+    const live = new Set(runIds);
+    for (const id of [...this.bgPending.keys()]) if (!live.has(id)) this.bgPending.delete(id);
   }
 
+  /**
+   * Fairness only waits for runs that asked in the current send window. A run that stopped
+   * asking (deleted, finished elsewhere) drops out by itself; repeated asks from one run
+   * never push a live waiter out, because nothing is evicted.
+   */
   private fairestPending(): string | undefined {
     let best: string | undefined;
     let bestT = Infinity;
     for (const [id, p] of this.bgPending) {
+      if (p.lastSeenEpoch !== this.epoch) continue;
       const t = p.lastAttemptAt ?? Number.NEGATIVE_INFINITY;
       if (t < bestT) {
         bestT = t;
@@ -268,8 +280,11 @@ export class NudgeController {
     }
 
     const state = this.byRun.get(run.run_id) ?? newNudgeState(Boolean(run.associated));
-    if (state.paused) return { action: "skip", reason: "paused" };
-    if (state.stalled) return { action: "skip", reason: "stalled" };
+    // A run that cannot send now must not hold the fairness turn of the current window.
+    if (state.paused || state.stalled) {
+      this.bgPending.delete(run.run_id);
+      return { action: "skip", reason: state.paused ? "paused" : "stalled" };
+    }
 
     if (state.versionAtLastNudge === run.version && state.consecutiveWithoutProgress >= maxStreak) {
       state.stalled = true;
@@ -285,6 +300,7 @@ export class NudgeController {
     this.byRun.set(run.run_id, state);
 
     if (useCard) {
+      this.bgPending.delete(run.run_id);
       // A card waits for the user's click: show it once per run version, not once per tick.
       if (state.cardShownVersion === run.version && state.cardShownAt !== null) {
         return { action: "skip", reason: "card_interval" };
@@ -297,10 +313,9 @@ export class NudgeController {
       return { action: "card", reason: this.config.cardOnly ? "card_only" : "unassociated", prompt, card };
     }
 
-    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenAt: now };
-    pending.lastSeenAt = now;
+    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenEpoch: this.epoch };
+    pending.lastSeenEpoch = this.epoch;
     this.bgPending.set(run.run_id, pending);
-    this.prunePending(now, intervalMs);
     if (this.pluginInFlight) return { action: "skip", reason: "busy" };
     if (this.pluginLastSentAt !== null && now - this.pluginLastSentAt < intervalMs) return { action: "skip", reason: "interval" };
     const turn = this.fairestPending();
@@ -308,6 +323,7 @@ export class NudgeController {
 
     this.pluginInFlight = true;
     this.pluginLastSentAt = now;
+    this.epoch += 1;
     pending.lastAttemptAt = now;
 
     try {

@@ -68,10 +68,12 @@ export function normalizeListWorkers(raw: unknown): NonNullable<ReconcileQueries
   const workers = Array.isArray(o.workers) ? o.workers as NonNullable<ReconcileQueries["list_workers"]>["workers"] : undefined;
   const count = typeof o.count === "number" ? o.count : undefined;
   const complete = ok && Array.isArray(workers) && (count === undefined || count === workers.length);
+  const team_id = str(o.team_id) ?? str(o.teamId);
   return {
     ok,
     complete,
     ...(workers ? { workers } : {}),
+    ...(team_id ? { team_id } : {}),
     ...(typeof o.errorCode === "string" ? { errorCode: o.errorCode } : {}),
   };
 }
@@ -506,7 +508,14 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     throw new KeelError("INVALID_INPUT", "phase 须为 setup | accepted | reconcile | recover | final。");
   }
   const base: Extract<AdvanceEvent, { type: "report" }> = { type: "report", phase: phase as Extract<AdvanceEvent, { type: "report" }> ["phase"] };
-  if (phase === "setup") base.outcome = args.outcome && typeof args.outcome === "object" ? args.outcome as Record<string, unknown> : args;
+  if (phase === "setup") {
+    const outcome = args.outcome && typeof args.outcome === "object" ? { ...(args.outcome as Record<string, unknown>) } : { ...args };
+    const team_id = str(outcome.team_id) ?? str(args.team_id);
+    const session = str(args.session_id) ?? str(outcome.session_id) ?? str(outcome.lead_session_id);
+    if (team_id) outcome.team_id = team_id;
+    if (session) base.session_id = session;
+    base.outcome = outcome;
+  }
   if (phase === "accepted") {
     const mapped = mapCreateWorkerReceipt(args);
     Object.assign(base, mapped);
@@ -517,12 +526,28 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     base.queries_result = {
       ...(raw.list_workers !== undefined ? { list_workers: normalizeListWorkers(raw.list_workers) } : {}),
       ...(raw.get_worker_queue_status && typeof raw.get_worker_queue_status === "object" ? { get_worker_queue_status: raw.get_worker_queue_status as ReconcileQueries["get_worker_queue_status"] } : {}),
+      ...(raw.getRun && typeof raw.getRun === "object" ? { getRun: raw.getRun as ReconcileQueries["getRun"] } : {}),
+      ...(raw.readMessages && typeof raw.readMessages === "object" ? { readMessages: raw.readMessages as ReconcileQueries["readMessages"] } : {}),
     };
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
   }
   if (phase === "recover") {
     if (typeof args.action === "string") base.action = args.action as "send_initial" | "diagnose" | "archive" | "verify_stopped";
-    if (args.action_result && typeof args.action_result === "object") base.action_result = args.action_result as Record<string, unknown>;
+    const ar = args.action_result && typeof args.action_result === "object" ? { ...(args.action_result as Record<string, unknown>) } : {};
+    if (ar.list_workers !== undefined) {
+      const list = normalizeListWorkers(ar.list_workers);
+      ar.list_workers = list;
+      if (list.workers) ar.workers = list.workers;
+      if (ar.ok === undefined) ar.ok = list.ok;
+      if (ar.complete === undefined && list.complete !== undefined) ar.complete = list.complete;
+    }
+    if (ar.worker_status && typeof ar.worker_status === "object") {
+      const ws = ar.worker_status as Record<string, unknown>;
+      if (ar.ok === undefined && typeof ws.ok === "boolean") ar.ok = ws.ok;
+      if (ar.complete === undefined && typeof ws.complete === "boolean") ar.complete = ws.complete;
+      if (ar.status === undefined && typeof ws.status === "string") ar.status = ws.status;
+    }
+    if (Object.keys(ar).length) base.action_result = ar;
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
   }
   if (phase === "final") {

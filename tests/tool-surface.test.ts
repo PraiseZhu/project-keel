@@ -6,6 +6,8 @@ import { GATES } from "../src/main/graph/gates.ts";
 import { advanceEvidenceForNode, mapCreateWorkerReceipt, normalizeListWorkers, verdictReportFromNode } from "../src/main/tools/keel.ts";
 import { parseNodeReport } from "../src/main/graph/report.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
+import { graphStatePath, withRun } from "../src/main/store/runs.ts";
+import type { GraphRunState } from "../src/main/graph/state.ts";
 import { readFileSync } from "node:fs";
 
 const manifest = JSON.parse(readFileSync("plugin/ghost.json", "utf8"));
@@ -32,6 +34,7 @@ describe("list_workers normalization", () => {
     expect(normalizeListWorkers({ ok: false, workers: [], count: 0 }).complete).toBe(false);
     expect(normalizeListWorkers({ ok: true, workers: "nope", count: 0 }).complete).toBe(false);
     expect(normalizeListWorkers({ ok: true, workers: [{ label: "a" }] }).complete).toBe(true);
+    expect(normalizeListWorkers({ ok: true, workers: [], count: 0, team_id: "t1" }).team_id).toBe("t1");
   });
   it("maps create_worker receipts from real Orca fields", () => {
     const r = mapCreateWorkerReceipt({
@@ -266,5 +269,111 @@ describe("ui_evidence passthrough", () => {
     const mappedBare = verdictReportFromNode(bare);
     expect(mappedBare).not.toHaveProperty("ui_evidence");
     expect(mappedBare).not.toHaveProperty("surface");
+  });
+});
+
+describe("reconcile / recover / setup wiring", () => {
+  it("keeps getRun and readMessages as-is on reconcile", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const runId = started.result.run_id as string;
+    const key = `${runId}:research:1`;
+    await withRun(h, runId, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.nodes.research = {
+        status: "active",
+        attempts: 1,
+        dispatch_key: key,
+        dispatch_state: "reconciling",
+        task: { create_request_key: "create:k", create_body: {}, phase: "create", task_id: "task-1" },
+      };
+      s.cursor = "research";
+    });
+    const r: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: runId,
+      phase: "reconcile",
+      dispatch_key: key,
+      queries_result: {
+        getRun: { ok: true, complete: true, run_id: "plugin-run", status: "running" },
+        readMessages: { ok: true, complete: true },
+      },
+    });
+    expect(r.ok).toBe(true);
+    const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
+    expect(st.nodes.research?.dispatch_state).toBe("running");
+  });
+  async function plantRecover(h: ReturnType<typeof fakeHost>, action: "verify_stopped" | "archive" = "verify_stopped") {
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const runId = started.result.run_id as string;
+    const key = `${runId}:implement:1`;
+    await withRun(h, runId, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.nodes.implement = {
+        status: "active",
+        attempts: 1,
+        dispatch_key: key,
+        dispatch_state: "running",
+        expected_recover_action: action,
+        worker_id: "w1",
+        worker_label: "keel-impl",
+      };
+    });
+    return { runId, key };
+  }
+  it("surfaces RECOVER_ACTION_MISMATCH when the recover action is wrong", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const { runId, key } = await plantRecover(h, "verify_stopped");
+    const mismatch: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: runId, phase: "recover", dispatch_key: key, action: "archive", action_result: { ok: true },
+    });
+    expect(mismatch).toMatchObject({ ok: false, errorCode: "RECOVER_ACTION_MISMATCH" });
+  });
+  it("verify_stopped does not treat archived as stopped, and accepts idle-or-absent workers", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const { runId, key } = await plantRecover(h);
+    const archived: any = await runTool(makeContext(h, "c3", profile), "keel_report", {
+      run_id: runId,
+      phase: "recover",
+      dispatch_key: key,
+      action: "verify_stopped",
+      action_result: { ok: true, complete: true, status: "archived", list_workers: { ok: true, complete: true, workers: [{ label: "keel-impl", worker_id: "w1", status: "archived" }] } },
+    });
+    expect(archived.ok).toBe(true);
+    expect(archived.result.next.kind).toBe("decide");
+    expect(archived.result.next.gate_id).toBe("human:verify_stopped");
+    const h2 = fakeHost({ node: nodeFake("change") });
+    const planted = await plantRecover(h2);
+    const stopped: any = await runTool(makeContext(h2, "c4", profile), "keel_report", {
+      run_id: planted.runId,
+      phase: "recover",
+      dispatch_key: planted.key,
+      action: "verify_stopped",
+      action_result: {
+        list_workers: { ok: true, complete: true, team_id: "t1", workers: [] },
+        worker_status: { ok: true, complete: true, status: "idle" },
+      },
+    });
+    expect(stopped.ok).toBe(true);
+    expect(stopped.result.next.kind).not.toBe("decide");
+  });
+  it("setup records team_id and lead session", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const runId = started.result.run_id as string;
+    const r: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: runId,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "team-9" },
+      session_id: "sol-sess",
+    });
+    expect(r.ok).toBe(true);
+    const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
+    expect(st.team).toMatchObject({ ready: true, team_id: "team-9", lead_session_id: "sol-sess" });
   });
 });

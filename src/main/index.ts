@@ -5,7 +5,7 @@ import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
 import type { CardActionEvent } from "./graph/cards.ts";
-import { NudgeController, type NudgeRun } from "./graph/nudge.ts";
+import { NudgeController, QUIET_STATUS, type NudgeRun } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
@@ -103,7 +103,7 @@ cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "did-turn-end" || msg.topic === "turn") {
     const reason = msg.endReason === "interrupted" || msg.endReason === "error" ? msg.endReason : "completed";
     const runs = await loadGraphStates(host);
-    const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => Boolean(r));
+    const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => r != null && !QUIET_STATUS.has(r.status));
     nudge.syncActive(mapped.map((r) => r.run_id));
     for (const nr of mapped) await nudge.onTurnEnd(nr, { endReason: reason });
   }

@@ -13,7 +13,7 @@ import { changedFiles } from "../../src/node/git/files.ts";
 import { contentFingerprint } from "../../src/node/git/fingerprint.ts";
 import { patchId } from "../../src/node/git/patch.ts";
 import { readNodeReportFile } from "../../src/node/git/report-file.ts";
-import { gitState } from "../../src/node/git/worktree.ts";
+import { gitState, originBaseSha } from "../../src/node/git/worktree.ts";
 import { LANE_PRESETS, EMPTY_PROFILE } from "../../src/shared/types.ts";
 import { fakeHost, typesafeAnswering, type FakeHost } from "../helpers/fakeHost.ts";
 
@@ -44,7 +44,6 @@ export interface World {
 }
 
 export interface LeadOpts {
-  bindPr?: boolean;
   /** null = 回执不带 team_id；缺省用 world.teamId。 */
   setupTeamId?: string | null;
   /** 回执没有 team_id 时，用 get_workspace_info.workflow_id 补。 */
@@ -185,6 +184,13 @@ export function makeE2eHost(world: World): FakeHost {
       }
       if (method === "pr/snapshot") return { ok: true, result: prSnapshot(world) };
       if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+      if (method === "pr/resolve") return { ok: true, result: { repo: PR_REPO, number: PR_NUMBER } };
+      if (method === "git/base-sha") {
+        return nodeOk(async () => {
+          const real = await originBaseSha({ repo_dir: String(params.repo_dir), base_ref: typeof params.base_ref === "string" ? params.base_ref : "main" });
+          return { ...real, base_sha: real.base_sha ?? world.baseSha, base_ref: real.base_ref || "main" };
+        });
+      }
       return { ok: false, message: `UNEXPECTED ${method}` };
     },
   });
@@ -198,15 +204,6 @@ export function readGraph(host: FakeHost, runId: string): GraphRunState {
   const raw = host.files.get(graphStatePath(runId));
   if (!raw) throw new Error(`missing graph-state for ${runId}`);
   return JSON.parse(raw) as GraphRunState;
-}
-
-/** Fixture-only: bug-fix / investigation never bind a PR via keel_* tools. */
-export function bindPr(host: FakeHost, runId: string, world: World): void {
-  const st = readGraph(host, runId);
-  st.pr = PR_NUMBER;
-  st.pr_binding = { repo: PR_REPO, number: PR_NUMBER, branch: "keel/e2e", head_sha: world.prHead };
-  st.verdict = { ...(st.verdict ?? {}), base_ref: "main", base_sha: world.baseSha };
-  host.files.set(graphStatePath(runId), JSON.stringify(st));
 }
 
 function localHead(world: World): string {
@@ -262,7 +259,6 @@ function nextOf(r: ToolResult): Next {
 
 export async function leadLoop(host: FakeHost, started: { run_id: string; next: Next; worktree?: string }, world: World, opts: LeadOpts = {}): Promise<LeadRun> {
   const runId = started.run_id;
-  if (opts.bindPr !== false) bindPr(host, runId, world);
   let next = started.next;
   const steps: Next[] = [];
   const models: { role: string; model: string }[] = [];

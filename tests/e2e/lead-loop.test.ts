@@ -2,12 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { family } from "../../src/shared/fanout.ts";
 import {
   SC,
-  bindPr,
   cleanupRepos,
   leadLoop,
   makeE2eHost,
   makeWorld,
-  readGraph,
   startRun,
   type LeadRun,
 } from "./helpers.ts";
@@ -140,7 +138,6 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
       scope: ["src/**"],
     });
     const run = await leadLoop(host, started, world, {
-      bindPr: false,
       setupTeamId: null,
       stopWhen: (next) => next.kind === "decide" && next.gate_id === "human:setup",
     });
@@ -187,19 +184,3 @@ describe("假主控 e2e：investigation", () => {
   });
 });
 
-describe("夹具：bindPr 只写测试态", () => {
-  it("keel_run 之后 graph-state 没有 pr，需夹具写入才能等 CI", async () => {
-    const world = makeWorld();
-    const host = makeE2eHost(world);
-    const started = await startRun(host, {
-      goal: "修登录报错",
-      repo_dir: world.repoDir,
-      lead: "codex",
-      scope: ["src/**"],
-    });
-    const before = readGraph(host, started.run_id);
-    expect(before.pr).toBeUndefined();
-    bindPr(host, started.run_id, world);
-    expect(readGraph(host, started.run_id).pr).toBe(42);
-  });
-});

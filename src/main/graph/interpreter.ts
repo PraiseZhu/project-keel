@@ -994,6 +994,8 @@ async function enter(
       if (id === "done") return nextDone(state, "图到达 done");
       return nextStop(state, "图到达 stopped");
     }
+    // Still waiting on this entry: ticks while waiting are not new attempts.
+    if (node.status === "active") return nextWait(state);
     if (node.attempts >= specNode.max_attempts) {
       const to = edgeOn(spec, id, "fail");
       if (to && to !== id) {

@@ -116,6 +116,41 @@ describe("F24-01 bounds without keel_report", () => {
   });
 });
 
+describe("tool node attempts count entries, not ticks", () => {
+  it("ticks while waiting on wait-ci / ci-rerun-once do not use up attempts", async () => {
+    const spec: GraphSpec = {
+      id: "bug-fix",
+      version: 1,
+      entry: "ci-rerun-once",
+      exits: ["done", "stopped"],
+      covers: ["bug-fix"],
+      adaptations: [],
+      nodes: [
+        { id: "ci-rerun-once", kind: "tool", writes: false, playbook_steps: ["babysit#7"], timebox_min: 1, max_attempts: 1 },
+        { id: "done", kind: "tool", writes: false, playbook_steps: [], timebox_min: 1, max_attempts: 1 },
+        { id: "stopped", kind: "tool", writes: false, playbook_steps: [], timebox_min: 1, max_attempts: 1 },
+      ],
+      edges: [
+        { from: "ci-rerun-once", to: "done", on: "ok" },
+        { from: "ci-rerun-once", to: "stopped", on: "fail" },
+      ],
+    };
+    const h = fakeHost();
+    await createRun(h, {
+      run_id: "run1", spec_id: spec.id, profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
+      entry: "ci-rerun-once", goal: "ci", now: h.now(),
+    });
+    expect((await advance(h, "run1", { type: "tick" }, { spec })).next.kind).toBe("wait");
+    for (let i = 0; i < 5; i++) {
+      h.clock.t += 60_000;
+      expect((await advance(h, "run1", { type: "tick" }, { spec })).next.kind).toBe("wait");
+    }
+    expect(readState(h).nodes["ci-rerun-once"]?.attempts).toBe(1);
+    const end = await advance(h, "run1", { type: "wait_done", on: "ok" }, { spec });
+    expect(end.next.kind).toBe("done");
+  });
+});
+
 describe("F24-02 send_initial at most once", () => {
   it("does not send_initial when the worker is running even if the queue is empty", async () => {
     const { h, spec, opts } = await boot();

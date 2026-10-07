@@ -13,7 +13,8 @@ export interface NodeReport {
   readonly branch?: string;
   readonly head_sha?: string;
   readonly files_changed: readonly string[];
-  readonly ran: readonly { readonly cmd: string; readonly exit_code: number }[];
+  /** tests_passed: test cases the runner's own summary reports as run and passed (unit evidence needs ≥1). */
+  readonly ran: readonly { readonly cmd: string; readonly exit_code: number; readonly tests_passed?: number }[];
   readonly findings?: readonly string[];
   readonly verdict?: (typeof NODE_VERDICTS)[number];
   readonly next_suggestions?: readonly string[];
@@ -81,7 +82,11 @@ export function parseNodeReport(text: string, expectedDispatchKey: string): Node
   if (o.verdict !== undefined && (typeof o.verdict !== "string" || !(NODE_VERDICTS as readonly string[]).includes(o.verdict))) {
     throw new KeelError("REPORT_INVALID", "verdict 必须是 PASS、PASS+NOTES 或 FAIL。");
   }
-  const ran = (o.ran as { cmd: string; exit_code: number }[]).map((x) => ({ cmd: x.cmd, exit_code: x.exit_code }));
+  const ran = (o.ran as { cmd: string; exit_code: number; tests_passed?: unknown }[]).map((x) => ({
+    cmd: x.cmd,
+    exit_code: x.exit_code,
+    ...(Number.isInteger(x.tests_passed) && (x.tests_passed as number) >= 0 ? { tests_passed: x.tests_passed as number } : {}),
+  }));
   return {
     dispatch_key: dispatchKey,
     status: o.status as NodeReportStatus,

@@ -97,6 +97,11 @@ export interface NodeRunState {
   archived?: boolean;
   late_reports?: number;
   last_report?: NodeReportSnap;
+  team_id?: string;
+  writer_stopped?: boolean;
+  pending_after_stop?: "retry" | "escalate" | "stop" | "fail";
+  pending_fail_fingerprint?: string;
+  recover_timeouts?: number;
 }
 
 export interface TeamState {
@@ -166,7 +171,12 @@ export type Next =
   | {
       kind: "reconcile";
       dispatch_key: string;
-      queries: Array<{ tool: "list_workers" } | { tool: "get_worker_queue_status"; worker_id: string }>;
+      queries: Array<
+        | { tool: "list_workers"; team_id?: string }
+        | { tool: "get_worker_queue_status"; worker_id: string }
+        | { tool: "getRun"; run_id?: string; request_key?: string }
+        | { tool: "readMessages"; task_id?: string }
+      >;
       after: string;
     }
   | {
@@ -193,6 +203,7 @@ export interface GraphRunState {
   lead_harness: Harness;
   task_type: TaskType;
   team?: TeamState;
+  prior_teams?: TeamState[];
   author_families: string[];
   start_state?: StartState;
   pr_binding?: PrBinding;
@@ -311,4 +322,7 @@ export function keelRoleFor(role: string | undefined): KeelRole {
 
 export const PLANNED_TIMEOUT_MS = 2 * 60 * 1000;
 export const ACCEPTED_TIMEOUT_MS = 10 * 60 * 1000;
+export const RECONCILE_TIMEOUT_MS = 2 * 60 * 1000;
+export const RECOVER_TIMEOUT_MS = 2 * 60 * 1000;
 export const MAX_RECONCILE_ROUNDS = 3;
+export const MAX_RECOVER_TIMEOUTS = 1;

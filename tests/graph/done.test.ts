@@ -77,6 +77,23 @@ describe("mapOrchLevel", () => {
     }
   });
 
+  it("quoted text and listing modes are not test runs", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    for (const cmd of [
+      'echo "nothing && npx vitest run"',
+      "echo 'x && npm test'",
+      "npx --no-install vitest list --no-cache tests/graph/done.test.ts",
+      "npx vitest bench",
+      "npx playwright test --list",
+      "go test -list . ./...",
+      "cargo test --no-run",
+      "npx mocha --dry-run",
+      "pytest --co -q",
+    ]) {
+      expect(pass(cmd), cmd).toBe("type-check-only");
+    }
+  });
+
   it("recognises real invocations through wrappers and && chains", () => {
     const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
     for (const cmd of [
@@ -91,6 +108,7 @@ describe("mapOrchLevel", () => {
       "node --test tests",
       "npm run build && npm test",
       "yarn test",
+      "npm exec -- vitest run",
     ]) {
       expect(pass(cmd), cmd).toBe("unit-test-verified");
     }

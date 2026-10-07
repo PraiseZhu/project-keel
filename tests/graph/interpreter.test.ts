@@ -102,7 +102,9 @@ describe("interpreter next kinds", () => {
     }, { spec: s2 });
     await advance(h2, "run3", { type: "report", phase: "final", dispatch_key: d.next.dispatch_key, inline_report: { status: "failed" } }, { spec: s2 });
     const dec = await advance(h2, "run3", { type: "tick" }, { spec: s2 });
-    expect(dec.next.kind).toBe("decide");
+    expect(dec.next.kind).toBe("recover");
+    if (dec.next.kind !== "recover") throw new Error("archive first");
+    expect(dec.next.action).toBe("archive");
 
     const { h: h3, spec: s3 } = await boot({ run_id: "run4" });
     const d3 = await setupOk(h3, s3, "run4");

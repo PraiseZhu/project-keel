@@ -1,28 +1,30 @@
 // Main-control protocol: keel_run / report / wait / gate / status.
 // Sol follows next; this module wires interpreter, gates, done facts, brief, index, and view.
 
+import { family } from "../../shared/fanout.ts";
 import { loadRuntimeConfig } from "../config.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
-import { isInvestigationDone } from "../graph/done.ts";
-import { GATES, type Evidence } from "../graph/gates.ts";
-import { classifyRetry, createRun, advance, type AdvanceEvent, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
-import { readPrFacts } from "../graph/pr-facts.ts";
+import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult } from "../graph/done.ts";
+import { type Evidence, type GateId } from "../graph/gates.ts";
+import { classifyRetry, createRun, advance, type AdvanceEvent, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
+import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
-import type { NodeReport as VerdictReport } from "../graph/verdict.ts";
-import { parseDispatchKey, type ErrorMode, type GraphRunState, type Next } from "../graph/state.ts";
+import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type Verdict } from "../graph/state.ts";
+import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
+import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
 import { newRunId } from "../ledger.ts";
 import { findProfile, resolveProfileForHarness } from "../manual/resolve.ts";
 import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
+import { withRun } from "../store/runs.ts";
 import { PSTACK_GRAPHS, TASK_TYPES, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
 import { keywordRoute } from "./pstack.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
-const gateAnswers = new Map<string, Map<string, string>>();
-const lastAdvanceEvidence = new Map<string, Evidence>();
+const CHANGE_TYPES = new Set(["bug-fix", "feature", "refactoring", "pr"]);
 
 export function isFailFirstNode(nodeId: string): boolean {
   const id = nodeId.toLowerCase();
@@ -168,38 +170,227 @@ function pickProfile(manual: ModelManual, args: Record<string, unknown>): { prof
   }
 }
 
-function makeGates(runId: string): GateHooks {
-  const lookup = (id: string) => gateAnswers.get(runId)?.get(id);
+function consumeGateAnswer(state: GraphRunState, gateId: string): string | undefined {
+  const attempt = state.nodes[gateId]?.attempts ?? 0;
+  const i = state.sol_decisions.findIndex((d) => d.gate_id === gateId && d.attempt === attempt);
+  if (i < 0) return undefined;
+  const answer = state.sol_decisions[i]!.answer;
+  state.sol_decisions.splice(i, 1);
+  return answer;
+}
+
+function previousReport(state: GraphRunState, gateId: string): { nodeId: string; report: NodeReportSnap } | undefined {
+  let best: { nodeId: string; at: number; report: NodeReportSnap } | undefined;
+  for (const [id, n] of Object.entries(state.nodes)) {
+    if (id === gateId || !n.last_report) continue;
+    const at = n.ended_at ?? 0;
+    if (!best || at >= best.at) best = { nodeId: id, at, report: n.last_report };
+  }
+  return best ? { nodeId: best.nodeId, report: best.report } : undefined;
+}
+
+function evidenceForGate(state: GraphRunState, gateId: string): Evidence {
+  const prev = previousReport(state, gateId);
+  if (!prev) return { evidence_present: false, new_evidence: false };
+  const ev = advanceEvidenceForNode({
+    nodeId: prev.nodeId,
+    ran: prev.report.ran,
+    ...(typeof prev.report.head_matches === "boolean" ? { head_matches: prev.report.head_matches } : {}),
+    new_report: prev.report.fresh === true,
+    new_commit: (prev.report.files_changed?.length ?? 0) > 0,
+  });
+  if (prev.report.fresh) prev.report.fresh = false;
+  return ev;
+}
+
+function stateGateStore(state: GraphRunState): GateStore {
+  if (!state.gate_cache) state.gate_cache = {};
+  const cache = state.gate_cache;
+  const key = (gateId: string, sha: string) => `${gateId}:${sha}`;
   return {
-    retry: (input) => {
-      const a = lookup(input.node);
-      if (a === "retry" || a === "escalate" || a === "stop" || a === "human") return a;
-      const v = GATES["G-retry"].deterministic({ consecutive_failures: input.consecutive_failures, error_mode: input.error_mode });
-      if (v === "retry" || v === "escalate" || v === "stop") return v;
-      return classifyRetry(input.error_mode as ErrorMode | undefined, input.consecutive_failures).decision;
-    },
-    advance: ({ node }) => {
-      const a = lookup(node);
-      if (a === "advance" || a === "stay") return a;
-      const ev = lastAdvanceEvidence.get(runId);
-      if (!ev) return undefined;
-      const v = GATES["G-advance"].deterministic(ev);
-      // Consumed: a later look without a new report/commit is not new_evidence.
-      lastAdvanceEvidence.set(runId, { ...ev, new_evidence: false });
-      if (v === "advance" || v === "stay") return v;
-      return undefined;
-    },
-    accept: ({ node }) => {
-      const a = lookup(node);
-      if (a === "adopt" || a === "revise" || a === "ask_user") return a;
-      return undefined;
-    },
-    arena: ({ node }) => {
-      const a = lookup(node);
-      if (a === "single" || a === "arena") return a;
-      return undefined;
+    get: async (_run, gateId, sha) => (cache[key(gateId, sha)] as GateDecision | undefined) ?? null,
+    set: async (_run, gateId, sha, decision) => {
+      cache[key(gateId, sha)] = decision;
     },
   };
+}
+
+function gateIdOf(nodeId: string): GateId {
+  if (nodeId.startsWith("g-retry")) return "G-retry";
+  if (nodeId.startsWith("g-accept")) return "G-accept";
+  if (nodeId.includes("arena")) return "G-arena";
+  return "G-advance";
+}
+
+function makeGates(ctx: ToolContext, runId: string, graph: GraphKind, direction_gate: "lead" | "astra"): GateHooks {
+  const decide = async (nodeId: string, state: GraphRunState, extra: Evidence = {}): Promise<string | undefined> => {
+    const human = consumeGateAnswer(state, nodeId);
+    if (human) return human;
+    const evidence = { ...evidenceForGate(state, nodeId), ...extra };
+    const decision = await runGate(ctx, gateIdOf(nodeId), evidence, {
+      run_id: runId,
+      store: stateGateStore(state),
+      graph,
+      direction_gate,
+    });
+    if (decision.routed === "lead" || decision.routed === "astra") return undefined;
+    return decision.value;
+  };
+  return {
+    retry: async (input) => {
+      const v = await decide(input.node, input.state, { consecutive_failures: input.consecutive_failures, error_mode: input.error_mode });
+      if (v === "retry" || v === "escalate" || v === "stop" || v === "human") return v;
+      return classifyRetry(input.error_mode as ErrorMode | undefined, input.consecutive_failures).decision;
+    },
+    advance: async ({ node, state }) => {
+      const v = await decide(node, state);
+      return v === "advance" || v === "stay" ? v : undefined;
+    },
+    accept: async ({ node, state }) => {
+      const v = await decide(node, state);
+      return v === "adopt" || v === "revise" || v === "ask_user" ? v : undefined;
+    },
+    arena: async ({ node, state }) => {
+      const v = await decide(node, state);
+      return v === "single" || v === "arena" ? v : undefined;
+    },
+  };
+}
+
+export function authorFamiliesFromRoutes(state: GraphRunState): string[] {
+  const out: string[] = [];
+  for (const n of Object.values(state.nodes)) {
+    if (n.planned_params?.writes !== true) continue;
+    const model = n.actual_route?.model;
+    if (!model) continue;
+    const fam = family(model);
+    if (fam && !out.includes(fam)) out.push(fam);
+  }
+  return out;
+}
+
+export function asGraphVerdict(state: GraphRunState): GraphVerdict | null {
+  const v = state.verdict;
+  if (!v?.patch_id || !v.base_sha || !(v.head || "") || !v.by_route?.model) return null;
+  const level = v.level;
+  if (level !== "live-ui-verified" && level !== "unit-test-verified" && level !== "type-check-only" && level !== "verifier-blocked" && level !== "verifier-failed") return null;
+  return {
+    repo: String(state.repo ?? ""),
+    pr: state.pr ?? 0,
+    base_ref: v.base_ref ?? "",
+    base_sha: v.base_sha,
+    head_sha: v.head ?? "",
+    patch_id: v.patch_id,
+    level,
+    surface: (v.surface as GraphVerdict["surface"]) ?? "type-check",
+    by_route: v.by_route,
+    by_family: v.by_family ?? "",
+  };
+}
+
+export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDoneResult): Next {
+  if (result.next === "verify-head") {
+    const id = rewindVerifier(state);
+    return { kind: "decide", gate_id: `human:${id}`, question: `验证未通过：${result.missing.join("；")}`, options: ["retry_verify", "stop"], context: { missing: result.missing, next: "verify-head" } };
+  }
+  if (result.next === "recheck-ci") {
+    const wait = PSTACK_GRAPHS[state.spec_id as GraphTaskType]?.nodes.find((n) => n.id === "wait-ci" || n.id === "ci-rerun-once");
+    if (wait) state.cursor = wait.id;
+    return { kind: "wait", call: { tool: "keel_wait", args: { run_id: state.run_id, max_minutes: 15 } } };
+  }
+  return { kind: "decide", gate_id: "done", question: `尚未完成：${result.missing.join("；")}`, options: ["wait", "stop"], context: { missing: result.missing } };
+}
+
+function rewindVerifier(state: GraphRunState): string {
+  const spec = PSTACK_GRAPHS[state.spec_id as GraphTaskType];
+  const id = spec?.nodes.find((n) => n.role === "verifier")?.id
+    ?? Object.entries(state.nodes).find(([, n]) => n.planned_params?.role === "keel-verifier")?.[0]
+    ?? "verify-same-surface";
+  const node = ensureNode(state, id);
+  node.attempts += 1;
+  node.status = "pending";
+  node.dispatch_state = undefined;
+  node.dispatch_key = undefined;
+  state.cursor = id;
+  return id;
+}
+
+function openHumanGates(state: GraphRunState): number {
+  if (state.status === "waiting_human") return 1;
+  return Object.values(state.nodes).filter((n) => n.status === "active" && n.planned_params?.role === undefined).length ? 0 : 0;
+}
+
+function scRows(state: GraphRunState): { id: string; hasEvidence: boolean }[] {
+  const evidence: Record<string, boolean> = {};
+  for (const n of Object.values(state.nodes)) Object.assign(evidence, n.last_report?.sc_evidence ?? {});
+  return (state.sc ?? []).map((s) => ({ id: s.id, hasEvidence: evidence[s.id] === true }));
+}
+
+function lastCitation(state: GraphRunState): string | undefined {
+  let best: { at: number; citation?: string } | undefined;
+  for (const n of Object.values(state.nodes)) {
+    if (!n.last_report) continue;
+    const at = n.ended_at ?? 0;
+    if (!best || at >= best.at) best = { at, citation: n.last_report.citation };
+  }
+  return best?.citation;
+}
+
+export function waitOnFromFacts(facts: PrFacts): Extract<AdvanceEvent, { type: "wait_done" }> ["on"] | "wait" {
+  const a = facts.nextAction;
+  if (a === "wait_for_ci" || a === "wait_for_review") return "wait";
+  if (a === "classify_ci_failure") return "ci_red";
+  if (a === "report_conflict_rebase_needed") return "conflict";
+  if (a === "triage_review_threads") return "threads";
+  if (a === "verify_current_head") return "head_moved";
+  return "ok";
+}
+
+async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Promise<DoneCheckResult> {
+  if (state.task_type === "investigation") {
+    const start = completeStartState(state.start_state);
+    const current = await readContentFingerprint(ctx, state.repo ?? state.worktree ?? "");
+    if (!start || !current) {
+      return { ok: false, next: { kind: "decide", gate_id: "done", question: "内容指纹未知，调查未完成。", options: ["retry", "stop"], context: { missing: ["指纹未知"] } } };
+    }
+    const citation = lastCitation(state);
+    const evalDone = isInvestigationDone({
+      reportComplete: Object.values(state.nodes).some((n) => n.last_report && (n.last_report.status === "done" || n.last_report.status === "partial")),
+      reportCitation: citation,
+      sc: scRows(state),
+      openHumanGates: state.status === "waiting_human" ? 1 : 0,
+      start,
+      current,
+    });
+    if (evalDone.done) return { ok: true, summary: "调查完成" };
+    return { ok: false, next: { kind: "decide", gate_id: "done", question: `调查未完成：${evalDone.missing.join("；")}`, options: ["retry", "stop"], context: { missing: evalDone.missing } } };
+  }
+  if (!CHANGE_TYPES.has(state.task_type)) return { ok: true };
+  let facts: PrFacts | undefined;
+  try {
+    if (state.pr != null) facts = await readPrFacts(ctx, { repo: state.repo, pr: state.pr, repo_dir: state.worktree });
+  } catch {
+    facts = undefined;
+  }
+  const git = state.worktree ? await node<{ head?: string }>(ctx, "git/state", { repo_dir: state.worktree }).catch(() => ({ head: undefined })) : { head: undefined };
+  const head = git.head ?? facts?.snapshot.pr.headSha ?? state.verdict?.head ?? "";
+  const base = state.verdict?.base_sha ?? "";
+  let patch: { patch_id: string | null; patch_ok: boolean } = { patch_id: null, patch_ok: false };
+  if (state.worktree && base && head) {
+    const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: state.worktree, base_sha: base, head_sha: head }).catch(() => ({ ok: false, patch_id: undefined }));
+    patch = { patch_id: pid.ok && pid.patch_id ? pid.patch_id : null, patch_ok: Boolean(pid.ok && pid.patch_id) };
+  }
+  const input: ChangeGraphDoneInput = {
+    pr_status: facts?.nextAction ?? "wait_for_ci",
+    author_families: authorFamiliesFromRoutes(state),
+    verdict: asGraphVerdict(state),
+    current: { head_sha: head, base_sha: base, patch_id: patch.patch_id, patch_ok: patch.patch_ok },
+    sc: scRows(state),
+    openHumanGates: openHumanGates(state),
+  };
+  const result = isChangeGraphDone(input);
+  if (result.done) return { ok: true, summary: "变更图完成" };
+  return { ok: false, next: mapChangeDoneFailure(state, result) };
 }
 
 async function persistSideEffects(host: Host, state: GraphRunState): Promise<void> {
@@ -219,7 +410,16 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
 }
 
 async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promise<{ next: Next; state: GraphRunState }> {
-  const out = await advance(ctx.host, runId, event, { gates: makeGates(runId) });
+  const cfg = await loadRuntimeConfig(ctx.host);
+  const states = await loadGraphStates(ctx.host);
+  const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+  let profile;
+  try { profile = st?.profile_id ? findProfile(cfg.manual, st.profile_id) : undefined; } catch { profile = undefined; }
+  const graph = (st?.task_type ?? "bug-fix") as GraphKind;
+  const out = await advance(ctx.host, runId, event, {
+    gates: makeGates(ctx, runId, graph, profile?.direction_gate === "astra" ? "astra" : "lead"),
+    doneCheck: (state) => runDoneCheck(ctx, state),
+  });
   await persistSideEffects(ctx.host, out.state);
   return out;
 }
@@ -274,6 +474,7 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     throw new KeelError("WORKTREE_FAILED", e instanceof Error ? e.message : String(e));
   }
   const sc = Array.isArray(args.sc) ? (args.sc as { id: string; text: string; verify?: string }[]) : [];
+  const scopeAllow = Array.isArray(args.scope) && args.scope.every((x) => typeof x === "string") ? (args.scope as string[]) : undefined;
   await createRun(ctx.host, {
     run_id: runId,
     spec_id: spec.id,
@@ -289,6 +490,7 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     start_state,
     astra_budget: cfg.limits.astraBudget,
     now: ctx.host.now(),
+    ...(scopeAllow ? { scopeAllow } : {}),
   });
   const { next, state } = await step(ctx, runId, { type: "tick" });
   return pack(runId, picked.profile, next, { spec_id: spec.id, worktree: state.worktree });
@@ -328,50 +530,96 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
     const worktree = st?.worktree;
     let parsed: NodeReport | undefined;
-    if (args.inline_report && typeof args.inline_report === "object") {
-      base.inline_report = args.inline_report as { status: "done" | "partial" | "blocked" | "failed"; summary?: string };
+    const inline = args.inline_report && typeof args.inline_report === "object" ? args.inline_report as Record<string, unknown> : undefined;
+    if (inline) {
+      base.inline_report = { status: (typeof inline.status === "string" ? inline.status : "done") as "done" | "partial" | "blocked" | "failed", summary: typeof inline.summary === "string" ? inline.summary : undefined };
+      parsed = {
+        dispatch_key: key,
+        status: (typeof inline.status === "string" ? inline.status : "done") as NodeReport["status"],
+        summary: typeof inline.summary === "string" ? inline.summary : "",
+        files_changed: Array.isArray(inline.files_changed) ? inline.files_changed.filter((x): x is string => typeof x === "string") : [],
+        ran: Array.isArray(inline.ran) ? inline.ran as NodeReport["ran"] : [],
+        ...(typeof inline.citation === "string" ? { citation: inline.citation } : {}),
+        ...(inline.sc_evidence && typeof inline.sc_evidence === "object" ? { sc_evidence: inline.sc_evidence as Record<string, boolean> } : {}),
+        ...(typeof inline.head_sha === "string" ? { head_sha: inline.head_sha } : {}),
+        ...(typeof inline.verdict === "string" ? { verdict: inline.verdict as NodeReport["verdict"] } : {}),
+        ...(Array.isArray(inline.ui_evidence) ? { ui_evidence: inline.ui_evidence.filter((x): x is string => typeof x === "string") } : {}),
+        ...(inline.surface === "live-ui" || inline.surface === "unit-test" || inline.surface === "type-check" || inline.surface === "blocked" ? { surface: inline.surface } : {}),
+      };
     } else {
       if (!worktree || !parsedKey) throw new KeelError("REPORT_INVALID", "final 需要 worktree 与 dispatch_key。");
       const file = await node<{ path: string; content: string }>(ctx, "report/read", { worktree, node: parsedKey.nodeId, attempt: parsedKey.attempt });
       parsed = parseNodeReport(file.content, key);
       base.report_path = file.path;
-      const nodeState = st.nodes?.[parsedKey.nodeId];
-      if (nodeState?.planned_params?.writes) {
-        const changed = await node<{ files: string[] }>(ctx, "git/changed-files", { repo_dir: worktree });
-        const allow = (args.scope as string[] | undefined) ?? ["**"];
-        const scope = checkScope(changed.files ?? [], allow);
-        if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
-      }
+    }
+    const nodeState = parsedKey ? st?.nodes?.[parsedKey.nodeId] : undefined;
+    if (nodeState?.planned_params?.writes) {
+      const allow = nodeState.planned_params.scopeAllow;
+      if (!allow?.length) throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
+      const changed = await node<{ files: string[] }>(ctx, "git/changed-files", { repo_dir: worktree ?? st?.worktree ?? "" });
+      const scope = checkScope(changed.files ?? [], allow);
+      if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
+    }
+    if (parsed) {
       let headMatches: boolean | undefined;
-      if (parsed.head_sha) {
+      if (parsed.head_sha && (worktree || st?.worktree)) {
         try {
-          const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: worktree });
-          if (typeof stGit.head === "string" && stGit.head) headMatches = stGit.head === parsed.head_sha;
-        } catch {
-          headMatches = undefined;
+          const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: worktree ?? st?.worktree ?? "" });
+          if (stGit.head) headMatches = stGit.head === parsed.head_sha;
+        } catch { /* unknown head is not a match */ }
+      }
+      const snap: NodeReportSnap = {
+        status: parsed.status,
+        summary: parsed.summary,
+        ran: parsed.ran,
+        files_changed: parsed.files_changed,
+        ...(parsed.head_sha ? { head_sha: parsed.head_sha } : {}),
+        ...(headMatches !== undefined ? { head_matches: headMatches } : {}),
+        ...(parsed.findings ? { findings: parsed.findings } : {}),
+        ...(parsed.citation ? { citation: parsed.citation } : {}),
+        ...(parsed.sc_evidence ? { sc_evidence: parsed.sc_evidence } : {}),
+        ...(parsed.verdict ? { verdict: parsed.verdict } : {}),
+        ...(parsed.ui_evidence ? { ui_evidence: parsed.ui_evidence } : {}),
+        ...(parsed.surface ? { surface: parsed.surface } : {}),
+        fresh: true,
+      };
+      base.report = snap;
+      if (nodeState?.planned_params?.role === "keel-verifier" && parsed.head_sha && st) {
+        const route = nodeState.actual_route ?? {
+          agent: nodeState.planned_params.agent as Harness,
+          model: nodeState.planned_params.model,
+          provider_id: nodeState.planned_params.provider_id,
+          effort: nodeState.planned_params.effort,
+        };
+        const baseSha = st.verdict?.base_sha ?? "";
+        if (baseSha && route.model && st.worktree) {
+          const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: parsed.head_sha }).catch(() => ({ ok: false, patch_id: undefined }));
+          if (pid.ok && pid.patch_id) {
+            const gv = buildVerdict({
+              repo: String(st.repo ?? ""),
+              pr: st.pr ?? 0,
+              base_ref: st.verdict?.base_ref ?? "",
+              base_sha: baseSha,
+              head_sha: parsed.head_sha,
+              patch_id: pid.patch_id,
+              report: verdictReportFromNode(parsed),
+              route,
+            });
+            const verdict: Verdict = {
+              head: gv.head_sha,
+              base_ref: gv.base_ref,
+              base_sha: gv.base_sha,
+              patch_id: gv.patch_id,
+              value: gv.level,
+              level: gv.level,
+              surface: gv.surface,
+              by_route: gv.by_route as Verdict["by_route"],
+              by_family: gv.by_family,
+            };
+            base.verdict = verdict;
+          }
         }
       }
-      lastAdvanceEvidence.set(runId, advanceEvidenceForNode({
-        nodeId: parsedKey.nodeId,
-        ran: parsed.ran,
-        ...(headMatches !== undefined ? { head_matches: headMatches } : {}),
-        new_report: true,
-        new_commit: parsed.files_changed.length > 0,
-      }));
-    }
-    if (st?.task_type === "investigation") {
-      const startFp = completeStartState(st.start_state);
-      const current = await readContentFingerprint(ctx, st.repo ?? worktree ?? "");
-      if (!startFp || !current) throw new KeelError("FINGERPRINT_UNKNOWN", "内容指纹未知，调查未完成。");
-      const evalDone = isInvestigationDone({
-        reportComplete: true,
-        reportCitation: typeof (args.inline_report as { summary?: string } | undefined)?.summary === "string" ? (args.inline_report as { summary: string }).summary : parsed?.summary ?? "inline",
-        sc: (st.sc ?? []).map((s) => ({ id: s.id, hasEvidence: true })),
-        openHumanGates: st.status === "waiting_human" ? 1 : 0,
-        start: startFp,
-        current,
-      });
-      if (!evalDone.done) throw new KeelError("SCOPE_VIOLATION", evalDone.missing.join("；"), { missing: evalDone.missing });
     }
   }
   const { next } = await step(ctx, runId, base);
@@ -385,19 +633,27 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   const deadline = start + maxMinutes * 60_000;
   const states = await loadGraphStates(ctx.host);
   const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+  let on: ReturnType<typeof waitOnFromFacts> = "wait";
   if (st?.pr !== undefined && st.pr !== null) {
     for (;;) {
       ctx.host.progress(ctx.callId);
       const facts = await readPrFacts(ctx, { repo: st.repo, pr: st.pr, repo_dir: st.worktree });
-      if (facts.nextAction !== "wait_for_ci") break;
-      if (ctx.host.now() + 15_000 > deadline) break;
+      on = waitOnFromFacts(facts);
+      if (on !== "wait") break;
+      if (ctx.host.now() + 15_000 > deadline) {
+        return { run_id: runId, next: st.next ?? { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId, max_minutes: maxMinutes } } }, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
+      }
       await ctx.host.sleep(15_000);
     }
   } else {
     ctx.host.progress(ctx.callId);
-    if (ctx.host.now() + 15_000 <= deadline) await ctx.host.sleep(15_000);
+    if (ctx.host.now() + 15_000 > deadline) {
+      return { run_id: runId, next: st?.next ?? { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId } } }, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
+    }
+    await ctx.host.sleep(15_000);
+    return { run_id: runId, next: st?.next ?? { kind: "wait" as const, call: { tool: "keel_wait" as const, args: { run_id: runId } } }, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
   }
-  const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
+  const { next } = await step(ctx, runId, { type: "wait_done", on });
   return { run_id: runId, next, waited_seconds: Math.round((ctx.host.now() - start) / 1000) };
 }
 
@@ -405,9 +661,13 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
   const runId = requireString(args, "run_id");
   const gateId = requireString(args, "gate_id");
   const answer = requireString(args, "answer");
-  let m = gateAnswers.get(runId);
-  if (!m) { m = new Map(); gateAnswers.set(runId, m); }
-  m.set(gateId, answer);
+  const reason = typeof args.reason === "string" ? args.reason : undefined;
+  await withRun(ctx.host, runId, (raw) => {
+    const s = raw as unknown as GraphRunState;
+    if (!Array.isArray(s.sol_decisions)) s.sol_decisions = [];
+    const attempt = s.nodes[gateId]?.attempts ?? 0;
+    s.sol_decisions.push({ gate_id: gateId, attempt, answer, ...(reason ? { reason } : {}) } satisfies GateAnswer);
+  });
   const { next } = await step(ctx, runId, { type: "tick" });
   return { run_id: runId, next, gate_id: gateId, answer };
 }

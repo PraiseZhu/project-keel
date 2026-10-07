@@ -33,6 +33,31 @@ export interface PlannedParams extends CreateWorkerParams {
   fallbacks: readonly Route[];
   /** Index into [primary, ...fallbacks] actually chosen when planning. */
   route_index: number;
+  /** Write-domain globs copied from the run / brief. Missing means no writes allowed. */
+  scopeAllow?: readonly string[];
+}
+
+export interface NodeReportSnap {
+  status?: string;
+  summary?: string;
+  ran?: readonly { cmd: string; exit_code: number }[];
+  head_sha?: string;
+  files_changed?: readonly string[];
+  findings?: readonly string[];
+  citation?: string;
+  sc_evidence?: Readonly<Record<string, boolean>>;
+  verdict?: string;
+  ui_evidence?: readonly string[];
+  surface?: string;
+  fresh?: boolean;
+  head_matches?: boolean;
+}
+
+export interface GateAnswer {
+  gate_id: string;
+  attempt: number;
+  answer: string;
+  reason?: string;
 }
 
 export interface PluginTaskRecord {
@@ -71,6 +96,7 @@ export interface NodeRunState {
   send_initial_attempted?: boolean;
   archived?: boolean;
   late_reports?: number;
+  last_report?: NodeReportSnap;
 }
 
 export interface TeamState {
@@ -182,8 +208,10 @@ export interface GraphRunState {
   next?: Next;
   fingerprints: Fingerprint[];
   jev: Array<{ gate: string; choice: string; confidence: number; routed: "act" | "sol" | "default"; at: number }>;
-  sol_decisions: unknown[];
+  sol_decisions: GateAnswer[];
   astra_calls: number;
+  scopeAllow?: readonly string[];
+  gate_cache?: Record<string, unknown>;
   budget: { astra_left: number };
   verdict?: Verdict;
   pushes: Array<{ head: string; local_at: number }>;
@@ -213,7 +241,9 @@ export interface InitRunOpts {
   facts?: GraphFacts;
   now?: number;
   author_families?: string[];
+  scopeAllow?: readonly string[];
 }
+
 
 export function initGraphState(opts: InitRunOpts): GraphRunState {
   return {
@@ -245,6 +275,7 @@ export function initGraphState(opts: InitRunOpts): GraphRunState {
     updated_at: opts.now ?? 0,
     facts: opts.facts,
     late_reports: [],
+    ...(opts.scopeAllow ? { scopeAllow: opts.scopeAllow } : {}),
   };
 }
 

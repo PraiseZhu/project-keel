@@ -23,6 +23,7 @@ import {
   type GraphRunState,
   type InitRunOpts,
   type Next,
+  type NodeReportSnap,
   type NodeRunState,
   type PlannedParams,
   type RecoverAction,
@@ -34,11 +35,13 @@ export type AcceptDecision = "adopt" | "revise" | "ask_user";
 export type ArenaDecision = "single" | "arena";
 
 export interface GateHooks {
-  retry?(input: { node: string; error_mode?: string; consecutive_failures: number }): RetryDecision | undefined;
-  advance?(input: { node: string }): AdvanceDecision | undefined;
-  accept?(input: { node: string }): AcceptDecision | undefined;
-  arena?(input: { node: string }): ArenaDecision | undefined;
+  retry?(input: { node: string; error_mode?: string; consecutive_failures: number; state: GraphRunState }): RetryDecision | undefined | Promise<RetryDecision | undefined>;
+  advance?(input: { node: string; state: GraphRunState }): AdvanceDecision | undefined | Promise<AdvanceDecision | undefined>;
+  accept?(input: { node: string; state: GraphRunState }): AcceptDecision | undefined | Promise<AcceptDecision | undefined>;
+  arena?(input: { node: string; state: GraphRunState }): ArenaDecision | undefined | Promise<ArenaDecision | undefined>;
 }
+
+export type DoneCheckResult = { ok: true; summary?: string } | { ok: false; next: Next };
 
 export interface ReconcileQueries {
   list_workers?: {
@@ -82,6 +85,8 @@ export type AdvanceEvent =
       action_result?: Record<string, unknown>;
       report_path?: string;
       inline_report?: { status: "done" | "partial" | "blocked" | "failed"; fingerprint?: string; summary?: string };
+      report?: NodeReportSnap;
+      verdict?: GraphRunState["verdict"];
       session_id?: string;
       task_id?: string;
       revision?: string;
@@ -93,6 +98,7 @@ export interface AdvanceOpts {
   gates?: GateHooks;
   config?: RuntimeConfig;
   models?: readonly AgentModel[];
+  doneCheck?: (state: GraphRunState) => DoneCheckResult | Promise<DoneCheckResult>;
 }
 
 export interface AdvanceResult {
@@ -196,7 +202,7 @@ function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, 
   return buildBrief(
     { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation" },
     { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.repo, pr: state.pr, taskType: state.task_type },
-    { attempt, dispatch_key: dispatchKeyValue },
+    { attempt, dispatch_key: dispatchKeyValue, ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}) },
   );
 }
 
@@ -235,6 +241,7 @@ async function planOrca(
     writes: specNode.writes,
     fallbacks: picked.fallbacks,
     route_index: picked.index,
+    ...(state.scopeAllow?.length ? { scopeAllow: state.scopeAllow } : {}),
   };
   node.status = "active";
   node.dispatch_key = key;
@@ -580,7 +587,7 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
   node.started_at = node.started_at ?? now;
 }
 
-function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<AdvanceEvent, { type: "report" }>, gates: GateHooks | undefined, now: number): void {
+async function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<AdvanceEvent, { type: "report" }>, gates: GateHooks | undefined, now: number): Promise<void> {
   const key = event.dispatch_key;
   if (!key) throw new KeelError("DISPATCH_KEY_UNKNOWN", "recover 缺少 dispatch_key");
   const found = findNodeByDispatchKey(state, key);
@@ -613,7 +620,8 @@ function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extract<Adva
     const still = result.status === "running" || result.running === true;
     const specNode = nodeById(spec, id);
     const classified = classifyRetry(node.error_mode ?? (still ? "too_long" : "unknown"), node.consecutive_failures ?? 0);
-    const decision = gates?.retry?.({ node: id, error_mode: node.error_mode, consecutive_failures: node.consecutive_failures ?? 0 }) ?? classified.decision;
+    const hooked = await Promise.resolve(gates?.retry?.({ node: id, error_mode: node.error_mode, consecutive_failures: node.consecutive_failures ?? 0, state }));
+    const decision = hooked ?? classified.decision;
     if (decision === "retry") {
       nextRecover(state, node, key, "archive", "archive_worker", { worker_id: node.worker_id });
       if (classified.note.includes("换模型")) node.error_mode = "tool_error";
@@ -680,12 +688,14 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   }
   node.dispatch_state = "reported";
   node.report_path = event.report_path;
-  const status = event.inline_report?.status ?? "done";
+  if (event.report) node.last_report = { ...event.report, fresh: true };
+  if (event.verdict) state.verdict = event.verdict;
+  const status = event.inline_report?.status ?? event.report?.status ?? "done";
   if (status === "done" || status === "partial") succeed(state, spec, id, now);
   else failNode(state, spec, id, now, event.inline_report?.fingerprint);
 }
 
-function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceEvent, gates: GateHooks | undefined, now: number): void {
+async function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceEvent, gates: GateHooks | undefined, now: number): Promise<void> {
   if (event.type === "tick") return;
   if (event.type === "wait_done") {
     const id = state.cursor;
@@ -766,7 +776,7 @@ function pluginSendNext(state: GraphRunState, node: NodeRunState): Next | undefi
 async function enter(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"] },
   now: number,
   depth = 0,
 ): Promise<Next> {
@@ -781,7 +791,22 @@ async function enter(
   const node = ensureNode(state, id);
 
   if (spec.exits.includes(id as "done" | "stopped") || specNode.id === "done" || specNode.id === "stopped") {
-    if (specNode.id === "done") return nextDone(state, "图到达 done");
+    if (specNode.id === "done") {
+      if (opts.doneCheck) {
+        const checked = await opts.doneCheck(state);
+        if (!checked.ok) {
+          state.next = checked.next;
+          if (checked.next.kind === "decide") {
+            state.status = checked.next.gate_id.startsWith("human:") ? "waiting_human" : "await_sol";
+          } else {
+            state.status = "running";
+          }
+          return checked.next;
+        }
+        return nextDone(state, checked.summary ?? "图到达 done");
+      }
+      return nextDone(state, "图到达 done");
+    }
     return nextStop(state, "图到达 stopped");
   }
 
@@ -796,10 +821,10 @@ async function enter(
   if (specNode.kind === "gate") {
     const gateName = id.startsWith("g-retry") ? "retry" : id.startsWith("g-accept") ? "accept" : id.includes("arena") ? "arena" : "advance";
     let value: string | undefined;
-    if (gateName === "retry") value = opts.gates?.retry?.({ node: id, consecutive_failures: node.consecutive_failures ?? 0 });
-    else if (gateName === "accept") value = opts.gates?.accept?.({ node: id });
-    else if (gateName === "arena") value = opts.gates?.arena?.({ node: id });
-    else value = opts.gates?.advance?.({ node: id });
+    if (gateName === "retry") value = await Promise.resolve(opts.gates?.retry?.({ node: id, consecutive_failures: node.consecutive_failures ?? 0, state }));
+    else if (gateName === "accept") value = await Promise.resolve(opts.gates?.accept?.({ node: id, state }));
+    else if (gateName === "arena") value = await Promise.resolve(opts.gates?.arena?.({ node: id, state }));
+    else value = await Promise.resolve(opts.gates?.advance?.({ node: id, state }));
     if (!value) {
       const options =
         gateName === "retry" ? ["retry", "escalate", "stop"] :
@@ -858,7 +883,7 @@ function clearStaleNext(state: GraphRunState): void {
 async function computeNext(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[] },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; doneCheck?: AdvanceOpts["doneCheck"] },
   now: number,
 ): Promise<Next> {
   clearStaleNext(state);
@@ -944,11 +969,11 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     const cfg = opts.config ?? (await loadRuntimeConfig(host));
     const models = opts.models ?? (await host.agentModels()).models;
     const now = host.now();
-    applyEvent(state, spec, event, opts.gates, now);
+    await applyEvent(state, spec, event, opts.gates, now);
     if (state.status !== "stopped" && state.status !== "done" && state.status !== "waiting_human" && state.status !== "await_sol") {
       applyTimeouts(state, spec, now);
     }
-    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models }, now);
+    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck }, now);
     state.next = next;
     state.updated_at = now;
     return { next, state };

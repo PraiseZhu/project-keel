@@ -21,6 +21,8 @@ export interface NodeReport {
   readonly ui_evidence?: readonly string[];
   /** Self-reported surface. Can only lower the mapped level. */
   readonly surface?: "live-ui" | "unit-test" | "type-check" | "blocked";
+  readonly citation?: string;
+  readonly sc_evidence?: Readonly<Record<string, boolean>>;
   readonly body?: string;
 }
 
@@ -93,6 +95,24 @@ export function parseNodeReport(text: string, expectedDispatchKey: string): Node
     ...(Array.isArray(o.next_suggestions) ? { next_suggestions: o.next_suggestions.filter((x): x is string => typeof x === "string") } : {}),
     ...(Array.isArray(o.ui_evidence) ? { ui_evidence: o.ui_evidence.filter((x): x is string => typeof x === "string") } : {}),
     ...(o.surface === "live-ui" || o.surface === "unit-test" || o.surface === "type-check" || o.surface === "blocked" ? { surface: o.surface } : {}),
+    ...(str(o.citation) ? { citation: str(o.citation) } : {}),
+    ...(scEvidenceOf(o.sc_evidence) ? { sc_evidence: scEvidenceOf(o.sc_evidence) } : {}),
     ...(parsed.body ? { body: parsed.body } : {}),
   };
+}
+
+function scEvidenceOf(raw: unknown): Record<string, boolean> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  if (Array.isArray(raw)) {
+    const out: Record<string, boolean> = {};
+    for (const row of raw) {
+      if (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string") {
+        out[(row as { id: string }).id] = (row as { hasEvidence?: unknown }).hasEvidence === true;
+      }
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+  const out: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) out[k] = v === true;
+  return Object.keys(out).length ? out : undefined;
 }

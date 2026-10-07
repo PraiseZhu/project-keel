@@ -160,6 +160,13 @@
           "branch": {
             "type": "string",
             "description": "pr 类型要检出的已有分支。"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "写域 glob，写入 planned_params / brief。缺省则写节点没有写域。"
           }
         },
         "required": [
@@ -218,12 +225,6 @@
           },
           "inline_report": {
             "type": "object"
-          },
-          "scope": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           }
         },
         "required": [

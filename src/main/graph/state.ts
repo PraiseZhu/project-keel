@@ -263,6 +263,8 @@ export interface GraphRunState {
   facts?: GraphFacts;
   late_reports: Array<{ dispatch_key: string; at: number }>;
   pending_astra_gate?: PendingAstraGate;
+  /** Entry G-route Astra choice, used to materialize the real unit graph. */
+  g_route_choice?: string;
 }
 
 export interface InitRunOpts {

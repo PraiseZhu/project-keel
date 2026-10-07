@@ -8,7 +8,7 @@ import { loadGraphStates } from "../graph-snapshot.ts";
 import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult, type ScRow } from "../graph/done.ts";
 import { GATES, type Evidence, type GateId } from "../graph/gates.ts";
 import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending } from "../graph/route-start.ts";
-import { classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
+import { ASTRA_CONSULT_ID, classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
@@ -266,6 +266,53 @@ async function materializeRun(
     ...(pending.scope ? { scopeAllow: pending.scope } : {}),
   });
   await ctx.host.fs({ op: "delete", root: "data", path: routePendingPath(runId) });
+  return step(ctx, runId, { type: "tick" });
+}
+
+async function startEntryAstraConsult(
+  ctx: ToolContext,
+  runId: string,
+  profile: Profile,
+  pending: RoutePending,
+  astra: { options: string[]; question: string; jev?: unknown },
+): Promise<{ next: Next; state: GraphRunState }> {
+  const cfg = await loadRuntimeConfig(ctx.host);
+  await ctx.host.fs({ op: "write", root: "data", path: routePendingPath(runId), content: JSON.stringify(pending) });
+  if ((cfg.limits.astraBudget ?? 0) <= 0) {
+    const next: Next = {
+      kind: "decide",
+      gate_id: "human:astra-budget",
+      question: "Astra 预算用完，改为人工裁决",
+      options: ["retry", "stop"],
+      context: { routed: "astra", jev: astra.jev },
+    };
+    await ctx.host.fs({
+      op: "write",
+      root: "data",
+      path: `runs/${runId}/graph-state.json`,
+      content: JSON.stringify({ run_id: runId, profile_id: profile.id, goal: pending.goal, status: "waiting_human", next }),
+    });
+    return { next, state: { run_id: runId } as GraphRunState };
+  }
+  const spec = PSTACK_GRAPHS["bug-fix"];
+  await createRun(ctx.host, {
+    run_id: runId,
+    spec_id: spec.id,
+    profile_id: profile.id,
+    lead_harness: profile.harness,
+    task_type: "bug-fix",
+    entry: ASTRA_CONSULT_ID,
+    goal: pending.goal,
+    sc: pending.sc,
+    invocation_dir: pending.repo_dir,
+    astra_budget: cfg.limits.astraBudget,
+    now: ctx.host.now(),
+    ...(pending.scope ? { scopeAllow: pending.scope } : {}),
+  });
+  await withRun(ctx.host, runId, (raw) => {
+    const s = raw as unknown as GraphRunState;
+    s.pending_astra_gate = { gate_id: "G-route", options: astra.options, question: astra.question };
+  });
   return step(ctx, runId, { type: "tick" });
 }
 
@@ -811,14 +858,8 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
   });
   if ("decide" in routed) {
     const pending: RoutePending = {
-      goal,
-      repo_dir: repoDir,
+      ...pendingBase(),
       profile_id: picked.profile.id,
-      sc,
-      ...(str(args.lead) ? { lead: str(args.lead) } : {}),
-      ...(scopeAllow ? { scope: scopeAllow } : {}),
-      ...(pr !== undefined ? { pr } : {}),
-      ...(str(args.branch) ? { branch: str(args.branch) } : {}),
     };
     await ctx.host.fs({ op: "write", root: "data", path: routePendingPath(runId), content: JSON.stringify(pending) });
     await ctx.host.fs({
@@ -834,6 +875,11 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
       }),
     });
     return pack(runId, picked.profile, routed.decide);
+  }
+  if ("astra" in routed) {
+    const pending: RoutePending = { ...pendingBase(), profile_id: picked.profile.id };
+    const out = await startEntryAstraConsult(ctx, runId, picked.profile, pending, routed.astra);
+    return pack(runId, picked.profile, out.next);
   }
   const out = await materializeRun(ctx, runId, picked.profile, {
     goal,
@@ -1030,6 +1076,23 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
   const { next, state } = await step(ctx, runId, base);
   if (pendingSink && finalKey && !(state.late_reports ?? []).some((r) => r.dispatch_key === finalKey)) {
     await recordVerifierVerdict(ctx, state, pendingSink);
+  }
+  if (state.g_route_choice && isGraphTaskType(state.g_route_choice)) {
+    const pendingFile = await ctx.host.fs({ op: "read", root: "data", path: routePendingPath(runId) });
+    if (pendingFile.ok && pendingFile.content) {
+      const pending = JSON.parse(pendingFile.content) as RoutePending;
+      const cfg = await loadRuntimeConfig(ctx.host);
+      const profile = findProfile(cfg.manual, pending.profile_id);
+      const calls = state.astra_calls;
+      const left = state.budget.astra_left;
+      const remat = await materializeRun(ctx, runId, profile, pending, state.g_route_choice);
+      await withRun(ctx.host, runId, (raw) => {
+        const s = raw as unknown as GraphRunState;
+        s.astra_calls = calls;
+        s.budget.astra_left = left;
+      });
+      return { run_id: runId, next: remat.next };
+    }
   }
   return { run_id: runId, next };
 }
@@ -1275,6 +1338,10 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
           content: JSON.stringify({ run_id: runId, profile_id: profile.id, goal: filled.goal, status: "await_sol", next: routed.decide }),
         });
         return { run_id: runId, next: routed.decide, gate_id: gateId, answer };
+      }
+      if ("astra" in routed) {
+        const out = await startEntryAstraConsult(ctx, runId, profile, filled, routed.astra);
+        return { run_id: runId, next: out.next, gate_id: gateId, answer };
       }
       const out = await materializeRun(ctx, runId, profile, filled, routed.taskType);
       return { run_id: runId, next: out.next, gate_id: gateId, answer };

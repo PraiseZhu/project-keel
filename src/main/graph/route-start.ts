@@ -30,7 +30,7 @@ export async function resolveGraphTask(ctx: ToolContext, input: {
   pr?: number | string;
   run_id: string;
   profile: Profile;
-}): Promise<{ taskType: GraphTaskType } | { decide: Next }> {
+}): Promise<{ taskType: GraphTaskType } | { decide: Next } | { astra: { options: string[]; question: string; jev?: unknown } }> {
   if (input.pr !== undefined && input.pr !== null && input.pr !== "") return { taskType: "pr" };
   if (input.playbook && isGraphTaskType(input.playbook)) return { taskType: input.playbook };
   const evidence: Evidence = { task: input.goal, goal: input.goal, ...(input.playbook ? { playbook: input.playbook } : {}) };
@@ -41,12 +41,16 @@ export async function resolveGraphTask(ctx: ToolContext, input: {
   if (decision.routed === "act" && isGraphTaskType(decision.value)) return { taskType: decision.value };
   const options = [...GATES["G-route"].options(evidence)];
   const question = GATES["G-route"].question(evidence).instructions;
+  const resolvedOptions = options.length ? options : [...keywordCandidates(input.goal)];
+  if (decision.routed === "astra") {
+    return { astra: { options: resolvedOptions, question, jev: decision.jev } };
+  }
   return {
     decide: {
       kind: "decide",
       gate_id: "G-route",
       question,
-      options: options.length ? options : [...keywordCandidates(input.goal)],
+      options: resolvedOptions,
       context: { routed: decision.routed, jev: decision.jev },
     },
   };

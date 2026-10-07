@@ -955,11 +955,15 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     node.status = "succeeded";
     node.dispatch_state = "terminal";
     node.ended_at = now;
+    state.pending_astra_gate = undefined;
+    if (gateId === "G-route") {
+      if (choice) state.g_route_choice = choice;
+      return;
+    }
     const to = choice ? edgeOn(spec, gateId, `gate:${choice}`) : undefined;
     state.cursor = to ?? gateId;
     const gateNode = ensureNode(state, gateId);
     gateNode.status = "succeeded";
-    state.pending_astra_gate = undefined;
     return;
   }
   if (status === "done" || status === "partial") succeed(state, spec, id, now);
@@ -1135,10 +1139,11 @@ async function enter(
   if (state.status === "stopped" && state.next?.kind === "stop") return state.next;
   if (state.status === "waiting_human" && state.next?.kind === "decide") return state.next;
   if (state.status === "await_sol" && state.next?.kind === "decide") return state.next;
+  if (state.g_route_choice) return nextWait(state);
 
   const id = state.cursor;
   if (id === ASTRA_CONSULT_ID) {
-    if (!state.team?.ready) return nextSetup(state);
+    if (!state.team?.ready && state.pending_astra_gate?.gate_id !== "G-route") return nextSetup(state);
     return planOrca(state, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
   const specNode = nodeById(spec, id);

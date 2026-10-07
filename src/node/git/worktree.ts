@@ -2,7 +2,7 @@
 // removes rows the audit classifies as `safe` (clean + merged), with plain `worktree remove`
 // and `branch -d` — never --force, never rm -rf. Ported in spirit from pstack worktree-audit.sh.
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { WorktreeAuditRow } from "../../shared/types.ts";
 import { ToolError, ghRaw, git, gitRaw } from "../env.ts";
@@ -27,11 +27,53 @@ export async function defaultBranch(root: string): Promise<string> {
   return r.code === 0 ? r.stdout.trim().replace(/^origin\//, "") : "main";
 }
 
-export async function createWorktree(p: { repo_dir: string; name: string; base_ref?: string; branch?: string }) {
+export async function findWorktreeForBranch(root: string, branch: string): Promise<string | null> {
+  const list = await git(["worktree", "list", "--porcelain"], { cwd: root });
+  let currentPath: string | null = null;
+  for (const line of list.split("\n")) {
+    if (line.startsWith("worktree ")) currentPath = line.slice(9);
+    else if (line.startsWith("branch refs/heads/") && currentPath && line.slice(18) === branch) return currentPath;
+    else if (line === "") currentPath = null;
+  }
+  return null;
+}
+
+export async function createWorktree(p: {
+  repo_dir: string;
+  name: string;
+  base_ref?: string;
+  branch?: string;
+  existing?: boolean;
+  head_repo?: string;
+}) {
   if (!NAME.test(p.name)) throw new ToolError("INVALID_INPUT", "name 只能含小写字母、数字、点、下划线和连字符。");
   const root = await repoRoot(p.repo_dir);
+  mkdirSync(join(root, ".worktrees"), { recursive: true });
   const path = join(root, ".worktrees", p.name);
   if (existsSync(path)) throw new ToolError("UNSAFE_TARGET", `${path} 已存在，换个名字。`);
+  if (p.existing) {
+    const branch = assertRef(p.branch ?? "");
+    const occupied = await findWorktreeForBranch(root, branch);
+    if (occupied) return { occupied, branch };
+    const remote = p.head_repo && !p.head_repo.startsWith("-") ? p.head_repo : "origin";
+    const local = await gitRaw(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: root });
+    let start = branch;
+    if (local.code !== 0) {
+      await gitRaw(["fetch", remote, branch, "--quiet"], { cwd: root, timeoutMs: 120_000 });
+      start = `${remote}/${branch}`;
+    }
+    const add = await gitRaw(["worktree", "add", path, start], { cwd: root, timeoutMs: 120_000 });
+    if (add.code !== 0) {
+      const msg = `${add.stderr} ${add.stdout}`;
+      const hit = msg.match(/already (?:used by worktree at|checked out at) ['"]?([^'"\n]+)/i);
+      if (hit || /already (used|checked out)/i.test(msg)) {
+        const again = await findWorktreeForBranch(root, branch);
+        return { occupied: again ?? hit?.[1]?.trim() ?? "unknown", branch };
+      }
+      throw new ToolError("WORKTREE_FAILED", (add.stderr || add.stdout).trim().slice(0, 300) || "检出已有分支失败。");
+    }
+    return { path, branch, existing: true };
+  }
   const branch = p.branch ?? `keel/${p.name}`;
   const base = assertRef(p.base_ref ?? `origin/${await defaultBranch(root)}`);
   await gitRaw(["fetch", "origin", "--quiet"], { cwd: root, timeoutMs: 120_000 });

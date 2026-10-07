@@ -78,7 +78,7 @@ describe("dispatch recovery interrupts", () => {
     expect(readState(h).cursor).toBe("worker");
   });
 
-  it("plugin task reconciling replays the original create request key and body", async () => {
+  it("plugin task missing receipts reconciling queries getRun instead of replaying create", async () => {
     const { h, spec, opts } = await boot();
     const d = await setupOk(h, spec);
     if (d.next.kind !== "dispatch") throw new Error("dispatch");
@@ -91,15 +91,14 @@ describe("dispatch recovery interrupts", () => {
     const create = await advance(h, "run1", { type: "tick" }, opts);
     expect(create.next.kind).toBe("dispatch");
     if (create.next.kind !== "dispatch") throw new Error("plugin");
-    const req = create.next.plugin_task?.request_key;
-    const body = create.next.plugin_task?.body;
+    const key = create.next.dispatch_key;
     h.clock.t += PLANNED_TIMEOUT_MS;
-    const replay = await advance(h, "run1", { type: "tick" }, opts);
-    expect(replay.next.kind).toBe("dispatch");
-    if (replay.next.kind !== "dispatch") throw new Error("replay");
-    expect(replay.next.plugin_task?.request_key).toBe(req);
-    expect(replay.next.plugin_task?.body).toEqual(body);
-    expect(replay.next.dispatch_key).toBe(create.next.dispatch_key);
+    const rec = await advance(h, "run1", { type: "tick" }, opts);
+    expect(rec.next.kind).toBe("reconcile");
+    if (rec.next.kind !== "reconcile") throw new Error("reconcile");
+    expect(rec.next.dispatch_key).toBe(key);
+    expect(rec.next.queries.some((q) => q.tool === "getRun")).toBe(true);
+    expect(rec.next.queries.some((q) => q.tool === "list_workers")).toBe(false);
   });
 
   it("lost send_initial receipt does not send the same text again", async () => {
@@ -109,24 +108,23 @@ describe("dispatch recovery interrupts", () => {
     const key = d.next.dispatch_key;
     h.clock.t += PLANNED_TIMEOUT_MS;
     await advance(h, "run1", { type: "tick" }, opts);
-    await advance(h, "run1", {
+    const send = await advance(h, "run1", {
       type: "report",
       phase: "reconcile",
       dispatch_key: key,
       queries_result: {
-        list_workers: { ok: true, complete: true, workers: [{ label: readState(h).nodes.worker!.worker_label!, worker_id: "w1", worker_session_id: "ws1" }] },
+        list_workers: { ok: true, complete: true, team_id: "team-1", workers: [{ label: readState(h).nodes.worker!.worker_label!, worker_id: "w1", worker_session_id: "ws1", status: "idle" }] },
         get_worker_queue_status: { ok: true, pending: [], consuming: null },
       },
     }, opts);
-    const send = await advance(h, "run1", { type: "tick" }, opts);
     expect(send.next.kind).toBe("recover");
     if (send.next.kind !== "recover") throw new Error("send_initial");
     expect(send.next.action).toBe("send_initial");
+    expect(readState(h).nodes.worker?.send_initial_attempted).toBe(true);
     const lost = await advance(h, "run1", {
       type: "report", phase: "recover", dispatch_key: key, action: "send_initial", action_result: { ok: false, errorCode: "TIMEOUT" },
     }, opts);
     expect(lost.next.kind).not.toBe("recover");
-    expect(readState(h).nodes.worker?.send_initial_attempted).toBe(true);
     const again = await advance(h, "run1", { type: "tick" }, opts);
     if (again.next.kind === "recover") expect(again.next.action).not.toBe("send_initial");
   });

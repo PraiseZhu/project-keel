@@ -331,12 +331,17 @@ describe("done uses the PR head, not an unpushed local head", () => {
       rendered: "x",
     };
     return fakeHost({
-      node: (method) => {
+      node: (method, params: any) => {
         if (method === "pr/snapshot") return { ok: true, result: snapshot };
         if (method === "pr/threads") return { ok: true, result: { threads: [] } };
         if (method === "git/state") return { ok: true, result: { head: localHead } };
         if (method === "git/base-sha") return { ok: true, result: { base_ref: "main", base_sha: verdict.base_sha } };
         if (method === "git/patch-id") return { ok: true, result: { ok: true, patch_id: "patch-1" } };
+        if (method === "orch/run") {
+          if (params.op === "init") return { ok: true, result: { store: params.store } };
+          if (params.op === "ledger.check") return { ok: true, result: { pr: "1", sha: prHead, verdict: "unit-test-verified" } };
+          return { ok: true, result: {} };
+        }
         return { ok: false, message: method };
       },
     });

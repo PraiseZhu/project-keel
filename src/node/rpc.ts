@@ -57,6 +57,16 @@ const methods: Record<string, Method> = {
   "worktree/audit": (p) => audit(p.repo_dir),
   "worktree/prune": (p) => prune(p.repo_dir, p.paths ?? []),
   "routes/read": async (p, profile) => roles(profile.routingPath, p.lead_agent ?? null),
+  "gh/commit-status": async (p) => {
+    const repo = String(p.repo ?? "");
+    const sha = String(p.sha ?? "");
+    const context = String(p.context ?? "");
+    const state = p.state === "failure" || p.state === "pending" || p.state === "error" ? p.state : "success";
+    const description = String(p.description ?? "").slice(0, 140);
+    if (!repo || !sha || !context) throw new ToolError("INVALID_INPUT", "gh/commit-status 需要 repo、sha、context。");
+    await gh(["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", `context=${context}`, "-f", `description=${description}`]);
+    return { ok: true, repo, sha, context, state };
+  },
 };
 
 export function register(name: string, fn: Method): void {

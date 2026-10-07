@@ -174,7 +174,8 @@ export type CardActionResult =
 
 interface BackgroundPending {
   lastAttemptAt: number | null;
-  lastSeenAt: number;
+  /** Value of the controller's call counter when this run last asked to continue. */
+  lastSeenSeq: number;
 }
 
 export class NudgeController {
@@ -185,6 +186,8 @@ export class NudgeController {
   private pluginLastSentAt: number | null = null;
   /** Runs waiting to background-continue; fairness uses oldest lastAttemptAt. */
   private readonly bgPending = new Map<string, BackgroundPending>();
+  /** Counts background-continue requests across all runs; staleness is measured in calls, not time. */
+  private seq = 0;
 
   constructor(
     private readonly ports: NudgePorts,
@@ -195,10 +198,15 @@ export class NudgeController {
     return this.byRun.get(runId) ?? newNudgeState();
   }
 
-  private prunePending(now: number, intervalMs: number): void {
-    const ttl = 2 * intervalMs;
+  /**
+   * Drop waiters that stopped asking. Every live run asks once per round, so a waiter missing
+   * for more than two full rounds of the other waiters has stopped ticking. Counting calls
+   * instead of time keeps a slow or uneven clock from evicting a live waiter.
+   */
+  private prunePending(): void {
+    const limit = 2 * this.bgPending.size + 2;
     for (const [id, p] of this.bgPending) {
-      if (now - p.lastSeenAt > ttl) this.bgPending.delete(id);
+      if (this.seq - p.lastSeenSeq > limit) this.bgPending.delete(id);
     }
   }
 
@@ -297,10 +305,11 @@ export class NudgeController {
       return { action: "card", reason: this.config.cardOnly ? "card_only" : "unassociated", prompt, card };
     }
 
-    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenAt: now };
-    pending.lastSeenAt = now;
+    this.seq += 1;
+    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenSeq: this.seq };
+    pending.lastSeenSeq = this.seq;
     this.bgPending.set(run.run_id, pending);
-    this.prunePending(now, intervalMs);
+    this.prunePending();
     if (this.pluginInFlight) return { action: "skip", reason: "busy" };
     if (this.pluginLastSentAt !== null && now - this.pluginLastSentAt < intervalMs) return { action: "skip", reason: "interval" };
     const turn = this.fairestPending();

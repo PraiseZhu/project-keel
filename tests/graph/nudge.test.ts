@@ -354,7 +354,7 @@ describe("card interval", () => {
 });
 
 describe("pending expiry", () => {
-  it("lets B continue after A stops being ticked past 2x interval", async () => {
+  it("lets B continue after A stops asking, within a bounded number of B's own calls", async () => {
     const clock = { t: t0 + IDLE_MS };
     const { p } = ports();
     const c = new NudgeController(p, { now: () => clock.t });
@@ -363,9 +363,32 @@ describe("pending expiry", () => {
     expect((await c.maybeNudge(a)).action).toBe("continue");
     clock.t += NUDGE_INTERVAL_MS;
     expect((await c.maybeNudge(b)).action).toBe("continue");
-    clock.t += 2 * NUDGE_INTERVAL_MS + 1;
-    const out = await c.maybeNudge(b);
-    expect(out.action).toBe("continue");
-    expect(p.log.continue.filter((req) => req.sessionId === "sess-b")).toHaveLength(2);
+    // A never asks again; B keeps asking once per interval.
+    let sent = 0;
+    for (let i = 0; i < 8 && sent === 0; i++) {
+      clock.t += NUDGE_INTERVAL_MS;
+      if ((await c.maybeNudge(b)).action === "continue") sent += 1;
+    }
+    expect(sent).toBe(1);
+  });
+
+  it("a live waiter is not evicted by a slow clock: A refused, B served (30s rounds)", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p } = ports();
+    const calls: string[] = [];
+    p.continueSession = async (req) => {
+      calls.push(String(req.sessionId));
+      return req.sessionId === "sess-a" ? { ok: false, errorCode: "SESSION_UNAVAILABLE" } : { ok: true, status: "queued" };
+    };
+    const c = new NudgeController(p, { now: () => clock.t });
+    const a = run({ run_id: "run-a", associated: true, session_id: "sess-a" });
+    const b = run({ run_id: "run-b", associated: true, session_id: "sess-b" });
+    for (let round = 0; round < 8; round++) {
+      await c.maybeNudge(a);
+      await c.maybeNudge(b);
+      clock.t += 30_000;
+    }
+    expect(calls.filter((x) => x === "sess-b").length).toBeGreaterThanOrEqual(3);
+    expect(calls.filter((x) => x === "sess-a").length).toBeGreaterThanOrEqual(3);
   });
 });

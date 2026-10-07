@@ -174,14 +174,14 @@ describe("F24-02 send_initial at most once", () => {
     expect(readState(h).nodes.worker?.send_initial_attempted).not.toBe(true);
   });
 
-  it("does not ask send_initial again after the recover report is lost across restart", async () => {
+  it("idle with an empty queue never resends: it may be finished, so a human checks", async () => {
     const { h, spec, opts } = await boot();
     const d = await setupOk(h, spec);
     if (d.next.kind !== "dispatch") throw new Error("dispatch");
     const key = d.next.dispatch_key;
     h.clock.t += PLANNED_TIMEOUT_MS;
     await advance(h, "run1", { type: "tick" }, opts);
-    const send = await advance(h, "run1", {
+    const r = await advance(h, "run1", {
       type: "report",
       phase: "reconcile",
       dispatch_key: key,
@@ -190,16 +190,14 @@ describe("F24-02 send_initial at most once", () => {
         get_worker_queue_status: { ok: true, pending: [], consuming: null },
       },
     }, opts);
-    expect(send.next.kind).toBe("recover");
-    if (send.next.kind !== "recover") throw new Error("send_initial");
-    expect(send.next.action).toBe("send_initial");
-    expect(readState(h).nodes.worker?.send_initial_attempted).toBe(true);
+    expect(r.next.kind).toBe("decide");
+    if (r.next.kind !== "decide") throw new Error("decide");
+    expect(r.next.gate_id).toBe("human:reconcile");
     const snap = h.files.get(graphStatePath("run1"))!;
     const h2 = fakeHost();
     h2.files.set(graphStatePath("run1"), snap);
     h2.clock.t = h.clock.t + 1;
     const again = await advance(h2, "run1", { type: "tick" }, opts);
-    expect(again.next.kind).toBe("decide");
     expect(again.next.kind === "recover" ? again.next.action : "").not.toBe("send_initial");
   });
 });
@@ -299,5 +297,13 @@ describe("bug-fix graph implement identity", () => {
     const implement = spec.nodes.find((n) => n.id === "implement");
     expect(implement?.writes).toBe(true);
     expect(implement?.kind).toBe("dispatch");
+  });
+
+  it("a stop proof from another team, or a setup without team_id, does not release a new writer", async () => {
+    const { h, spec, opts } = await boot();
+    const noTeam = await advance(h, "run1", { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions" } }, opts);
+    expect(noTeam.next.kind).toBe("decide");
+    if (noTeam.next.kind !== "decide") throw new Error("decide");
+    expect(noTeam.next.gate_id).toBe("human:setup");
   });
 });

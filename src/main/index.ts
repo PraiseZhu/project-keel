@@ -4,6 +4,7 @@ import { invalidateRuntimeConfig } from "./config.ts";
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
+import type { CardActionEvent } from "./graph/cards.ts";
 import { NudgeController, type NudgeRun } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
@@ -88,17 +89,23 @@ cindy.onHostMessage(async (msg: any) => {
     return;
   }
   if (msg.type === "card-action") {
-    const r = await nudge.handleCardAction(msg);
+    const ev: CardActionEvent = {
+      actionId: String(msg.actionId ?? msg.action_id ?? ""),
+      ...(typeof msg.userActionToken === "string" ? { userActionToken: msg.userActionToken } : {}),
+      ...(typeof msg.callId === "string" ? { callId: msg.callId } : {}),
+      ...(typeof msg.run_id === "string" ? { run_id: msg.run_id } : typeof msg.runId === "string" ? { run_id: msg.runId } : {}),
+      ...(typeof msg.cardId === "string" ? { cardId: msg.cardId } : {}),
+    };
+    const r = await nudge.handleCardAction(ev);
     cindy.send({ type: "card-action-result", ...r });
     return;
   }
   if (msg.type === "did-turn-end" || msg.topic === "turn") {
     const reason = msg.endReason === "interrupted" || msg.endReason === "error" ? msg.endReason : "completed";
     const runs = await loadGraphStates(host);
-    for (const r of runs) {
-      const nr = asNudgeRun(r);
-      if (nr) await nudge.onTurnEnd(nr, { endReason: reason });
-    }
+    const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => Boolean(r));
+    nudge.syncActive(mapped.map((r) => r.run_id));
+    for (const nr of mapped) await nudge.onTurnEnd(nr, { endReason: reason });
   }
 });
 

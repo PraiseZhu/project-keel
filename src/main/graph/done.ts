@@ -69,7 +69,11 @@ export function isChangeGraphDone(input: ChangeGraphDoneInput): ChangeGraphDoneR
   if (!v) missing.push("当前 head 没有非作者 verdict");
   else {
     if (v.head_sha !== cur.head_sha) missing.push("verdict 绑定的 head 不是当前 head");
-    if (input.author_families.includes(v.by_family)) {
+    if (!input.author_families.length) {
+      missing.push("作者的实际模型族未知，无法确认验证者来自不同模型族");
+    } else if (!v.by_family || !v.by_route.model) {
+      missing.push("验证者的实际路线身份未知，不能算作不同模型族");
+    } else if (input.author_families.includes(v.by_family)) {
       missing.push(`验证者模型族 ${v.by_family} 属于作者族（${input.author_families.join("、")}）`);
     }
     const need = requiredLevel(input.sc);

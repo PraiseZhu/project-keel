@@ -31,7 +31,7 @@ function prArgs(args: Record<string, unknown>) {
   };
 }
 
-async function snapshotArgs(ctx: ToolContext, args: Record<string, unknown>) {
+export async function snapshotArgs(ctx: ToolContext, args: Record<string, unknown>) {
   return { ...prArgs(args), local_pushes: await listLocalPushes(ctx.host), now_ms: ctx.host.now() };
 }
 

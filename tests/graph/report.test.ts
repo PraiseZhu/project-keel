@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeelError } from "../../src/main/host.ts";
@@ -51,6 +51,29 @@ describe("report/read whitelist", () => {
     expect(ok.result).toMatchObject({ content: "hello" });
     const bad = await dispatch("report/read", { worktree: dir, node: "../secret", attempt: 1 });
     expect(bad.error?.message).toMatch(/INVALID_INPUT/);
+  });
+
+  it("refuses a symlinked report file or a symlinked .keel directory", async () => {
+    mkdirSync("_tmp/test-runs", { recursive: true });
+    const dir = mkdtempSync(resolve("_tmp/test-runs/report-"));
+    dirs.push(dir);
+    const outside = join(dir, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret.md"), "synthetic-outside-marker");
+    const wt1 = join(dir, "wt1");
+    mkdirSync(join(wt1, ".keel"), { recursive: true });
+    symlinkSync(join(outside, "secret.md"), join(wt1, ".keel", "worker-1.md"));
+    const viaFile = await dispatch("report/read", { worktree: wt1, node: "worker", attempt: 1 });
+    expect(viaFile.result).toBeUndefined();
+    expect(viaFile.error?.message).toMatch(/INVALID_INPUT/);
+
+    const wt2 = join(dir, "wt2");
+    mkdirSync(wt2);
+    writeFileSync(join(outside, "worker-1.md"), "synthetic-outside-marker");
+    symlinkSync(outside, join(wt2, ".keel"));
+    const viaDir = await dispatch("report/read", { worktree: wt2, node: "worker", attempt: 1 });
+    expect(viaDir.result).toBeUndefined();
+    expect(viaDir.error?.message).toMatch(/INVALID_INPUT/);
   });
 });
 

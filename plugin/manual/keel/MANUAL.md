@@ -1,6 +1,6 @@
 # KEEL：中文入口
 
-Keel 把两件事装进一个 Cindy 插件：**日常随时可问的 Jev**（`jev` 工具，不碰仓库），和 **完整复刻的 pstack 工作流**（推 PR、修 bug、调查、重构……，在固定判断点自动问 Jev）。两组工具分开调用。
+主控协议：聊清需求后调 `keel_run({goal, sc, repo_dir, lead, profile?, pr?})`。之后只照 `next` 做：`setup` 就 `start_team({worker_permission_mode:"bypassPermissions"})`；`dispatch` 就把 `create_worker` 参数原样传入（不按 routing.json 换档），并立刻 `keel_report({phase:"accepted", ...回执})`；`reconcile` / `recover` 只做 next 指定的动作；worker 回报后 `keel_report({phase:"final"})`。只有 `next.kind=done` 才算完成；KEEL 永不合并。`decide` 时自己裁决，拿不准才问用户。pstack 手册是深读材料。
 
 - 本机车道表与路径：`ghost_manual({ ghost_id: "keel", path: "keel/profile.md" })`
 - pstack 上游镜像与路由表：`ghost_manual({ ghost_id: "keel", path: "pstack/MANUAL.md" })`
@@ -12,7 +12,12 @@ Keel 把两件事装进一个 Cindy 插件：**日常随时可问的 Jev**（`je
 | 场景 | 工具 | 说明 |
 |---|---|---|
 | 日常问 Jev | `jev` | 与旧 typesafe-jev `evaluate` 参数完全相同，或简写 `{question, kind, options}` |
-| 开始一次 pstack 任务 | `pstack_start` | Jev J1 选 playbook、J2 估深度；返回 run_id、手册路径与步骤 |
+| 开一次图运行 | `keel_run` | 聊清需求后调用；返回 `{run_id, profile, next}`，之后只照 next 做 |
+| 交回节点结果 | `keel_report` | `setup` / `accepted` / `reconcile` / `recover` / `final` |
+| 阻塞等待 | `keel_wait` | CI / 插件任务 / 在途节点，最长 15 分钟 |
+| 回答方向门 | `keel_gate` | `run_id` + `gate_id` + `answer` |
+| 看 run 状态 | `keel_status` | 不推进图 |
+| 开始一次 pstack 任务 | `pstack_start` | 迁移入口：`task` 映射为 `goal`，必须传 `repo_dir` |
 | 工作流中的判断点 | `pstack_decide` | 模板 J1–J12，返回 act / reask / minimal / stop |
 | 留痕与回看 | `pstack_ledger` | decision / step / evidence / gap |
 | 看 PR | `pr_status`、`pr_wait`、`pr_board` | 只读；可合并时只给链接 |

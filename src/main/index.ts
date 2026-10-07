@@ -4,6 +4,7 @@ import { invalidateRuntimeConfig } from "./config.ts";
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
+import { NudgeController, type NudgeRun } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
@@ -39,11 +40,66 @@ const host: Host = {
   },
 };
 
+function asNudgeRun(r: any): NudgeRun | null {
+  if (!r?.run_id) return null;
+  const nodes = Object.entries(r.nodes ?? {}).map(([id, n]: [string, any]) => ({
+    id,
+    dispatch_state: n.dispatch_state,
+    started_at: n.started_at,
+    timebox_ms: n.timebox_ms,
+    queued: Boolean(n.queued_message_id),
+  }));
+  return {
+    run_id: r.run_id,
+    status: r.status ?? "running",
+    version: Number(r.updated_at ?? 0),
+    ...(r.next?.kind ? { next: { kind: r.next.kind } } : {}),
+    ...(typeof r.updated_at === "number" ? { last_keel_call_at: r.updated_at } : {}),
+    associated: false,
+    nodes,
+  };
+}
+
+const nudge = new NudgeController(
+  {
+    async associateSession(req) {
+      if (!cindy.agent?.run) return { ok: false, errorCode: "NO_AGENT", message: "宿主没有 cindy.agent.run" };
+      return cindy.agent.run(req);
+    },
+    async continueSession(req) {
+      if (!cindy.agent?.run) return { ok: false, errorCode: "NO_AGENT", message: "宿主没有 cindy.agent.run" };
+      return cindy.agent.run(req);
+    },
+    presentCard(card) {
+      cindy.send({ type: "card", card });
+    },
+    notifyUser(message) {
+      cindy.send({ type: "notify", message });
+    },
+  },
+  { now: () => Date.now(), cardOnly: typeof cindy.agent?.run !== "function" },
+);
+
 cindy.onHostMessage(async (msg: any) => {
-  if (msg.type !== "tool-call") return;
-  const out = await runTool(makeContext(host, msg.callId), msg.tool, msg.args ?? {});
-  if (out.ok) cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result: out.result });
-  else cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: out.errorCode, message: out.message });
+  if (msg.type === "tool-call") {
+    const out = await runTool(makeContext(host, msg.callId), msg.tool, msg.args ?? {});
+    if (out.ok) cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result: out.result });
+    else cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: out.errorCode, message: out.message });
+    return;
+  }
+  if (msg.type === "card-action") {
+    const r = await nudge.handleCardAction(msg);
+    cindy.send({ type: "card-action-result", ...r });
+    return;
+  }
+  if (msg.type === "did-turn-end" || msg.topic === "turn") {
+    const reason = msg.endReason === "interrupted" || msg.endReason === "error" ? msg.endReason : "completed";
+    const runs = await loadGraphStates(host);
+    for (const r of runs) {
+      const nr = asNudgeRun(r);
+      if (nr) await nudge.onTurnEnd(nr, { endReason: reason });
+    }
+  }
 });
 
 channel?.addEventListener("message", (ev: MessageEvent) => {

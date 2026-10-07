@@ -1,5 +1,4 @@
 // Active-run index for the Stop hook. Keyed by workdir (Codex session ids are not Cindy's).
-// This module is not wired into tools in this PR.
 
 import { KeelError, type Host } from "../host.ts";
 

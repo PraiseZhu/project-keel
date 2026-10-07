@@ -59,8 +59,9 @@ function readThresholds(raw: unknown): JevThresholds {
 }
 
 export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_PROFILE): Promise<RuntimeConfig> {
+  const gen = cacheGen;
   const hit = cache.get(host);
-  if (hit && hit.gen === cacheGen) return hit.config;
+  if (hit && hit.gen === gen) return hit.config;
   let kv: Record<string, unknown>;
   try {
     kv = await host.kvGet();
@@ -83,6 +84,7 @@ export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_P
 
   const lanes = Array.isArray(kv.lanes) ? (kv.lanes as LaneMatch[]) : built.lanes;
   const config = { manual, lanes, limits: readLimits(kv.limits), thresholds: readThresholds(kv.thresholds) };
-  cache.set(host, { gen: cacheGen, config });
+  // Invalidate during this read must not publish stale kv into the new generation.
+  if (cacheGen === gen) cache.set(host, { gen, config });
   return config;
 }

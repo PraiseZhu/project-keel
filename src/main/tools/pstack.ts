@@ -1,12 +1,10 @@
-// pstack_start / pstack_decide / pstack_ledger: the workflow entry, explicit judgements,
-// and the run ledger. Routing falls back to deterministic rules when Jev is unavailable.
+// pstack_start is a migration wrapper over keel_run. pstack_decide / pstack_ledger stay.
 
 import { KeelError } from "../host.ts";
-import { node, requireString, type ToolContext } from "../context.ts";
-import { PLAYBOOKS, template, type TemplateId } from "../jev/templates.ts";
+import { requireString, type ToolContext } from "../context.ts";
+import { template, type TemplateId } from "../jev/templates.ts";
 import { judge } from "../judge.ts";
-import { append, newRunId, read, type LedgerKind } from "../ledger.ts";
-import { resolveLane } from "../../shared/lanes.ts";
+import { append, read, type LedgerKind } from "../ledger.ts";
 
 export interface PlaybookInfo {
   readonly summary: string;
@@ -54,63 +52,11 @@ export function explicitFanout(task: string): { interrogate: boolean; arena: boo
 }
 
 export async function pstackStart(ctx: ToolContext, args: Record<string, unknown>) {
-  const task = requireString(args, "task");
-  const runId = newRunId(ctx.host.now());
-  const named = typeof args.playbook === "string" ? args.playbook : null;
-  if (named && ![...PLAYBOOKS, "figure-it-out"].includes(named as any)) throw new KeelError("INVALID_INPUT", `未知 playbook ${named}。可选：${PLAYBOOKS.join("、")}、figure-it-out。`);
-  const state = { task, ...(typeof args.context === "string" ? { context: args.context } : {}) };
-  const notes = Object.fromEntries(Object.entries(PLAYBOOK_INFO).map(([k, v]) => [k, `${v.summary} ${v.steps[0] ?? ""}`.slice(0, 200)]));
-  const specs: { id: TemplateId; state: Record<string, unknown> }[] = named ? [{ id: "J2", state }] : [{ id: "J1", state: { ...state, playbook_notes: notes } }, { id: "J2", state }];
-  const outcome = await judge(ctx, specs, { runId });
-  const j1 = outcome.judgements.find((j) => j.template === "J1");
-  const j2 = outcome.judgements.find((j) => j.template === "J2");
-  let playbook = named ?? "";
-  let routeSource = named ? "user" : "jev";
-  if (!named) {
-    if (j1?.policy.action === "act") playbook = String(j1.policy.value);
-    else {
-      playbook = keywordRoute(task);
-      routeSource = j1?.interpretation ? "keyword (jev below threshold)" : "keyword (jev unavailable)";
-    }
+  if (typeof args.repo_dir !== "string" || !args.repo_dir.trim()) {
+    throw new KeelError("INVALID_INPUT", "迁移入口 pstack_start 需要 repo_dir。请改用 keel_run({ goal, sc, repo_dir, lead })。");
   }
-  const depth = j2?.policy.action === "act" ? Number(j2.policy.value) : null;
-  const explicit = explicitFanout(task);
-  let lane = null;
-  if (typeof args.repo_dir === "string") {
-    try {
-      const st = await node(ctx, "git/state", { repo_dir: args.repo_dir });
-      lane = { git: st };
-    } catch {
-      lane = null;
-    }
-  }
-  if (typeof args.repo === "string") lane = { ...(lane ?? {}), preset: resolveLane(ctx.profile, args.repo).rule.preset };
-  const info = PLAYBOOK_INFO[playbook];
-  const multi = MULTI_PR.has(playbook);
-  const next = playbook === "trivial_no_pstack"
-    ? "不需要 pstack 流程，直接回答或做这处小改动。"
-    : multi
-      ? "这是跨多个 PR 的任务：按用户既定流程交给 task-priority → approve-exec（需要用户说“汇总任务优先级”再“批准执行”）。Keel 不另起编排；先把任务目标、仓库与验收标准整理给用户。"
-      : `用 ghost_manual({ ghost_id: "keel", path: "${manualPath(playbook)}" }) 读取 playbook，按步骤执行；关键判断点用 pstack_decide，留痕用 pstack_ledger。`;
-  // Upstream routes by the model reading poteto-mode's table. When Jev is unsure, the keyword
-  // guess is only a default: the agent checks the table and re-calls with `playbook` if it differs.
-  const routeCheck = routeSource.startsWith("keyword")
-    ? `路由是关键词兜底（${routeSource}）。先读 pstack/skills/poteto-mode/SKILL.md 的路由表核对；不符就用 pstack_start({ task, playbook: "<正确的 playbook>" }) 重调。Jev 候选：${(j1?.interpretation?.ranked ?? []).slice(0, 3).join("、") || "无"}。`
-    : null;
-  await append(ctx.host, { run_id: runId, kind: "step", summary: `start ${playbook}（${routeSource}）depth=${depth ?? "?"}` });
-  return {
-    run_id: runId,
-    playbook,
-    route_source: routeSource,
-    manual_path: manualPath(playbook),
-    steps: info?.steps ?? [],
-    depth,
-    suggest: { architect: depth !== null && depth >= 2, arena: explicit.arena || (depth !== null && depth >= 3), interrogate: explicit.interrogate, multi_pr_pipeline: multi },
-    lane,
-    jev: outcome.answers ? outcome.judgements.map((j) => ({ template: j.template, value: j.interpretation?.value ?? null, confidence: j.interpretation?.confidence ?? 0, policy: j.policy.action, ranked: j.interpretation?.ranked?.slice(0, 2) })) : null,
-    ...(outcome.fallback_reason ? { fallback_reason: outcome.fallback_reason } : {}),
-    next: routeCheck ? `${routeCheck}\n${next}` : next,
-  };
+  const { keelRun } = await import("./keel.ts");
+  return keelRun(ctx, { ...args, goal: typeof args.goal === "string" ? args.goal : requireString(args, "task"), lead: typeof args.lead === "string" ? args.lead : "codex" });
 }
 
 export async function pstackDecide(ctx: ToolContext, args: Record<string, unknown>) {

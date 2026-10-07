@@ -5,6 +5,7 @@ import { KeelError } from "./host.ts";
 import type { ToolContext } from "./context.ts";
 import { fanoutIngest, fanoutPlan } from "./fanout/tools.ts";
 import { jevTool } from "./tools/jev.ts";
+import { keelGate, keelReport, keelRun, keelStatus, keelWait } from "./tools/keel.ts";
 import { rolesTool, worktreeTool } from "./tools/misc.ts";
 import { prBoard, prOpen, prReady, prReply, prStatus, prThreads, prWait } from "./tools/pr.ts";
 import { pstackDecide, pstackLedger, pstackStart } from "./tools/pstack.ts";
@@ -13,6 +14,11 @@ export type Handler = (ctx: ToolContext, args: Record<string, unknown>) => Promi
 
 export const TOOLS: Readonly<Record<string, Handler>> = {
   jev: jevTool,
+  keel_run: keelRun,
+  keel_report: keelReport,
+  keel_wait: keelWait,
+  keel_gate: keelGate,
+  keel_status: keelStatus,
   pstack_start: pstackStart,
   pstack_decide: pstackDecide,
   pstack_ledger: pstackLedger,

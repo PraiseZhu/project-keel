@@ -6,6 +6,7 @@ import { resolve } from "../manual/resolve.ts";
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
+import { buildBrief } from "./brief.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
 import type { AgentModel, ModelManual, Role, Route } from "../../shared/manual/schema.ts";
 import {
@@ -33,10 +34,10 @@ export type AcceptDecision = "adopt" | "revise" | "ask_user";
 export type ArenaDecision = "single" | "arena";
 
 export interface GateHooks {
-  retry?(input: { node: string; error_mode?: string; consecutive_failures: number }): RetryDecision;
-  advance?(input: { node: string }): AdvanceDecision;
-  accept?(input: { node: string }): AcceptDecision;
-  arena?(input: { node: string }): ArenaDecision;
+  retry?(input: { node: string; error_mode?: string; consecutive_failures: number }): RetryDecision | undefined;
+  advance?(input: { node: string }): AdvanceDecision | undefined;
+  accept?(input: { node: string }): AcceptDecision | undefined;
+  arena?(input: { node: string }): ArenaDecision | undefined;
 }
 
 export interface ReconcileQueries {
@@ -191,14 +192,12 @@ function pickRoute(
   return { stop: "全部路线不可用" };
 }
 
-function brief(state: GraphRunState, node: GraphNode): string {
-  return [
-    `GOAL: ${state.goal}`,
-    `NODE: ${node.id}`,
-    `SCOPE: playbook_steps ${node.playbook_steps.join(", ") || "(none)"}`,
-    "FORBIDDEN: 禁止合并、禁止 force-push、禁止 rebase、禁止写域外文件。",
-    "REPORT: 完整报告写到 worktree/.keel/<node>-<attempt>.md。",
-  ].join("\n");
+function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
+  return buildBrief(
+    { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation" },
+    { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.repo, pr: state.pr, taskType: state.task_type },
+    { attempt, dispatch_key: dispatchKeyValue },
+  );
 }
 
 async function planOrca(
@@ -232,7 +231,7 @@ async function planOrca(
     provider_id: picked.route.provider_id,
     effort: picked.route.effort,
     working_dir: specNode.writes || specNode.role !== "researcher" ? state.worktree : undefined,
-    initial_task: brief(state, specNode),
+    initial_task: brief(state, specNode, key, node.attempts),
     writes: specNode.writes,
     fallbacks: picked.fallbacks,
     route_index: picked.index,
@@ -473,7 +472,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
       task.revision = event.revision;
       task.phase = "send";
       task.send_request_key = `send:${key}`;
-      task.send_text = brief(state, specNode);
+      task.send_text = brief(state, specNode, key, node.attempts);
       task.expected_revision = event.revision;
       node.dispatch_state = "planned";
       node.dispatch_state_at = now;

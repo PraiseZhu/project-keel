@@ -216,9 +216,9 @@ describe("final-review follow-ups at the tool level", () => {
     expect(r.result.complete).toBe(false);
     expect(r.result.gaps.map((g: any) => g.label).sort()).toEqual(["r1", "r2"]);
   });
-  it("a keyword-routed start tells the agent to check the routing table", async () => {
+  it("pstack_start as a migration entry requires repo_dir", async () => {
     const r: any = await runTool(makeContext(fakeHost(), "c1", profile), "pstack_start", { task: "修一下登录报错" });
-    expect(r.ok).toBe(true);
-    expect(r.result.next).toContain("路由表核对");
+    expect(r).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(r.message).toContain("repo_dir");
   });
 });

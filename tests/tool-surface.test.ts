@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { TOOLS } from "../src/main/dispatch.ts";
 import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
-import { mapCreateWorkerReceipt, normalizeListWorkers } from "../src/main/tools/keel.ts";
+import { mapCreateWorkerReceipt, normalizeListWorkers, verdictReportFromNode } from "../src/main/tools/keel.ts";
+import { parseNodeReport } from "../src/main/graph/report.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 import { readFileSync } from "node:fs";
 
@@ -161,5 +162,45 @@ describe("report / status / gate", () => {
     expect(state.start_state).toEqual({ head: "abc", status_digest: "d", content_hash: "h" });
     expect(state.worktree).toBeUndefined();
     expect(r.result.run_id).toBe(state.run_id);
+  });
+  it("fingerprint RPC error is unknown/incomplete, never a synthetic hash", async () => {
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "abc" } };
+        if (method === "git/content-fingerprint") return { ok: false, message: "GIT_ERROR: not a git repo" };
+        return { ok: false, message: "UNEXPECTED " + method };
+      },
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "调查登录超时的原理", repo_dir: "/repo", lead: "codex", playbook: "investigation",
+    });
+    expect(r).toMatchObject({ ok: false, errorCode: "FINGERPRINT_UNKNOWN" });
+    expect([...h.files.keys()].some((k) => k.endsWith("graph-state.json"))).toBe(false);
+  });
+});
+
+describe("ui_evidence passthrough", () => {
+  it("keeps worker ui_evidence and does not invent surface", () => {
+    const withUi = parseNodeReport(JSON.stringify({
+      dispatch_key: "run:node:1", status: "done", summary: "ok", files_changed: [],
+      ran: [{ cmd: "npx playwright test", exit_code: 0 }],
+      ui_evidence: ["shots/home.png"],
+      surface: "live-ui",
+    }), "run:node:1");
+    expect(withUi.ui_evidence).toEqual(["shots/home.png"]);
+    expect(withUi.surface).toBe("live-ui");
+    const mapped = verdictReportFromNode(withUi);
+    expect(mapped.ui_evidence).toEqual(["shots/home.png"]);
+    expect(mapped.surface).toBe("live-ui");
+
+    const bare = parseNodeReport(JSON.stringify({
+      dispatch_key: "run:node:1", status: "done", summary: "ok", files_changed: [],
+      ran: [{ cmd: "npm test", exit_code: 0 }],
+    }), "run:node:1");
+    expect(bare).not.toHaveProperty("ui_evidence");
+    expect(bare).not.toHaveProperty("surface");
+    const mappedBare = verdictReportFromNode(bare);
+    expect(mappedBare).not.toHaveProperty("ui_evidence");
+    expect(mappedBare).not.toHaveProperty("surface");
   });
 });

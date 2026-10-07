@@ -8,8 +8,9 @@ import { isInvestigationDone } from "../graph/done.ts";
 import { GATES } from "../graph/gates.ts";
 import { classifyRetry, createRun, advance, type AdvanceEvent, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts } from "../graph/pr-facts.ts";
-import { parseNodeReport } from "../graph/report.ts";
+import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
+import type { NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { parseDispatchKey, type ErrorMode, type GraphRunState, type Next } from "../graph/state.ts";
 import { KeelError, type Host } from "../host.ts";
 import { newRunId } from "../ledger.ts";
@@ -65,6 +66,39 @@ export function mapCreateWorkerReceipt(raw: unknown): {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
+}
+
+type ContentFp = { head: string; status_digest: string; content_hash: string };
+
+/** Git failure is "fingerprint unknown", never a synthetic hash and never a pass. */
+async function readContentFingerprint(ctx: ToolContext, repoDir: string): Promise<ContentFp | null> {
+  if (!repoDir) return null;
+  try {
+    const fp = await node<ContentFp>(ctx, "git/content-fingerprint", { repo_dir: repoDir });
+    if (!fp?.head || !fp.status_digest || !fp.content_hash) return null;
+    return fp;
+  } catch {
+    return null;
+  }
+}
+
+function completeStartState(s: GraphRunState["start_state"]): ContentFp | null {
+  if (!s?.head || !s.status_digest || !s.content_hash) return null;
+  return { head: s.head, status_digest: s.status_digest, content_hash: s.content_hash };
+}
+
+/** Copy worker fields only. Do not invent surface or ui_evidence. */
+export function verdictReportFromNode(report: NodeReport): VerdictReport {
+  return {
+    dispatch_key: report.dispatch_key,
+    status: report.status,
+    summary: report.summary,
+    ...(report.verdict ? { verdict: report.verdict } : {}),
+    ran: report.ran,
+    ...(report.findings ? { findings: report.findings } : {}),
+    ...(report.surface ? { surface: report.surface } : {}),
+    ...(report.ui_evidence ? { ui_evidence: report.ui_evidence } : {}),
+  };
 }
 
 function taskTypeOf(goal: string, playbook: string | undefined, pr: unknown): GraphTaskType {
@@ -177,7 +211,8 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     const st = await node<{ root?: string; branch?: string; head?: string }>(ctx, "git/state", { repo_dir: repoDir });
     origin = st.root;
     if (taskType === "investigation") {
-      const fp = await node<{ head: string; status_digest: string; content_hash: string }>(ctx, "git/content-fingerprint", { repo_dir: repoDir });
+      const fp = await readContentFingerprint(ctx, repoDir);
+      if (!fp) throw new KeelError("FINGERPRINT_UNKNOWN", "起始指纹未知，调查未完成。");
       start_state = fp;
     } else if (taskType === "pr") {
       const branch = str(args.branch) ?? st.branch;
@@ -251,12 +286,13 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const states = await loadGraphStates(ctx.host);
     const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
     const worktree = st?.worktree;
+    let parsed: NodeReport | undefined;
     if (args.inline_report && typeof args.inline_report === "object") {
       base.inline_report = args.inline_report as { status: "done" | "partial" | "blocked" | "failed"; summary?: string };
     } else {
       if (!worktree || !parsedKey) throw new KeelError("REPORT_INVALID", "final 需要 worktree 与 dispatch_key。");
       const file = await node<{ path: string; content: string }>(ctx, "report/read", { worktree, node: parsedKey.nodeId, attempt: parsedKey.attempt });
-      parseNodeReport(file.content, key);
+      parsed = parseNodeReport(file.content, key);
       base.report_path = file.path;
       const nodeState = st.nodes?.[parsedKey.nodeId];
       if (nodeState?.planned_params?.writes) {
@@ -266,12 +302,13 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
       }
     }
-    if (st?.task_type === "investigation" && st.start_state) {
-      const current = await node<{ head: string; status_digest: string; content_hash: string }>(ctx, "git/content-fingerprint", { repo_dir: st.repo ?? worktree ?? "" });
-      const startFp = { head: st.start_state.head ?? "", status_digest: st.start_state.status_digest ?? "", content_hash: st.start_state.content_hash ?? "" };
+    if (st?.task_type === "investigation") {
+      const startFp = completeStartState(st.start_state);
+      const current = await readContentFingerprint(ctx, st.repo ?? worktree ?? "");
+      if (!startFp || !current) throw new KeelError("FINGERPRINT_UNKNOWN", "内容指纹未知，调查未完成。");
       const evalDone = isInvestigationDone({
         reportComplete: true,
-        reportCitation: typeof (args.inline_report as { summary?: string } | undefined)?.summary === "string" ? (args.inline_report as { summary: string }).summary : "inline",
+        reportCitation: typeof (args.inline_report as { summary?: string } | undefined)?.summary === "string" ? (args.inline_report as { summary: string }).summary : parsed?.summary ?? "inline",
         sc: (st.sc ?? []).map((s) => ({ id: s.id, hasEvidence: true })),
         openHumanGates: st.status === "waiting_human" ? 1 : 0,
         start: startFp,

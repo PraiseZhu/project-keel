@@ -17,6 +17,10 @@ export interface NodeReport {
   readonly findings?: readonly string[];
   readonly verdict?: (typeof NODE_VERDICTS)[number];
   readonly next_suggestions?: readonly string[];
+  /** Worker-supplied live-UI artifacts. Pass through; never invent. */
+  readonly ui_evidence?: readonly string[];
+  /** Self-reported surface. Can only lower the mapped level. */
+  readonly surface?: "live-ui" | "unit-test" | "type-check" | "blocked";
   readonly body?: string;
 }
 
@@ -87,6 +91,8 @@ export function parseNodeReport(text: string, expectedDispatchKey: string): Node
     ...(Array.isArray(o.findings) ? { findings: o.findings.filter((x): x is string => typeof x === "string") } : {}),
     ...(typeof o.verdict === "string" ? { verdict: o.verdict as NodeReport["verdict"] } : {}),
     ...(Array.isArray(o.next_suggestions) ? { next_suggestions: o.next_suggestions.filter((x): x is string => typeof x === "string") } : {}),
+    ...(Array.isArray(o.ui_evidence) ? { ui_evidence: o.ui_evidence.filter((x): x is string => typeof x === "string") } : {}),
+    ...(o.surface === "live-ui" || o.surface === "unit-test" || o.surface === "type-check" || o.surface === "blocked" ? { surface: o.surface } : {}),
     ...(parsed.body ? { body: parsed.body } : {}),
   };
 }

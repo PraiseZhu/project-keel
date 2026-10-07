@@ -73,6 +73,7 @@ function program(opts: {
   orch?: OrchClient;
   reports?: Record<string, RunReport | (() => RunReport)>;
   fail?: string[];
+  startFail?: string[];
   workers?: WorkerLimit;
   window?: number;
   started?: string[];
@@ -84,6 +85,7 @@ function program(opts: {
     concurrentRuns: opts.window ?? DEFAULT_CONCURRENT_RUNS,
     workerLimit: () => opts.workers ?? { hard_limit: 32, remaining_slots: 32 },
     async startRun({ unit, run_id }) {
+      if ((opts.startFail ?? []).includes(unit.id)) throw new Error("invalid repo_dir");
       started.push(unit.id);
       return { run_id };
     },
@@ -181,8 +183,48 @@ describe("failure isolation", () => {
     await p.addUnit({ id: "ok", track: "t" });
     const tick = await p.tick();
     expect(tick.stopped).toEqual(["bad"]);
+    expect(tick.errors).toEqual([{ unit: "bad", phase: "advance", message: "boom" }]);
     expect((await orch.unitsList()).find((u) => u.id === "ok")?.state).toBe("done");
     expect((await orch.unitsList()).find((u) => u.id === "bad")?.state).toBe("stopped");
+  });
+
+  it("a startRun throw stops only that unit and still advances siblings", async () => {
+    const { p, orch } = program({
+      startFail: ["broken"],
+      reports: { ok: { run_id: "run-ok", unit_id: "ok", status: "done", head_sha: "z" } },
+    });
+    await p.addUnit({ id: "broken", track: "t" });
+    await p.addUnit({ id: "ok", track: "t" });
+    const tick = await p.tick();
+    expect(tick.started).toEqual(["ok"]);
+    expect(tick.stopped).toEqual(["broken"]);
+    expect(tick.errors).toEqual([{ unit: "broken", phase: "start", message: "invalid repo_dir" }]);
+    expect((await orch.unitsList()).find((u) => u.id === "ok")?.state).toBe("done");
+    expect((await orch.unitsList()).find((u) => u.id === "broken")?.state).toBe("stopped");
+  });
+});
+
+describe("inbox is a wake hint", () => {
+  it("does not copy inbox status onto the unit; only advanceRun can mark done", async () => {
+    let status: RunReport["status"] = "running";
+    const orch = memoryOrch();
+    const { p } = program({
+      orch,
+      reports: { u1: () => ({ run_id: "run-u1", unit_id: "u1", status, head_sha: "h1" }) },
+    });
+    await p.addUnit({ id: "u1", track: "t" });
+    await p.tick();
+    expect((await orch.unitsList()).find((u) => u.id === "u1")?.state).toBe("running");
+    await orch.inboxPush({ agent: "w", unit: "u1", status: "done" });
+    await orch.inboxPush({ agent: "w", unit: "u1", status: "blocked" });
+    const afterHint = await p.tick();
+    expect((await orch.unitsList()).find((u) => u.id === "u1")?.state).toBe("running");
+    expect(afterHint.blocked).toEqual([]);
+    expect(afterHint.human_gates).toEqual([]);
+    status = "done";
+    const afterAdvance = await p.tick();
+    expect(afterAdvance.advanced).toEqual(["u1"]);
+    expect((await orch.unitsList()).find((u) => u.id === "u1")?.state).toBe("done");
   });
 });
 

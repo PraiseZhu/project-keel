@@ -42,6 +42,12 @@ export interface ProgramDeps {
   readonly concurrentRuns?: number;
 }
 
+export interface TickError {
+  readonly unit: string;
+  readonly phase: "start" | "advance";
+  readonly message: string;
+}
+
 export interface TickResult {
   readonly started: readonly string[];
   readonly queued_window: readonly string[];
@@ -51,6 +57,7 @@ export interface TickResult {
   readonly blocked: readonly string[];
   readonly human_gates: readonly OpenGate[];
   readonly frontier_advanced: boolean;
+  readonly errors: readonly TickError[];
 }
 
 export function runIdFor(unitId: string): string {
@@ -66,6 +73,18 @@ export function shouldAdvanceFrontier(report: RunReport, previousSha: string): "
 function asState(value: string): UnitState {
   if (value === "running" || value === "blocked" || value === "done" || value === "stopped") return value;
   return "pending";
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object" && "message" in e && typeof (e as { message: unknown }).message === "string") {
+    return (e as { message: string }).message;
+  }
+  return String(e);
+}
+
+function wakeFirst(units: readonly Unit[], wake: ReadonlySet<string>): Unit[] {
+  return [...units].sort((a, b) => Number(wake.has(b.id)) - Number(wake.has(a.id)));
 }
 
 export async function advanceFrontierSnapshot(
@@ -121,14 +140,15 @@ export class Program {
   }
 
   async tick(): Promise<TickResult> {
-    await this.ingestInbox();
-    const units = [...(await this.orch.unitsList())];
+    const wake = new Set(await this.ingestInbox());
+    const units = wakeFirst(await this.orch.unitsList(), wake);
     const started: string[] = [];
     const queued_window: string[] = [];
     const queued_workers: string[] = [];
     const advanced: string[] = [];
     const stopped: string[] = [];
     const blocked: string[] = [];
+    const errors: TickError[] = [];
     let frontier_advanced = false;
 
     let inflight = units.filter((u) => asState(u.state) === "running").length;
@@ -146,14 +166,23 @@ export class Program {
         continue;
       }
       const run_id = runIdFor(unit.id);
-      await this.startRun({ unit, run_id });
-      await this.orch.unitsSet({ id: unit.id, state: "running", branch: run_id, ...(unit.pr ? { pr: Number(unit.pr) } : {}) });
-      inflight += 1;
-      slots -= 1;
-      started.push(unit.id);
+      try {
+        await this.startRun({ unit, run_id });
+        await this.orch.unitsSet({ id: unit.id, state: "running", branch: run_id, ...(unit.pr ? { pr: Number(unit.pr) } : {}) });
+        inflight += 1;
+        slots -= 1;
+        started.push(unit.id);
+      } catch (e) {
+        await this.orch.unitsSet({ id: unit.id, state: "stopped" });
+        stopped.push(unit.id);
+        errors.push({ unit: unit.id, phase: "start", message: errorMessage(e) });
+      }
     }
 
-    const live = (await this.orch.unitsList()).filter((u) => asState(u.state) === "running");
+    const live = wakeFirst(
+      (await this.orch.unitsList()).filter((u) => asState(u.state) === "running"),
+      wake,
+    );
     for (const unit of live) {
       try {
         const report = await this.advanceRun({ unit, run_id: unit.branch || runIdFor(unit.id) });
@@ -183,26 +212,21 @@ export class Program {
         } else if (report.head_sha) {
           await this.orch.unitsSet({ id: unit.id, state: "running", sha: report.head_sha });
         }
-      } catch {
+      } catch (e) {
         await this.orch.unitsSet({ id: unit.id, state: "stopped" });
         stopped.push(unit.id);
+        errors.push({ unit: unit.id, phase: "advance", message: errorMessage(e) });
       }
     }
 
     const human_gates = await this.orch.gatesList();
-    return { started, queued_window, queued_workers, advanced, stopped, blocked, human_gates, frontier_advanced };
+    return { started, queued_window, queued_workers, advanced, stopped, blocked, human_gates, frontier_advanced, errors };
   }
 
-  private async ingestInbox(): Promise<void> {
+  /** Inbox is a wake hint only: never copy pointer.status onto the unit. */
+  private async ingestInbox(): Promise<string[]> {
     const pointers = await this.orch.inboxDrain();
-    for (const p of pointers) {
-      const status = p.status === "done" || p.status === "stopped" || p.status === "blocked" || p.status === "running" ? p.status : "running";
-      try {
-        await this.orch.unitsSet({ id: p.unit, state: status });
-      } catch {
-        /* pointer for an unknown unit does not fail the program */
-      }
-    }
+    return pointers.map((p) => p.unit).filter(Boolean);
   }
 }
 

@@ -353,36 +353,36 @@ describe("card interval", () => {
   });
 });
 
-describe("pending expiry", () => {
-  it("lets B continue after A stops asking, within a bounded number of B's own calls", async () => {
-    const clock = { t: t0 + IDLE_MS };
-    const { p } = ports();
-    const c = new NudgeController(p, { now: () => clock.t });
-    const a = run({ run_id: "run-a", associated: true, session_id: "sess-a" });
-    const b = run({ run_id: "run-b", associated: true, session_id: "sess-b" });
-    expect((await c.maybeNudge(a)).action).toBe("continue");
-    clock.t += NUDGE_INTERVAL_MS;
-    expect((await c.maybeNudge(b)).action).toBe("continue");
-    // A never asks again; B keeps asking once per interval.
-    let sent = 0;
-    for (let i = 0; i < 8 && sent === 0; i++) {
-      clock.t += NUDGE_INTERVAL_MS;
-      if ((await c.maybeNudge(b)).action === "continue") sent += 1;
-    }
-    expect(sent).toBe(1);
-  });
-
-  it("a live waiter is not evicted by a slow clock: A refused, B served (30s rounds)", async () => {
+describe("fairness waits only for runs asking in the current send window", () => {
+  function setup(refuseA = true) {
     const clock = { t: t0 + IDLE_MS };
     const { p } = ports();
     const calls: string[] = [];
+    let release: (() => void) | null = null;
     p.continueSession = async (req) => {
       calls.push(String(req.sessionId));
-      return req.sessionId === "sess-a" ? { ok: false, errorCode: "SESSION_UNAVAILABLE" } : { ok: true, status: "queued" };
+      if (req.sessionId === "sess-hold") await new Promise<void>((r) => (release = r));
+      return refuseA && req.sessionId === "sess-a" ? { ok: false, errorCode: "SESSION_UNAVAILABLE" } : { ok: true, status: "queued" };
     };
     const c = new NudgeController(p, { now: () => clock.t });
     const a = run({ run_id: "run-a", associated: true, session_id: "sess-a" });
     const b = run({ run_id: "run-b", associated: true, session_id: "sess-b" });
+    return { clock, c, a, b, calls, release: () => release?.() };
+  }
+
+  it("a run that stopped asking does not block others", async () => {
+    const { clock, c, a, b, calls } = setup(false);
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    clock.t += NUDGE_INTERVAL_MS;
+    expect((await c.maybeNudge(b)).action).toBe("continue");
+    clock.t += NUDGE_INTERVAL_MS;
+    // A never asks again.
+    expect((await c.maybeNudge(b)).action).toBe("continue");
+    expect(calls).toEqual(["sess-a", "sess-b", "sess-b"]);
+  });
+
+  it("slow clock: A refused, B served (30s rounds)", async () => {
+    const { clock, c, a, b, calls } = setup();
     for (let round = 0; round < 8; round++) {
       await c.maybeNudge(a);
       await c.maybeNudge(b);
@@ -390,5 +390,43 @@ describe("pending expiry", () => {
     }
     expect(calls.filter((x) => x === "sess-b").length).toBeGreaterThanOrEqual(3);
     expect(calls.filter((x) => x === "sess-a").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("repeated interval skips from A never push out a waiting B", async () => {
+    const { clock, c, a, b, calls } = setup();
+    for (let round = 0; round < 8; round++) {
+      await c.maybeNudge(a);
+      await c.maybeNudge(b);
+      for (let k = 0; k < 7; k++) await c.maybeNudge(a);
+      clock.t += 30_000;
+    }
+    expect(calls.filter((x) => x === "sess-b").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("repeated busy skips from A never push out a waiting B", async () => {
+    const { clock, c, b, calls, release } = setup();
+    const hold = run({ run_id: "run-h", associated: true, session_id: "sess-hold" });
+    const pending = c.maybeNudge(hold);
+    expect((await c.maybeNudge(b)).reason).toBe("busy");
+    const a = run({ run_id: "run-a", associated: true, session_id: "sess-a" });
+    for (let k = 0; k < 7; k++) expect((await c.maybeNudge(a)).reason).toBe("busy");
+    release();
+    await pending;
+    clock.t += NUDGE_INTERVAL_MS;
+    // B asked in this window before A, and has never been tried: B goes first.
+    expect((await c.maybeNudge(a)).reason).toBe("fairness");
+    expect((await c.maybeNudge(b)).action).toBe("continue");
+    expect(calls).toEqual(["sess-hold", "sess-b"]);
+  });
+
+  it("a paused waiter gives up its turn instead of blocking the window", async () => {
+    const { clock, c, a, b, calls } = setup(false);
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    clock.t += 1;
+    expect((await c.maybeNudge(b)).reason).toBe("interval");
+    expect(await c.handleCardAction({ actionId: PAUSE_RUN, run_id: "run-b" } as never)).toMatchObject({ ok: true, action: "pause" });
+    clock.t += NUDGE_INTERVAL_MS;
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    expect(calls).toEqual(["sess-a", "sess-a"]);
   });
 });

@@ -285,7 +285,8 @@ export class NudgeController {
     this.byRun.set(run.run_id, state);
 
     if (useCard) {
-      if (state.cardShownVersion === run.version && state.cardShownAt !== null && now - state.cardShownAt < intervalMs) {
+      // A card waits for the user's click: show it once per run version, not once per tick.
+      if (state.cardShownVersion === run.version && state.cardShownAt !== null) {
         return { action: "skip", reason: "card_interval" };
       }
       const card = renderNudgeCard(run.run_id);

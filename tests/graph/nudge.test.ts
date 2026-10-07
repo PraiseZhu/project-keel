@@ -339,6 +339,18 @@ describe("card interval", () => {
     expect(p.log.cards).toHaveLength(1);
     expect(p.log.continue).toHaveLength(0);
   });
+
+  it("the same version never re-shows the card, however long it waits; a new version does", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => clock.t, cardOnly: true });
+    expect((await c.maybeNudge(run({ associated: true }))).action).toBe("card");
+    clock.t += 60 * 60_000;
+    expect((await c.maybeNudge(run({ associated: true }))).reason).toBe("card_interval");
+    expect(p.log.cards).toHaveLength(1);
+    expect((await c.maybeNudge(run({ associated: true, version: 2 }))).action).toBe("card");
+    expect(p.log.cards).toHaveLength(2);
+  });
 });
 
 describe("pending expiry", () => {

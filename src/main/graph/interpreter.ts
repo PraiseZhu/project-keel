@@ -7,6 +7,7 @@ import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief } from "./brief.ts";
+import { crossesFunctionBoundary, failureFingerprint, shouldSkipFinalReview } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
 import type { AgentModel, ModelManual, Role, Route } from "../../shared/manual/schema.ts";
 import {
@@ -81,9 +82,22 @@ export interface ReconcileQueries {
   };
 }
 
+export const ASTRA_CONSULT_ID = "astra-consult";
+
+const ASTRA_CONSULT_NODE: GraphNode = {
+  id: ASTRA_CONSULT_ID,
+  kind: "dispatch",
+  role: "architect",
+  writes: false,
+  playbook_steps: [],
+  timebox_min: 40,
+  max_attempts: 2,
+};
+
 export type AdvanceEvent =
   | { type: "tick" }
   | { type: "wait_done"; on?: Extract<EdgeOn, "ok" | "fail" | "conflict" | "threads" | "ci_red" | "head_moved"> }
+  | { type: "scope_fail"; dispatch_key: string }
   | {
       type: "report";
       phase: "setup" | "accepted" | "reconcile" | "recover" | "final";
@@ -168,6 +182,7 @@ function edgeOn(spec: GraphSpec, from: string, on: EdgeOn): string | undefined {
 }
 
 function whenOk(node: GraphNode, state: GraphRunState): boolean {
+  if (node.id === "astra-final-review" && state.facts?.skip_final_review) return false;
   const w = node.when;
   if (!w || w.kind === "always") return true;
   if (w.kind === "crosses_function_boundary") return state.facts?.crosses_function_boundary === true;
@@ -250,6 +265,13 @@ async function planOrca(
     const next: Next = { kind: "stop", reason: picked.stop, needs_user: [picked.stop] };
     state.next = next;
     return next;
+  }
+  if (specNode.role === "architect") {
+    if ((state.budget.astra_left ?? 0) <= 0) {
+      return nextDecide(state, "human:astra-budget", "Astra 预算用完，改为人工裁决", ["retry", "stop"], true);
+    }
+    state.budget.astra_left -= 1;
+    state.astra_calls += 1;
   }
   if (hasLiveWriter(specNode, node) && node.dispatch_key) {
     return requestWriterStop(state, node, node.dispatch_key, "retry", now);
@@ -509,6 +531,7 @@ function succeed(state: GraphRunState, spec: GraphSpec, nodeId: string, now: num
 function failNode(state: GraphRunState, spec: GraphSpec, nodeId: string, now: number, fingerprint?: string): void {
   const specNode = spec.nodes.find((n) => n.id === nodeId);
   const node = ensureNode(state, nodeId);
+  const repeats = fingerprint ? bumpFingerprint(state, nodeId, fingerprint) : 0;
   if (specNode && hasLiveWriter(specNode, node) && node.dispatch_key) {
     requestWriterStop(state, node, node.dispatch_key, "fail", now, fingerprint);
     return;
@@ -518,10 +541,7 @@ function failNode(state: GraphRunState, spec: GraphSpec, nodeId: string, now: nu
   node.ended_at = now;
   node.consecutive_failures = (node.consecutive_failures ?? 0) + 1;
   let on: EdgeOn = "fail";
-  if (fingerprint) {
-    const n = bumpFingerprint(state, nodeId, fingerprint);
-    if (n >= 2 && edgeOn(spec, nodeId, "fingerprint_repeat")) on = "fingerprint_repeat";
-  }
+  if (repeats >= 2 && edgeOn(spec, nodeId, "fingerprint_repeat")) on = "fingerprint_repeat";
   const to = edgeOn(spec, nodeId, on) ?? edgeOn(spec, nodeId, "fail");
   if (to) state.cursor = to;
   else state.cursor = spec.exits.includes("stopped") ? "stopped" : state.cursor;
@@ -919,8 +939,30 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   if (event.report) node.last_report = { ...event.report, fresh: true };
   if (event.verdict) state.verdict = event.verdict;
   const status = event.inline_report?.status ?? event.report?.status ?? "done";
+  const files = event.report?.files_changed ?? [];
+  if (files.length) {
+    if (!state.facts) state.facts = {};
+    if (crossesFunctionBoundary(files)) state.facts.crosses_function_boundary = true;
+    if (files.some((f) => !shouldSkipFinalReview([f]))) state.facts.skip_final_review = false;
+    else if (shouldSkipFinalReview(files)) state.facts.skip_final_review = true;
+  }
+  if (id === ASTRA_CONSULT_ID && state.pending_astra_gate && (status === "done" || status === "partial")) {
+    const options = state.pending_astra_gate.options;
+    const raw = `${event.report?.summary ?? ""} ${event.report?.findings?.join(" ") ?? ""}`;
+    const choice = options.find((o) => raw.includes(o)) ?? options[0];
+    const gateId = state.pending_astra_gate.gate_id;
+    node.status = "succeeded";
+    node.dispatch_state = "terminal";
+    node.ended_at = now;
+    const to = choice ? edgeOn(spec, gateId, `gate:${choice}`) : undefined;
+    state.cursor = to ?? gateId;
+    const gateNode = ensureNode(state, gateId);
+    gateNode.status = "succeeded";
+    state.pending_astra_gate = undefined;
+    return;
+  }
   if (status === "done" || status === "partial") succeed(state, spec, id, now);
-  else failNode(state, spec, id, now, event.inline_report?.fingerprint);
+  else failNode(state, spec, id, now, event.inline_report?.fingerprint ?? failureFingerprint({ findings: event.report?.findings, ran: event.report?.ran, summary: event.report?.summary }));
 }
 
 async function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceEvent, gates: GateHooks | undefined, now: number): Promise<void> {
@@ -930,6 +972,15 @@ async function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceE
     const on = event.on ?? "ok";
     if (on === "fail") failNode(state, spec, id, now);
     else succeed(state, spec, id, now, on);
+    return;
+  }
+  if (event.type === "scope_fail") {
+    const found = findNodeByDispatchKey(state, event.dispatch_key);
+    if (found) {
+      found.node.writer_stopped = true;
+      found.node.dispatch_state = "terminal";
+      failNode(state, spec, found.id, now, "scope_violation");
+    }
     return;
   }
   if (event.phase === "setup") return applySetup(state, spec, event, now);
@@ -1085,6 +1136,10 @@ async function enter(
   if (state.status === "await_sol" && state.next?.kind === "decide") return state.next;
 
   const id = state.cursor;
+  if (id === ASTRA_CONSULT_ID) {
+    if (!state.team?.ready) return nextSetup(state);
+    return planOrca(state, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
+  }
   const specNode = nodeById(spec, id);
   const node = ensureNode(state, id);
 
@@ -1129,6 +1184,10 @@ async function enter(
         gateName === "accept" ? ["adopt", "revise", "ask_user"] :
         gateName === "arena" ? ["single", "arena"] :
         ["advance", "stay"];
+      if (state.pending_astra_gate?.gate_id === id) {
+        state.cursor = ASTRA_CONSULT_ID;
+        return enter(state, spec, opts, now, depth + 1);
+      }
       return nextDecide(state, id, `门 ${id}`, options, false);
     }
     const to = edgeOn(spec, id, `gate:${value}`);

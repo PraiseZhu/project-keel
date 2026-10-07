@@ -432,6 +432,19 @@ describe("fairness waits only for runs asking in the current send window", () =>
     expect(calls).toEqual(["sess-a", "sess-a"]);
   });
 
+  it("an interrupted turn removes the waiter so it cannot hold the window", async () => {
+    const { clock, c, a, b, calls } = setup(false);
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    clock.t += 1;
+    expect((await c.maybeNudge(b)).reason).toBe("interval");
+    expect((await c.onTurnEnd(b, { endReason: "interrupted" })).action).toBe("pause");
+    for (let i = 0; i < 3; i++) {
+      clock.t += 30_000;
+      await c.maybeNudge(a);
+    }
+    expect(calls.filter((x) => x === "sess-a").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("a paused waiter gives up its turn instead of blocking the window", async () => {
     const { clock, c, a, b, calls } = setup(false);
     expect((await c.maybeNudge(a)).action).toBe("continue");

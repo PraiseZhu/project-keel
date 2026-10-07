@@ -273,7 +273,10 @@ export class NudgeController {
     const intervalMs = this.config.intervalMs ?? NUDGE_INTERVAL_MS;
     const maxStreak = this.config.maxStreak ?? MAX_NUDGE_STREAK;
     const judged = shouldNudge(run, now, { idleMs, ...(opts.turn ? { turn: opts.turn } : {}) });
-    if (judged.pause) return { action: "pause", reason: judged.reason, pause: true };
+    if (judged.pause) {
+      this.bgPending.delete(run.run_id);
+      return { action: "pause", reason: judged.reason, pause: true };
+    }
     if (!judged.nudge) {
       this.bgPending.delete(run.run_id);
       return { action: "skip", reason: judged.reason };

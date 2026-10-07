@@ -5,7 +5,7 @@ import { loadRuntimeConfig } from "../config.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
 import { isInvestigationDone } from "../graph/done.ts";
-import { GATES } from "../graph/gates.ts";
+import { GATES, type Evidence } from "../graph/gates.ts";
 import { classifyRetry, createRun, advance, type AdvanceEvent, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
@@ -22,6 +22,41 @@ import { keywordRoute } from "./pstack.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
 const gateAnswers = new Map<string, Map<string, string>>();
+const lastAdvanceEvidence = new Map<string, Evidence>();
+
+export function isFailFirstNode(nodeId: string): boolean {
+  const id = nodeId.toLowerCase();
+  return id === "reproduce" || id.includes("fail-first") || id.includes("failing-test");
+}
+
+/**
+ * G-advance exit_code is acceptance, not the raw command status.
+ * Fail-first / reproduce: expected test failure → 0; unexpected pass → 1.
+ */
+export function acceptanceExitCode(nodeId: string, ran: readonly { cmd: string; exit_code: number }[]): number | undefined {
+  if (!ran.length) return undefined;
+  const anyFail = ran.some((r) => r.exit_code !== 0);
+  if (isFailFirstNode(nodeId)) return anyFail ? 0 : 1;
+  const last = ran[ran.length - 1]!;
+  return anyFail ? last.exit_code || 1 : 0;
+}
+
+export function advanceEvidenceForNode(input: {
+  nodeId: string;
+  ran?: readonly { cmd: string; exit_code: number }[];
+  head_matches?: boolean;
+  new_report?: boolean;
+  new_commit?: boolean;
+}): Evidence {
+  const ran = input.ran ?? [];
+  const code = acceptanceExitCode(input.nodeId, ran);
+  return {
+    evidence_present: ran.length > 0,
+    ...(input.head_matches !== undefined ? { head_matches: input.head_matches } : {}),
+    ...(code !== undefined ? { exit_code: code } : {}),
+    new_evidence: input.new_report === true || input.new_commit === true,
+  };
+}
 
 export function normalizeListWorkers(raw: unknown): NonNullable<ReconcileQueries["list_workers"]> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, complete: false };
@@ -146,6 +181,12 @@ function makeGates(runId: string): GateHooks {
     advance: ({ node }) => {
       const a = lookup(node);
       if (a === "advance" || a === "stay") return a;
+      const ev = lastAdvanceEvidence.get(runId);
+      if (!ev) return undefined;
+      const v = GATES["G-advance"].deterministic(ev);
+      // Consumed: a later look without a new report/commit is not new_evidence.
+      lastAdvanceEvidence.set(runId, { ...ev, new_evidence: false });
+      if (v === "advance" || v === "stay") return v;
       return undefined;
     },
     accept: ({ node }) => {
@@ -301,6 +342,22 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         const scope = checkScope(changed.files ?? [], allow);
         if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
       }
+      let headMatches: boolean | undefined;
+      if (parsed.head_sha) {
+        try {
+          const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: worktree });
+          if (typeof stGit.head === "string" && stGit.head) headMatches = stGit.head === parsed.head_sha;
+        } catch {
+          headMatches = undefined;
+        }
+      }
+      lastAdvanceEvidence.set(runId, advanceEvidenceForNode({
+        nodeId: parsedKey.nodeId,
+        ran: parsed.ran,
+        ...(headMatches !== undefined ? { head_matches: headMatches } : {}),
+        new_report: true,
+        new_commit: parsed.files_changed.length > 0,
+      }));
     }
     if (st?.task_type === "investigation") {
       const startFp = completeStartState(st.start_state);

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { TOOLS } from "../src/main/dispatch.ts";
 import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
-import { mapCreateWorkerReceipt, normalizeListWorkers, verdictReportFromNode } from "../src/main/tools/keel.ts";
+import { GATES } from "../src/main/graph/gates.ts";
+import { advanceEvidenceForNode, mapCreateWorkerReceipt, normalizeListWorkers, verdictReportFromNode } from "../src/main/tools/keel.ts";
 import { parseNodeReport } from "../src/main/graph/report.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 import { readFileSync } from "node:fs";
@@ -176,6 +177,52 @@ describe("report / status / gate", () => {
     });
     expect(r).toMatchObject({ ok: false, errorCode: "FINGERPRINT_UNKNOWN" });
     expect([...h.files.keys()].some((k) => k.endsWith("graph-state.json"))).toBe(false);
+  });
+});
+
+describe("G-advance evidence from reproduce", () => {
+  it("expected failing tests advance; unexpected pass stays", () => {
+    const expectedFail = advanceEvidenceForNode({
+      nodeId: "reproduce",
+      ran: [{ cmd: "npm test", exit_code: 1 }],
+      head_matches: true,
+      new_report: true,
+    });
+    expect(expectedFail.exit_code).toBe(0);
+    expect(expectedFail.new_evidence).toBe(true);
+    expect(GATES["G-advance"].deterministic(expectedFail)).toBe("advance");
+
+    const unexpectedPass = advanceEvidenceForNode({
+      nodeId: "reproduce",
+      ran: [{ cmd: "npm test", exit_code: 0 }],
+      head_matches: true,
+      new_report: true,
+    });
+    expect(unexpectedPass.exit_code).toBe(1);
+    expect(GATES["G-advance"].deterministic(unexpectedPass)).toBe("stay");
+    expect(GATES["G-advance"].deterministic({ ...unexpectedPass, new_evidence: true })).toBe("stay");
+  });
+  it("other nodes keep the command exit code", () => {
+    const red = advanceEvidenceForNode({
+      nodeId: "implement",
+      ran: [{ cmd: "npm test", exit_code: 1 }],
+      head_matches: true,
+      new_report: true,
+    });
+    expect(red.exit_code).toBe(1);
+    expect(GATES["G-advance"].deterministic(red)).toBe("stay");
+    const green = advanceEvidenceForNode({
+      nodeId: "implement",
+      ran: [{ cmd: "npm test", exit_code: 0 }],
+      head_matches: true,
+      new_report: true,
+    });
+    expect(green.exit_code).toBe(0);
+    expect(GATES["G-advance"].deterministic(green)).toBe("advance");
+  });
+  it("new_evidence is only true for a new report or new commit", () => {
+    const stale = advanceEvidenceForNode({ nodeId: "reproduce", ran: [{ cmd: "npm test", exit_code: 1 }], head_matches: true });
+    expect(stale.new_evidence).toBe(false);
   });
 });
 

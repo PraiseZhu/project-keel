@@ -311,6 +311,17 @@ export function makeE2eHost(world: World): FakeHost {
         return { ok: true, result: { repo: PR_REPO, number: PR_NUMBER } };
       }
       if (method === "pr/snapshot") return { ok: true, result: prSnapshot(world) };
+      if (method === "pr/ready") {
+        return {
+          ok: true,
+          result: {
+            ready: true,
+            executed: true,
+            gate: { passed: true, missing: [], required: [], sources: [] },
+            head_sha: world.prHead,
+          },
+        };
+      }
       if (method === "pr/threads") return { ok: true, result: { threads: [] } };
       if (method === "orch/run") {
         try {
@@ -477,15 +488,23 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
     if (next.kind === "wait") {
       const waitCall = next.call;
       const extra: Record<string, unknown> = {};
-      if (waitCall.tool === "pr_open") {
+      if (waitCall.tool === "pr_open" || waitCall.tool === "pr_ready") {
         extra.authorization_source = "用户 2026-10-04：提交 PR";
         extra.run_id = runId;
+      }
+      if (waitCall.tool === "pr_ready") {
+        extra.review_entry = {
+          head_sha: world.prHead,
+          checked_at: new Date(host.now()).toISOString(),
+          result: "pass",
+          source: "e2e required-checks",
+        };
       }
       last = await call(c, waitCall.tool, { ...waitCall.args, ...extra });
       if (!last.ok) {
         return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
       }
-      if (waitCall.tool === "pr_open") {
+      if (waitCall.tool === "pr_open" || waitCall.tool === "pr_ready") {
         last = await call(c, "keel_wait", { run_id: runId, max_minutes: 15 });
         if (!last.ok) {
           return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };

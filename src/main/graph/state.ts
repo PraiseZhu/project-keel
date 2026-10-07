@@ -197,7 +197,8 @@ export type Next =
       kind: "wait";
       call:
         | { tool: "keel_wait"; args: { run_id: string; max_minutes?: number } }
-        | { tool: "pr_open"; args: Record<string, unknown> };
+        | { tool: "pr_open"; args: Record<string, unknown> }
+        | { tool: "pr_ready"; args: Record<string, unknown> };
       note?: string;
       after?: string;
     }

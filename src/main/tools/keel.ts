@@ -431,6 +431,28 @@ export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDo
     if (wait) state.cursor = wait.id;
     return { kind: "wait", call: { tool: "keel_wait", args: { run_id: state.run_id, max_minutes: 15 } } };
   }
+  if (result.missing.some((m) => /pr_status 是 handoff/.test(m))) {
+    return {
+      kind: "wait",
+      call: {
+        tool: "pr_ready",
+        args: {
+          run_id: state.run_id,
+          ...(ghRepoOf(state) ? { repo: ghRepoOf(state) } : {}),
+          ...(state.pr != null ? { pr: state.pr } : {}),
+          ...(state.worktree ? { repo_dir: state.worktree } : {}),
+          authorization_source: "",
+          review_entry: {
+            head_sha: state.verdict?.head ?? "",
+            checked_at: "",
+            result: "pass",
+            source: "",
+          },
+        },
+      },
+      note: "交接车道的 done 门是 handoff，需要 pr_ready 收口，handoff 本身不算完成。",
+    };
+  }
   return { kind: "decide", gate_id: "done", question: `尚未完成：${result.missing.join("；")}`, options: ["wait", "stop"], context: { missing: result.missing } };
 }
 
@@ -1203,6 +1225,12 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   if (TOOL_PASS_NODES.has(cursor)) {
     ctx.host.progress(ctx.callId);
     const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
+  if (cursor === "done") {
+    ctx.host.progress(ctx.callId);
+    const { next } = await step(ctx, runId, { type: "tick" });
     return { run_id: runId, next, waited_seconds: waited() };
   }
 

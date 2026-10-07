@@ -16,14 +16,16 @@ function nodeOk(method: string) {
 describe("G-route entry with direction_gate=astra", () => {
   it("consults Architect and consumes astra budget instead of folding to await_sol", async () => {
     const h = fakeHost({ fetch: typesafeAnswering(0.2), node: nodeOk });
-    const started: { ok: boolean; result?: { run_id: string; next: { kind: string } } } = await runTool(makeContext(h, "c1", profile), "keel_run", {
+    const started = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "重构登录功能",
       repo_dir: "/repo",
       lead: "claude-code",
     });
     expect(started.ok).toBe(true);
-    const st = JSON.parse(h.files.get(graphStatePath(started.result!.run_id))!);
+    if (!started.ok) return;
+    const result = started.result as { run_id: string; next: { kind: string } };
+    const st = JSON.parse(h.files.get(graphStatePath(result.run_id))!);
     expect(st.astra_calls ?? 0).toBeGreaterThan(0);
-    expect(started.result!.next.kind).not.toBe("decide");
+    expect(result.next.kind).not.toBe("decide");
   });
 });

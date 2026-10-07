@@ -1378,7 +1378,7 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
       applyTimeouts(state, spec, now, event);
     }
     invalidateStaleTeam(state, spec, opts);
-    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host, leadSessionId: opts.leadSessionId, pluginBootId: opts.pluginBootId }, now);
+    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host }, now);
     state.next = next;
     state.updated_at = now;
     return { next, state };

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
-import { LANE_PRESETS } from "../../src/shared/types.ts";
+import { LANE_PRESETS, type KeelProfile } from "../../src/shared/types.ts";
 import { resolveLane } from "../../src/shared/lanes.ts";
 import { runTool } from "../../src/main/dispatch.ts";
 import { makeContext } from "../../src/main/context.ts";
@@ -19,12 +19,15 @@ describe("AUDIT-V2-01 runtime lanes", () => {
     host.node = async (method, params: Record<string, unknown>, options) => {
       const out = await originalNode(method, params, options);
       if (method === "pr/snapshot" && out.ok) {
-        const lane = resolveLane(params.profile as { lanes: typeof KV_LANES }, "acme/app");
-        out.result = {
-          ...out.result,
-          preset: lane.rule.preset,
-          rule: lane.rule,
-          verification: lane.match?.verifyCheck ? { check: lane.match.verifyCheck, state: "missing" } : null,
+        const lane = resolveLane(params.profile as KeelProfile, "acme/app");
+        return {
+          ok: true as const,
+          result: {
+            ...(out.result as object),
+            preset: lane.rule.preset,
+            rule: lane.rule,
+            verification: lane.match?.verifyCheck ? { check: lane.match.verifyCheck, state: "missing" } : null,
+          },
         };
       }
       return out;
@@ -47,8 +50,8 @@ describe("AUDIT-V2-01 runtime lanes", () => {
     host.node = async (method, params: Record<string, unknown>, options) => {
       const out = await originalNode(method, params, options);
       if (method === "pr/snapshot" && out.ok) {
-        const lane = resolveLane(params.profile as { lanes: [] }, "acme/app");
-        out.result = { ...out.result, preset: lane.rule.preset, rule: lane.rule };
+        const lane = resolveLane(params.profile as KeelProfile, "acme/app");
+        return { ok: true as const, result: { ...(out.result as object), preset: lane.rule.preset, rule: lane.rule } };
       }
       return out;
     };

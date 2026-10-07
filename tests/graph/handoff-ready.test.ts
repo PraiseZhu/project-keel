@@ -12,11 +12,14 @@ describe("gated-handoff done gate", () => {
     host.node = async (method, params, opts) => {
       const response = await original(method, params, opts);
       if (method === "pr/snapshot" && response.ok) {
-        response.result = {
-          ...response.result,
-          preset: "gated-handoff",
-          rule: LANE_PRESETS["gated-handoff"],
-          gate: { applies: true, required: ["verify"], passed: ["verify"], failing: [], pending: [], missing: [], ok: true, sources: ["test"] },
+        return {
+          ok: true as const,
+          result: {
+            ...(response.result as object),
+            preset: "gated-handoff",
+            rule: LANE_PRESETS["gated-handoff"],
+            gate: { applies: true, required: ["verify"], passed: ["verify"], failing: [], pending: [], missing: [], ok: true, sources: ["test"] },
+          },
         };
       }
       return response;

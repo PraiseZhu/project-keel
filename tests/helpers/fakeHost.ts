@@ -1,7 +1,10 @@
-import type { FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
+import type { AgentModel, FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
 
 export interface FakeHost extends Host {
   files: Map<string, string>;
+  kv: Record<string, unknown>;
+  agentModelList: AgentModel[];
+  kvReads: number;
   fetches: { url: string; body?: string }[];
   nodeCalls: { method: string; params: unknown }[];
   confirms: string[];
@@ -14,11 +17,16 @@ export function fakeHost(opts: {
   fetch?: (url: string, body?: string) => FetchResponse | Promise<FetchResponse>;
   node?: (method: string, params: any) => NodeResponse | Promise<NodeResponse>;
   confirm?: boolean;
+  kv?: Record<string, unknown>;
+  agentModels?: readonly AgentModel[];
 } = {}): FakeHost {
   const files = new Map<string, string>();
   const clock = { t: Date.UTC(2026, 9, 4, 12, 0, 0) };
   const h: FakeHost = {
     files, clock,
+    kv: { ...(opts.kv ?? {}) },
+    agentModelList: [...(opts.agentModels ?? [])],
+    kvReads: 0,
     fetches: [], nodeCalls: [], confirms: [], broadcasts: [], progressed: [],
     async fetch(req) {
       h.fetches.push({ url: req.url, ...(req.body ? { body: req.body } : {}) });
@@ -45,6 +53,13 @@ export function fakeHost(opts: {
     broadcast(m) { h.broadcasts.push(m); },
     now: () => clock.t,
     async sleep(ms) { clock.t += ms; },
+    async kvGet() {
+      h.kvReads += 1;
+      return { ...h.kv };
+    },
+    async agentModels() {
+      return { ok: true, status: 200, models: h.agentModelList };
+    },
   };
   return h;
 }

@@ -2,7 +2,7 @@
 
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
-import type { Host } from "./host.ts";
+import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
 
@@ -20,6 +20,21 @@ const host: Host = {
   requestSchedule: (req) => cindy.agent.requestSchedule(req),
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  async kvGet() {
+    const r = await fetch("/kv");
+    const data: unknown = await r.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+    return data as Record<string, unknown>;
+  },
+  async agentModels() {
+    const r = await fetch("/agent-models");
+    if (!r.ok) return { ok: false, status: r.status, models: [] };
+    const data: unknown = await r.json();
+    const models = data && typeof data === "object" && Array.isArray((data as { models?: unknown }).models)
+      ? (data as { models: AgentModel[] }).models
+      : [];
+    return { ok: true, status: r.status, models };
+  },
 };
 
 cindy.onHostMessage(async (msg: any) => {

@@ -107,5 +107,13 @@ describe("git changed-files guards the write scope", () => {
     expect(out.result).toBeUndefined();
     expect(out.error).toBeTruthy();
   });
-});
 
+  it("a backslash in a POSIX file name is not a directory separator", async () => {
+    const r = repo();
+    writeFileSync(join(r.dir, "src\\outside.txt"), "x\n");
+    const out = await dispatch("git/changed-files", { repo_dir: r.dir });
+    const files = (out.result as { files: string[] }).files;
+    expect(files).toEqual(["src\\outside.txt"]);
+    expect(checkScope(files, ["src/**"]).ok).toBe(false);
+  });
+});

@@ -83,6 +83,8 @@ describe("mapOrchLevel", () => {
       'echo "nothing && npx vitest run"',
       "echo 'x && npm test'",
       "npx --no-install vitest list --no-cache tests/graph/done.test.ts",
+      "npx --no-install vitest --no-cache --configLoader runner list tests/graph/done.test.ts",
+      "npx vitest --run=false bench",
       "npx vitest bench",
       "npx playwright test --list",
       "go test -list . ./...",

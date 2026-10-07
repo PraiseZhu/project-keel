@@ -75,7 +75,8 @@ function classifySimple(tokens: string[]): TestKind | null {
   if (exe === "npx" || exe === "bunx") return classifySimple(rest.filter((a, i) => !(i === 0 && a.startsWith("-"))));
   if (exe === "uv" && args[0] === "run") return classifySimple(rest.slice(1));
   if (PM.has(exe) && (args[0] === "exec" || args[0] === "dlx")) return classifySimple(rest.slice(args[1] === "--" ? 2 : 1));
-  if (exe === "vitest" && args[0] && !args[0].startsWith("-") && VITEST_NON_RUN.has(args[0])) return null;
+  // Global flags may come before the subcommand (`vitest --no-cache list`), so check every word.
+  if (exe === "vitest" && args.some((a) => VITEST_NON_RUN.has(a))) return null;
   if (RUNNERS.has(exe)) return "unit";
   if ((exe === "python" || exe === "python3") && args[0] === "-m" && args[1] === "pytest") return "unit";
   if ((exe === "go" || exe === "cargo") && args[0] === "test") return "unit";

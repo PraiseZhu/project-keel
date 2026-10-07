@@ -1,7 +1,8 @@
 // main.js entry: wires the `cindy` sandbox global into Host and dispatches tool calls.
 
 import { invalidateRuntimeConfig } from "./config.ts";
-import { makeContext } from "./context.ts";
+import { BUILT_PROFILE, makeContext } from "./context.ts";
+import { DEFAULT_THRESHOLDS } from "../shared/types.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
 import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleTurnEndMessage, markPendingCard, tickNudgeClockFor, type HostNudgeRun } from "./host-bridge.ts";
@@ -75,7 +76,10 @@ const nudge = new NudgeController(
 
 cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "tool-call") {
-    const out = await runTool(makeContext(host, msg.callId), msg.tool, msg.args ?? {});
+    const sessionId = typeof msg.session_context?.session_id === "string" && msg.session_context.session_id
+      ? msg.session_context.session_id as string
+      : undefined;
+    const out = await runTool(makeContext(host, msg.callId, BUILT_PROFILE, DEFAULT_THRESHOLDS, sessionId), msg.tool, msg.args ?? {});
     if (out.ok) {
       await flushNudgeCardOnToolCall({
         host,

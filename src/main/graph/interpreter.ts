@@ -132,6 +132,13 @@ export interface AdvanceOpts {
   config?: RuntimeConfig;
   models?: readonly AgentModel[];
   doneCheck?: (state: GraphRunState) => DoneCheckResult | Promise<DoneCheckResult>;
+  leadSessionId?: string;
+  pluginBootId?: string;
+}
+
+let PLUGIN_BOOT_ID = `boot-${Date.now().toString(36)}`;
+export function pluginBootId(): string {
+  return PLUGIN_BOOT_ID;
 }
 
 export interface AdvanceResult {
@@ -604,7 +611,7 @@ function applySetup(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   if (state.team?.ready && hasInflightWriter(state, spec)) {
     state.prior_teams = [...(state.prior_teams ?? []), state.team];
   }
-  state.team = { ready: true, mode, team_id: teamId, lead_session_id: session, checked_at: now };
+  state.team = { ready: true, mode, team_id: teamId, lead_session_id: session, checked_at: now, plugin_boot_id: pluginBootId() };
   state.sol_session_id = session;
   state.status = "running";
 }
@@ -1243,6 +1250,20 @@ async function enter(
   return nextStop(state, `未知节点 kind ${specNode.kind}`);
 }
 
+function invalidateStaleTeam(state: GraphRunState, spec: GraphSpec, opts: AdvanceOpts): void {
+  if (!state.team?.ready) return;
+  const session = opts.leadSessionId;
+  const sessionMismatch = Boolean(session && state.team.lead_session_id && session !== state.team.lead_session_id);
+  const bootId = opts.pluginBootId ?? pluginBootId();
+  const bootMismatch = Boolean(state.team.plugin_boot_id && state.team.plugin_boot_id !== bootId);
+  if (!sessionMismatch && !bootMismatch) return;
+  if (hasInflightWriter(state, spec)) {
+    state.prior_teams = [...(state.prior_teams ?? []), state.team];
+  }
+  state.team = { ready: false };
+  state.next = undefined;
+}
+
 function clearStaleNext(state: GraphRunState): void {
   const n = state.next;
   if (!n) return;
@@ -1354,7 +1375,8 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     if (state.status !== "stopped" && state.status !== "done" && state.status !== "waiting_human" && state.status !== "await_sol") {
       applyTimeouts(state, spec, now, event);
     }
-    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host }, now);
+    invalidateStaleTeam(state, spec, opts);
+    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host, leadSessionId: opts.leadSessionId, pluginBootId: opts.pluginBootId }, now);
     state.next = next;
     state.updated_at = now;
     return { next, state };

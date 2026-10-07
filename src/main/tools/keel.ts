@@ -802,6 +802,7 @@ async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promi
   const opts: AdvanceOpts = {
     gates: makeGates(ctx, runId, graph, profile?.direction_gate === "astra" ? "astra" : "lead"),
     doneCheck: (state) => runDoneCheck(ctx, state),
+    ...(ctx.sessionId ? { leadSessionId: ctx.sessionId } : {}),
   };
   let out = await advance(ctx.host, runId, event, opts);
   out = await drainPluginOps(ctx, runId, out, opts);

@@ -114,6 +114,8 @@ export interface TeamState {
   mode?: string;
   ready: boolean;
   checked_at?: number;
+  /** In-memory plugin generation that last marked this team ready. */
+  plugin_boot_id?: string;
 }
 
 export interface StartState {

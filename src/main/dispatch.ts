@@ -46,6 +46,7 @@ export async function runTool(ctx: ToolContext, tool: string, args: Record<strin
       callId: ctx.callId,
       profile: { ...ctx.profile, lanes: cfg.lanes },
       thresholds: cfg.thresholds,
+      ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
     };
     return { ok: true, result: await h(inner, args ?? {}) };
   } catch (e) {

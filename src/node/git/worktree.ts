@@ -196,5 +196,7 @@ export async function gitState(repoDir: string) {
   const head = (await gitRaw(["rev-parse", "HEAD"], { cwd: repoDir })).stdout.trim();
   const up = await gitRaw(["rev-list", "--left-right", "--count", "@{u}...HEAD"], { cwd: repoDir });
   const [behind, ahead] = up.code === 0 ? up.stdout.trim().split(/\s+/).map(Number) : [null, null];
-  return { root, branch, head, dirty: dirtyOf(status), behind, ahead, upstream: up.code === 0 };
+  const rem = await gitRaw(["remote", "get-url", "origin"], { cwd: repoDir });
+  const m = rem.code === 0 ? rem.stdout.trim().match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/) : null;
+  return { root, branch, head, dirty: dirtyOf(status), behind, ahead, upstream: up.code === 0, ...(m ? { gh_repo: `${m[1]}/${m[2]}` } : {}) };
 }

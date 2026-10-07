@@ -107,6 +107,7 @@ export type AdvanceEvent =
       task_id?: string;
       revision?: string;
       task_run_id?: string;
+      start_sha?: string;
     };
 
 export interface AdvanceOpts {
@@ -217,7 +218,7 @@ function pickRoute(
 function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
   return buildBrief(
     { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation" },
-    { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.repo, pr: state.pr, taskType: state.task_type },
+    { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.gh_repo ?? state.repo, pr: state.pr, taskType: state.task_type },
     { attempt, dispatch_key: dispatchKeyValue, ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}) },
   );
 }
@@ -326,7 +327,7 @@ function nextWait(state: GraphRunState): Next {
       call: {
         tool: "pr_open",
         args: {
-          repo_dir: state.worktree ?? state.repo ?? "",
+          repo_dir: state.worktree ?? state.invocation_dir ?? "",
           ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
           ...(state.pr_binding?.base_ref ? { base: state.pr_binding.base_ref } : {}),
         },
@@ -455,7 +456,8 @@ function nextStop(state: GraphRunState, reason: string, needs: string[] = []): N
 
 function nextDone(state: GraphRunState, summary: string): Next {
   state.status = "done";
-  const pr_url = state.pr_binding && state.repo ? `https://github.com/${state.pr_binding.repo}/pull/${state.pr_binding.number}` : undefined;
+  const gh = state.pr_binding?.repo ?? state.gh_repo;
+  const pr_url = state.pr_binding && gh ? `https://github.com/${gh}/pull/${state.pr_binding.number}` : undefined;
   const next: Next = { kind: "done", summary, ...(pr_url ? { pr_url } : {}), ...(state.verdict ? { verdict: state.verdict } : {}) };
   state.next = next;
   return next;
@@ -623,6 +625,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     const fam = family(node.actual_route.model);
     if (fam && !state.author_families.includes(fam)) state.author_families.push(fam);
   }
+  if (event.start_sha) node.start_sha = event.start_sha;
   node.worker_id = event.worker_id ?? node.worker_id;
   node.worker_session_id = event.worker_session_id ?? node.worker_session_id;
   node.queued_message_id = event.queued_message_id ?? node.queued_message_id;
@@ -885,6 +888,46 @@ async function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceE
   if (event.phase === "reconcile") return applyReconcile(state, event, now);
   if (event.phase === "recover") return applyRecover(state, spec, event, gates, now);
   if (event.phase === "final") return applyFinal(state, spec, event, now);
+}
+
+/** Consume a keel_gate answer that matches the current decide next. Leaves computeNext's early-return for unanswered decide. */
+function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): void {
+  if (state.next?.kind !== "decide") return;
+  if (state.status !== "await_sol" && state.status !== "waiting_human") return;
+  const gid = state.next.gate_id;
+  const i = state.sol_decisions.findIndex((d) => d.gate_id === gid);
+  if (i < 0) return;
+  const answer = state.sol_decisions[i]!.answer;
+  state.sol_decisions.splice(i, 1);
+  if (answer === "stop") {
+    nextStop(state, "主控选择停止");
+    return;
+  }
+  state.status = "running";
+  if (gid.startsWith("human:")) {
+    const nodeId = gid.slice("human:".length);
+    if (spec.nodes.some((n) => n.id === nodeId)) {
+      if (answer === "fail") failNode(state, spec, nodeId, now);
+      else succeed(state, spec, nodeId, now);
+    }
+    state.next = undefined;
+    return;
+  }
+  const specNode = spec.nodes.find((n) => n.id === gid);
+  if (specNode?.kind === "gate") {
+    const to = edgeOn(spec, gid, `gate:${answer}`);
+    if (!to) {
+      nextDecide(state, gid, `门 ${gid} 选项 ${answer} 没有边`, [answer], false);
+      return;
+    }
+    const node = ensureNode(state, gid);
+    node.status = "succeeded";
+    node.ended_at = now;
+    state.cursor = to;
+    state.next = undefined;
+    return;
+  }
+  state.next = undefined;
 }
 
 function applyTimeouts(state: GraphRunState, spec: GraphSpec, now: number, event: AdvanceEvent): void {
@@ -1178,6 +1221,7 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     const models = opts.models ?? (await host.agentModels()).models;
     const now = host.now();
     await applyEvent(state, spec, event, opts.gates, now);
+    applyGateAnswer(state, spec, now);
     if (state.status !== "stopped" && state.status !== "done" && state.status !== "waiting_human" && state.status !== "await_sol") {
       applyTimeouts(state, spec, now, event);
     }

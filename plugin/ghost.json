@@ -178,7 +178,7 @@
     },
     {
       "name": "keel_report",
-      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report。写代码节点越域返回 SCOPE_VIOLATION。返回 next。",
+      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report。写代码节点越域返回 SCOPE_VIOLATION。返回 next。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -213,6 +213,22 @@
           },
           "queued_message_id": {
             "type": "string"
+          },
+          "task_id": {
+            "type": "string",
+            "description": "插件任务 create 回执的 task_id，accepted 原样传递。"
+          },
+          "revision": {
+            "type": "string",
+            "description": "插件任务 create 回执的 revision，accepted 原样传递。"
+          },
+          "task_run_id": {
+            "type": "string",
+            "description": "插件任务 send 回执的 task_run_id，accepted 原样传递。"
+          },
+          "get_workspace_info": {
+            "type": "object",
+            "description": "与 list_workers 同时调用的工作区信息；workflow id 作为 team_id。"
           },
           "queries_result": {
             "type": "object"

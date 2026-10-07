@@ -98,6 +98,8 @@ export interface NodeRunState {
   late_reports?: number;
   last_report?: NodeReportSnap;
   team_id?: string;
+  /** HEAD at the start of this write attempt; final scope uses git/changed-files base=start_sha. */
+  start_sha?: string;
   writer_stopped?: boolean;
   pending_after_stop?: "retry" | "escalate" | "stop" | "fail";
   pending_fail_fingerprint?: string;
@@ -217,6 +219,13 @@ export interface GraphRunState {
   start_state?: StartState;
   pr_binding?: PrBinding;
   sol_session_id?: string;
+  /** User-supplied repo_dir. Investigation fingerprints are taken here. */
+  invocation_dir?: string;
+  /** git rev-parse --show-toplevel */
+  repo_root?: string;
+  /** GitHub owner/name. Never a local path. */
+  gh_repo?: string;
+  /** @deprecated prefer gh_repo; kept as owner/name alias. */
   repo?: string;
   worktree?: string;
   pr?: number | string;
@@ -251,6 +260,9 @@ export interface InitRunOpts {
   entry: string;
   goal: string;
   sc?: SuccessCriterion[];
+  invocation_dir?: string;
+  repo_root?: string;
+  gh_repo?: string;
   repo?: string;
   worktree?: string;
   pr?: number | string;
@@ -276,7 +288,10 @@ export function initGraphState(opts: InitRunOpts): GraphRunState {
     start_state: opts.start_state,
     pr_binding: opts.pr_binding,
     sol_session_id: opts.sol_session_id,
-    repo: opts.repo,
+    invocation_dir: opts.invocation_dir,
+    repo_root: opts.repo_root,
+    gh_repo: opts.gh_repo,
+    repo: opts.gh_repo ?? opts.repo,
     worktree: opts.worktree,
     pr: opts.pr,
     goal: opts.goal,

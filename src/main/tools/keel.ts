@@ -119,6 +119,18 @@ export function resolveTeamId(...sources: unknown[]): string | undefined {
   return undefined;
 }
 
+/** owner/name only. A local path must never go to readPrFacts.repo. */
+export function isGhRepo(s: unknown): s is string {
+  return typeof s === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s);
+}
+
+export function ghRepoOf(state: GraphRunState): string | undefined {
+  if (isGhRepo(state.gh_repo)) return state.gh_repo;
+  if (isGhRepo(state.pr_binding?.repo)) return state.pr_binding!.repo;
+  if (isGhRepo(state.repo)) return state.repo;
+  return undefined;
+}
+
 type ContentFp = { head: string; status_digest: string; content_hash: string };
 
 /** Git failure is "fingerprint unknown", never a synthetic hash and never a pass. */
@@ -291,7 +303,7 @@ export function asGraphVerdict(state: GraphRunState): GraphVerdict | null {
   const level = v.level;
   if (level !== "live-ui-verified" && level !== "unit-test-verified" && level !== "type-check-only" && level !== "verifier-blocked" && level !== "verifier-failed") return null;
   return {
-    repo: String(state.repo ?? ""),
+    repo: ghRepoOf(state) ?? "",
     pr: state.pr ?? 0,
     base_ref: v.base_ref ?? "",
     base_sha: v.base_sha,
@@ -365,7 +377,7 @@ export function waitOnFromFacts(facts: PrFacts): Extract<AdvanceEvent, { type: "
 export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Promise<DoneCheckResult> {
   if (state.task_type === "investigation") {
     const start = completeStartState(state.start_state);
-    const current = await readContentFingerprint(ctx, state.repo ?? state.worktree ?? "");
+    const current = await readContentFingerprint(ctx, state.invocation_dir ?? "");
     if (!start || !current) {
       return { ok: false, next: { kind: "decide", gate_id: "done", question: "内容指纹未知，调查未完成。", options: ["retry", "stop"], context: { missing: ["指纹未知"] } } };
     }
@@ -384,7 +396,10 @@ export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Prom
   if (!CHANGE_TYPES.has(state.task_type)) return { ok: true };
   let facts: PrFacts | undefined;
   try {
-    if (state.pr != null) facts = await readPrFacts(ctx, { repo: state.repo, pr: state.pr, repo_dir: state.worktree });
+    if (state.pr != null) {
+      const gh = ghRepoOf(state);
+      facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: state.pr, repo_dir: state.worktree });
+    }
   } catch {
     facts = undefined;
   }
@@ -396,7 +411,11 @@ export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Prom
     return { ok: false, next: { kind: "decide", gate_id: "done", question: `尚未完成：${missing.join("；")}`, options: ["wait", "stop"], context: { missing } } };
   }
   const head = prHead ?? git.head ?? "";
-  const base = state.pr_binding?.base_sha ?? state.verdict?.base_sha ?? "";
+  const baseRef = facts?.snapshot.pr.baseRef;
+  const computed = state.worktree && baseRef
+    ? await node<{ base_sha?: string }>(ctx, "git/base-sha", { repo_dir: state.worktree, base_ref: baseRef }).catch(() => ({ base_sha: undefined as string | undefined }))
+    : { base_sha: undefined as string | undefined };
+  const base = computed.base_sha ?? "";
   let patch: { patch_id: string | null; patch_ok: boolean } = { patch_id: null, patch_ok: false };
   if (state.worktree && base && head) {
     const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: state.worktree, base_sha: base, head_sha: head }).catch(() => ({ ok: false, patch_id: undefined }));
@@ -420,7 +439,7 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
   const entries = runs.map((r) => {
     const s = r as unknown as GraphRunState;
     return {
-      workdir: String(s.worktree || s.repo || ""),
+      workdir: String(s.worktree || s.invocation_dir || s.repo_root || ""),
       run_id: String(s.run_id || ""),
       status: String(s.status || ""),
       current_node: String(s.cursor || ""),
@@ -469,10 +488,12 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
   const spec = PSTACK_GRAPHS[taskType];
   let worktree: string | undefined;
   let start_state: { head?: string; status_digest?: string; content_hash?: string } | undefined;
-  let origin: string | undefined;
+  let repo_root: string | undefined;
+  let gh_repo: string | undefined;
   try {
-    const st = await node<{ root?: string; branch?: string; head?: string }>(ctx, "git/state", { repo_dir: repoDir });
-    origin = st.root;
+    const st = await node<{ root?: string; branch?: string; head?: string; gh_repo?: string }>(ctx, "git/state", { repo_dir: repoDir });
+    repo_root = st.root;
+    if (isGhRepo(st.gh_repo)) gh_repo = st.gh_repo;
     if (taskType === "investigation") {
       const fp = await readContentFingerprint(ctx, repoDir);
       if (!fp) throw new KeelError("FINGERPRINT_UNKNOWN", "起始指纹未知，调查未完成。");
@@ -506,7 +527,10 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     entry: spec.entry,
     goal,
     sc,
-    repo: origin,
+    invocation_dir: repoDir,
+    repo_root,
+    gh_repo,
+    repo: gh_repo,
     worktree,
     pr,
     start_state,
@@ -537,6 +561,21 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const mapped = mapCreateWorkerReceipt(args);
     Object.assign(base, mapped);
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
+    const task_id = str(args.task_id);
+    const revision = str(args.revision);
+    const task_run_id = str(args.task_run_id);
+    if (task_id) base.task_id = task_id;
+    if (revision) base.revision = revision;
+    if (task_run_id) base.task_run_id = task_run_id;
+    const states = await loadGraphStates(ctx.host);
+    const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+    const parsed = typeof base.dispatch_key === "string" ? parseDispatchKey(base.dispatch_key) : undefined;
+    const n = parsed ? st?.nodes[parsed.nodeId] : undefined;
+    const dir = st?.worktree ?? st?.invocation_dir;
+    if (n?.planned_params?.writes && dir) {
+      const git = await node<{ head?: string }>(ctx, "git/state", { repo_dir: dir }).catch(() => ({ head: undefined }));
+      if (git.head) base.start_sha = git.head;
+    }
   }
   if (phase === "reconcile") {
     const raw = args.queries_result && typeof args.queries_result === "object" ? args.queries_result as Record<string, unknown> : args;
@@ -547,6 +586,10 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       ...(raw.readMessages && typeof raw.readMessages === "object" ? { readMessages: raw.readMessages as ReconcileQueries["readMessages"] } : {}),
     };
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
+    const wf = resolveTeamId(args.get_workspace_info, args.workspace_info);
+    if (wf && base.queries_result?.list_workers) {
+      base.queries_result.list_workers = { ...base.queries_result.list_workers, team_id: wf };
+    }
   }
   if (phase === "recover") {
     if (typeof args.action === "string") base.action = args.action as "send_initial" | "diagnose" | "archive" | "verify_stopped";
@@ -557,7 +600,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       if (list.workers) ar.workers = list.workers;
       if (ar.ok === undefined) ar.ok = list.ok;
       if (ar.complete === undefined && list.complete !== undefined) ar.complete = list.complete;
-      const team_id = list.team_id ?? resolveTeamId(ar, args, args.workspace_info, args.get_workspace_info);
+      const team_id = resolveTeamId(args.get_workspace_info, args.workspace_info) ?? list.team_id ?? resolveTeamId(ar, args);
       if (team_id) {
         ar.team_id = team_id;
         ar.list_workers = { ...list, team_id };
@@ -606,7 +649,10 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     if (nodeState?.planned_params?.writes) {
       const allow = nodeState.planned_params.scopeAllow;
       if (!allow?.length) throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
-      const changed = await node<{ files: string[] }>(ctx, "git/changed-files", { repo_dir: worktree ?? st?.worktree ?? "" });
+      const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
+        repo_dir: worktree ?? st?.worktree ?? "",
+        ...(nodeState.start_sha ? { base: nodeState.start_sha } : {}),
+      });
       const scope = checkScope(changed.files ?? [], allow);
       if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
     }
@@ -641,16 +687,24 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
           provider_id: nodeState.planned_params.provider_id,
           effort: nodeState.planned_params.effort,
         };
-        const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: st.worktree }).catch(() => ({ head: undefined }));
-        const headSha = stGit.head;
-        const baseSha = st.pr_binding?.base_sha;
+        const gh = ghRepoOf(st);
+        let facts: PrFacts | undefined;
+        try {
+          if (st.pr != null) facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: st.pr, repo_dir: st.worktree });
+        } catch { facts = undefined; }
+        const headSha = facts?.snapshot.pr.headSha ?? undefined;
+        const baseRef = facts?.snapshot.pr.baseRef ?? st.pr_binding?.base_ref;
+        const computed = baseRef
+          ? await node<{ base_sha?: string }>(ctx, "git/base-sha", { repo_dir: st.worktree, base_ref: baseRef }).catch(() => ({ base_sha: undefined as string | undefined }))
+          : { base_sha: undefined as string | undefined };
+        const baseSha = st.pr_binding?.base_sha ?? computed.base_sha;
         if (baseSha && headSha && route.model) {
           const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: headSha }).catch(() => ({ ok: false, patch_id: undefined }));
           if (pid.ok && pid.patch_id) {
             const gv = buildVerdict({
-              repo: String(st.repo ?? st.pr_binding?.repo ?? ""),
+              repo: gh ?? "",
               pr: st.pr ?? st.pr_binding?.number ?? 0,
-              base_ref: st.pr_binding?.base_ref ?? "",
+              base_ref: baseRef ?? "",
               base_sha: baseSha,
               head_sha: headSha,
               patch_id: pid.patch_id,
@@ -691,6 +745,7 @@ async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: str
   await withRun(ctx.host, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
     s.pr = found.number;
+    s.gh_repo = found.repo;
     s.repo = found.repo;
     s.pr_binding = {
       repo: found.repo,
@@ -743,7 +798,8 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
     let on: ReturnType<typeof waitOnFromFacts> = "wait";
     for (;;) {
       ctx.host.progress(ctx.callId);
-      const facts = await readPrFacts(ctx, { repo: fresh.repo, pr: fresh.pr, repo_dir: fresh.worktree });
+      const gh = ghRepoOf(fresh);
+      const facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: fresh.pr, repo_dir: fresh.worktree });
       on = waitOnFromFacts(facts);
       if (on !== "wait") break;
       if (ctx.host.now() + 15_000 > deadline) return keepWait();
@@ -756,6 +812,15 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   if (TOOL_PASS_NODES.has(cursor)) {
     ctx.host.progress(ctx.callId);
     const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
+  const spec = PSTACK_GRAPHS[(st?.spec_id ?? st?.task_type) as GraphTaskType];
+  const specNode = spec?.nodes.find((n) => n.id === cursor);
+  const inflight = Object.values(st?.nodes ?? {}).some((n) => n.dispatch_state && n.dispatch_state !== "terminal" && n.dispatch_state !== "reported");
+  if (specNode && (specNode.kind === "dispatch" || specNode.kind === "plugin_task") && inflight) {
+    ctx.host.progress(ctx.callId);
+    const { next } = await step(ctx, runId, { type: "tick" });
     return { run_id: runId, next, waited_seconds: waited() };
   }
 

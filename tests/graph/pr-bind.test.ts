@@ -106,7 +106,8 @@ describe("tool nodes that are not CI", () => {
       entry: "report",
       goal: "调查超时原理",
       worktree: "/repo",
-      repo: "/repo",
+      invocation_dir: "/repo",
+      repo_root: "/repo",
       now: h.now(),
     });
     await withRun(h, "run-inv", (raw) => {
@@ -128,6 +129,26 @@ describe("tool nodes that are not CI", () => {
     const st = JSON.parse(h.files.get(graphStatePath("run-inv"))!) as GraphRunState;
     if (r.result.next.kind === "decide") expect(r.result.next.gate_id).toBe("done");
     else expect(st.status).toBe("done");
+  });
+
+  it("report-ready keel_wait wait_done without a PR", async () => {
+    const h = fakeHost({ node: bindNode });
+    const spec = PSTACK_GRAPHS.pr;
+    await createRun(h, {
+      run_id: "run-ready",
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "pr",
+      entry: "report-ready",
+      goal: "报告可合并",
+      worktree: "/repo/.worktrees/x",
+      now: h.now(),
+    });
+    await advance(h, "run-ready", { type: "tick" }, { spec });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_wait", { run_id: "run-ready" });
+    expect(r.ok).toBe(true);
+    expect(r.result.next.kind).not.toBe("wait");
   });
 });
 

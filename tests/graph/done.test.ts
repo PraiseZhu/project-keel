@@ -36,10 +36,10 @@ function input(over: Partial<ChangeGraphDoneInput> = {}): ChangeGraphDoneInput {
 describe("mapOrchLevel", () => {
   it("FAIL is verifier-failed; PASS wording does not upgrade type-check evidence", () => {
     expect(mapOrchLevel({ verdict: "FAIL", status: "failed" })).toBe("verifier-failed");
-    expect(mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "npx tsc --noEmit", exit_code: 0 }] })).toBe("type-check-only");
-    expect(mapOrchLevel({ verdict: "PASS+NOTES", ran: [{ cmd: "npx vitest run", exit_code: 0 }] })).toBe("unit-test-verified");
+    expect(mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "npx tsc --noEmit", exit_code: 0, tests_passed: 3 }] })).toBe("type-check-only");
+    expect(mapOrchLevel({ verdict: "PASS+NOTES", ran: [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 3 }] })).toBe("unit-test-verified");
     expect(
-      mapOrchLevel({ verdict: "PASS", surface: "live-ui", ran: [{ cmd: "npx playwright test", exit_code: 0 }], ui_evidence: ["shots/home.png"] }),
+      mapOrchLevel({ verdict: "PASS", surface: "live-ui", ran: [{ cmd: "npx playwright test", exit_code: 0, tests_passed: 3 }], ui_evidence: ["shots/home.png"] }),
     ).toBe("live-ui-verified");
     expect(mapOrchLevel({ status: "blocked", verdict: "PASS" })).toBe("verifier-blocked");
   });
@@ -47,13 +47,13 @@ describe("mapOrchLevel", () => {
   it("a self-reported surface never raises the level above the evidence", () => {
     expect(mapOrchLevel({ verdict: "PASS", surface: "unit-test" })).toBe("type-check-only");
     expect(mapOrchLevel({ verdict: "PASS", surface: "live-ui" })).toBe("type-check-only");
-    expect(mapOrchLevel({ verdict: "PASS", surface: "live-ui", ran: [{ cmd: "npm test", exit_code: 0 }] })).toBe("unit-test-verified");
+    expect(mapOrchLevel({ verdict: "PASS", surface: "live-ui", ran: [{ cmd: "npm test", exit_code: 0, tests_passed: 3 }] })).toBe("unit-test-verified");
     // Self-report can still lower it.
-    expect(mapOrchLevel({ verdict: "PASS", surface: "type-check", ran: [{ cmd: "npm test", exit_code: 0 }] })).toBe("type-check-only");
+    expect(mapOrchLevel({ verdict: "PASS", surface: "type-check", ran: [{ cmd: "npm test", exit_code: 0, tests_passed: 3 }] })).toBe("type-check-only");
   });
 
   it("command names that are not real test runs give no test evidence", () => {
-    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
     expect(pass("npx tsc --noEmit -p tsconfig.e2e.json")).toBe("type-check-only");
     expect(pass("npx playwright --version")).toBe("type-check-only");
     expect(pass("npx vitest --version")).toBe("type-check-only");
@@ -64,25 +64,29 @@ describe("mapOrchLevel", () => {
   });
 
   it("a runner name as an argument of another command is not a test run", () => {
-    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
     for (const cmd of ["rg -n vitest package.json", "grep -r jest src", "cat node_modules/.bin/vitest", "echo npm test", "ls tests | grep pytest"]) {
       expect(pass(cmd)).toBe("type-check-only");
     }
   });
 
   it("an exit code that may hide a failing test proves nothing", () => {
-    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
     for (const cmd of ["npm test | tail -20", "npm test || true", "npx vitest run; echo done", "bash -c \"$(echo npm test)\""]) {
       expect(pass(cmd)).toBe("type-check-only");
     }
   });
 
   it("quoted text and listing modes are not test runs", () => {
-    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
     for (const cmd of [
       'echo "nothing && npx vitest run"',
       "echo 'x && npm test'",
       "npx --no-install vitest list --no-cache tests/graph/done.test.ts",
+      "npx --no-install vitest --no-cache --configLoader runner list tests/graph/done.test.ts",
+      "npx vitest --run=false bench",
+      "npx vitest -v",
+      "npx jest -h",
       "npx vitest bench",
       "npx playwright test --list",
       "go test -list . ./...",
@@ -94,8 +98,39 @@ describe("mapOrchLevel", () => {
     }
   });
 
+  it("a runner that exits 0 without reporting passed tests is not unit evidence", () => {
+    const honest = (cmd: string, tests_passed?: number) =>
+      mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, ...(tests_passed === undefined ? {} : { tests_passed }) }] });
+    expect(honest("npx vitest run")).toBe("type-check-only");
+    expect(honest("npx vitest run", 0)).toBe("type-check-only");
+    // Listing / version / help / compile modes: an honest verifier reports no passed tests.
+    for (const cmd of [
+      "pytest -V",
+      "pytest --markers",
+      "pytest --setup-plan",
+      "npx mocha --list-reporters",
+      "npx jest --clearCache",
+      "npx jest --showConfig=true",
+      "go test -c ./...",
+      "go test -list=. ./...",
+      "node --test -v",
+      "npm test -v",
+      "npx vitest --help=true",
+    ]) {
+      expect(honest(cmd, 0), cmd).toBe("type-check-only");
+      expect(honest(cmd), cmd).toBe("type-check-only");
+    }
+  });
+
+  it("comments, newlines, background & and redirections are not parsed, so they prove nothing", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
+    for (const cmd of ["echo inspection-only # && npm test", "echo a\nnpm test", "npm test & wait", "npm test > out.txt"]) {
+      expect(pass(cmd), cmd).toBe("type-check-only");
+    }
+  });
+
   it("recognises real invocations through wrappers and && chains", () => {
-    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0 }] });
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
     for (const cmd of [
       "npx vitest run tests/a.test.ts",
       "./node_modules/.bin/vitest run",
@@ -117,10 +152,10 @@ describe("mapOrchLevel", () => {
   it("a failing test run is verifier-failed even with PASS and a claimed surface", () => {
     expect(mapOrchLevel({ verdict: "PASS", surface: "unit-test", ran: [{ cmd: "npx vitest run", exit_code: 1 }] })).toBe("verifier-failed");
     expect(
-      mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "npx vitest run", exit_code: 1 }, { cmd: "npx vitest run", exit_code: 0 }] }),
+      mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "npx vitest run", exit_code: 1 }, { cmd: "npx vitest run", exit_code: 0, tests_passed: 3 }] }),
     ).toBe("verifier-failed");
     // A non-test command that exits non-zero (grep with no match) is not a failure, just no evidence.
-    expect(mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "grep -n foo src", exit_code: 1 }, { cmd: "npm test", exit_code: 0 }] })).toBe("unit-test-verified");
+    expect(mapOrchLevel({ verdict: "PASS", ran: [{ cmd: "grep -n foo src", exit_code: 1 }, { cmd: "npm test", exit_code: 0, tests_passed: 3 }] })).toBe("unit-test-verified");
   });
 
   it("buildVerdict records family from the actual route", () => {
@@ -131,7 +166,7 @@ describe("mapOrchLevel", () => {
       base_sha: "b",
       head_sha: "h",
       patch_id: "p",
-      report: { verdict: "PASS", surface: "unit-test", ran: [{ cmd: "npm test", exit_code: 0 }] },
+      report: { verdict: "PASS", surface: "unit-test", ran: [{ cmd: "npm test", exit_code: 0, tests_passed: 3 }] },
       route: { agent: "codex", model: "openai/gpt-6-luna", provider_id: "xd" },
     });
     expect(v.by_family).toBe(family("openai/gpt-6-luna"));

@@ -1,4 +1,5 @@
 import type { AgentModel, FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
+import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 
 export interface FakeHost extends Host {
   files: Map<string, string>;
@@ -19,6 +20,7 @@ export function fakeHost(opts: {
   confirm?: boolean;
   kv?: Record<string, unknown>;
   agentModels?: readonly AgentModel[];
+  tasks?: CindyTasksApi;
 } = {}): FakeHost {
   const files = new Map<string, string>();
   const clock = { t: Date.UTC(2026, 9, 4, 12, 0, 0) };
@@ -35,8 +37,9 @@ export function fakeHost(opts: {
     },
     async node(method, params) {
       h.nodeCalls.push({ method, params });
-      if (!opts.node) return { ok: false, message: "no node" };
-      return opts.node(method, params);
+      if (opts.node) return opts.node(method, params);
+      if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } };
+      return { ok: false, message: "no node" };
     },
     async fs(req) {
       if (req.op === "write") { files.set(req.path!, req.content ?? ""); return { ok: true }; }
@@ -60,6 +63,7 @@ export function fakeHost(opts: {
     async agentModels() {
       return { ok: true, status: 200, models: h.agentModelList };
     },
+    ...(opts.tasks ? { tasks: opts.tasks } : {}),
   };
   return h;
 }

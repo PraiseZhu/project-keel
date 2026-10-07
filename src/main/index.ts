@@ -4,8 +4,8 @@ import { invalidateRuntimeConfig } from "./config.ts";
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
-import type { CardActionEvent } from "./graph/cards.ts";
-import { NudgeController, NUDGE_INTERVAL_MS, scanNudgeClock, type NudgeRun } from "./graph/nudge.ts";
+import { asNudgeRun, handleCardActionMessage, handleTurnEndMessage, presentNudgeCard, tickNudgeClockFor } from "./host-bridge.ts";
+import { NudgeController, NUDGE_INTERVAL_MS, type NudgeRun } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
@@ -39,27 +39,17 @@ const host: Host = {
       : [];
     return { ok: true, status: r.status, models };
   },
+  ...(cindy.tasks && typeof cindy.tasks.create === "function"
+    ? {
+        tasks: {
+          create: (args: Record<string, unknown>) => cindy.tasks.create(args),
+          send: (args: Record<string, unknown>) => cindy.tasks.send(args),
+          getRun: (args: Record<string, unknown>) => cindy.tasks.getRun(args),
+          readMessages: (args: Record<string, unknown>) => cindy.tasks.readMessages(args),
+        },
+      }
+    : {}),
 };
-
-function asNudgeRun(r: any): NudgeRun | null {
-  if (!r?.run_id) return null;
-  const nodes = Object.entries(r.nodes ?? {}).map(([id, n]: [string, any]) => ({
-    id,
-    dispatch_state: n.dispatch_state,
-    started_at: n.started_at,
-    timebox_ms: n.timebox_ms,
-    queued: Boolean(n.queued_message_id),
-  }));
-  return {
-    run_id: r.run_id,
-    status: r.status ?? "running",
-    version: Number(r.updated_at ?? 0),
-    ...(r.next?.kind ? { next: { kind: r.next.kind } } : {}),
-    ...(typeof r.updated_at === "number" ? { last_keel_call_at: r.updated_at } : {}),
-    associated: false,
-    nodes,
-  };
-}
 
 const nudge = new NudgeController(
   {
@@ -72,7 +62,7 @@ const nudge = new NudgeController(
       return cindy.agent.run(req);
     },
     presentCard(card) {
-      cindy.send({ type: "card", card });
+      presentNudgeCard((m) => cindy.send(m), card);
     },
     notifyUser(message) {
       cindy.send({ type: "notify", message });
@@ -88,27 +78,14 @@ cindy.onHostMessage(async (msg: any) => {
     else cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: out.errorCode, message: out.message });
     return;
   }
-  if (msg.type === "card-action") {
-    const ev: CardActionEvent = {
-      actionId: String(msg.actionId ?? msg.action_id ?? ""),
-      ...(typeof msg.userActionToken === "string" ? { userActionToken: msg.userActionToken } : {}),
-      ...(typeof msg.callId === "string" ? { callId: msg.callId } : {}),
-      ...(typeof msg.run_id === "string" ? { run_id: msg.run_id } : typeof msg.runId === "string" ? { run_id: msg.runId } : {}),
-      ...(typeof msg.cardId === "string" ? { cardId: msg.cardId } : {}),
-    };
-    const r = await nudge.handleCardAction(ev);
-    cindy.send({ type: "card-action-result", ...r });
+  const card = await handleCardActionMessage(nudge, host, msg);
+  if (card.handled) {
+    cindy.send({ type: "card-action-result", ...card.result as object });
     return;
   }
-  if (msg.type === "did-turn-end" || msg.topic === "turn") {
-    const reason = msg.endReason === "interrupted" || msg.endReason === "error" ? msg.endReason : "completed";
-    const runs = await loadGraphStates(host);
-    for (const r of runs) {
-      const nr = asNudgeRun(r);
-      if (nr) await nudge.onTurnEnd(nr, { endReason: reason });
-    }
-    return;
-  }
+  const mapped = (await loadGraphStates(host)).map(asNudgeRun).filter((r): r is NudgeRun => r != null);
+  const turn = await handleTurnEndMessage(nudge, host, mapped, msg);
+  if (turn.handled) return;
   if (msg.type === "nudge-clock") {
     await tickNudgeClock();
   }
@@ -117,7 +94,7 @@ cindy.onHostMessage(async (msg: any) => {
 async function tickNudgeClock(): Promise<void> {
   const runs = await loadGraphStates(host);
   const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => r != null);
-  await scanNudgeClock(nudge, mapped);
+  await tickNudgeClockFor(nudge, host, mapped);
 }
 
 if (typeof setInterval === "function") setInterval(() => { void tickNudgeClock(); }, NUDGE_INTERVAL_MS);

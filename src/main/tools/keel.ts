@@ -7,7 +7,7 @@ import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
 import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult } from "../graph/done.ts";
 import { type Evidence, type GateId } from "../graph/gates.ts";
-import { classifyRetry, createRun, advance, type AdvanceEvent, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
+import { classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
@@ -21,6 +21,7 @@ import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
 import { withRun } from "../store/runs.ts";
 import { PSTACK_GRAPHS, TASK_TYPES, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
+import { invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
 import { keywordRoute } from "./pstack.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
@@ -108,14 +109,50 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
 }
 
-/** start_team receipt first, else get_workspace_info workflow id. */
+function workflowObj(src: Record<string, unknown>): Record<string, unknown> | undefined {
+  // Worker session: get_workspace_info.workflow is null → this source has no team.
+  if ("workflow" in src && (src.workflow === null || src.workflow === undefined)) return undefined;
+  if (src.workflow && typeof src.workflow === "object" && !Array.isArray(src.workflow)) return src.workflow as Record<string, unknown>;
+  return src;
+}
+
+/** start_team receipt first, else get_workspace_info.workflow.workflow_id. workflow:null = no team. */
 export function resolveTeamId(...sources: unknown[]): string | undefined {
   for (const src of sources) {
     if (!src || typeof src !== "object" || Array.isArray(src)) continue;
     const o = src as Record<string, unknown>;
-    const id = str(o.team_id) ?? str(o.teamId) ?? str(o.workflow_id) ?? str(o.workflowId);
+    if ("workflow" in o && (o.workflow === null || o.workflow === undefined)) continue;
+    const wf = workflowObj(o);
+    const id = str(o.team_id) ?? str(o.teamId) ?? str(o.workflow_id) ?? str(o.workflowId)
+      ?? (wf ? str(wf.workflow_id) ?? str(wf.workflowId) ?? str(wf.team_id) : undefined);
     if (id) return id;
   }
+  return undefined;
+}
+
+/** Main-control session may take get_workspace_info.workflow.lead_session_id. */
+export function resolveLeadSessionId(...sources: unknown[]): string | undefined {
+  for (const src of sources) {
+    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+    const o = src as Record<string, unknown>;
+    if ("workflow" in o && (o.workflow === null || o.workflow === undefined)) continue;
+    const wf = workflowObj(o);
+    const id = str(o.session_id) ?? str(o.lead_session_id) ?? str(o.leadSessionId)
+      ?? (wf ? str(wf.lead_session_id) ?? str(wf.leadSessionId) ?? str(wf.session_id) : undefined);
+    if (id) return id;
+  }
+  return undefined;
+}
+
+/** owner/name only. A local path must never go to readPrFacts.repo. */
+export function isGhRepo(s: unknown): s is string {
+  return typeof s === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s);
+}
+
+export function ghRepoOf(state: GraphRunState): string | undefined {
+  if (isGhRepo(state.gh_repo)) return state.gh_repo;
+  if (isGhRepo(state.pr_binding?.repo)) return state.pr_binding!.repo;
+  if (isGhRepo(state.repo)) return state.repo;
   return undefined;
 }
 
@@ -138,14 +175,28 @@ function completeStartState(s: GraphRunState["start_state"]): ContentFp | null {
   return { head: s.head, status_digest: s.status_digest, content_hash: s.content_hash };
 }
 
-/** Copy worker fields only. Do not invent surface or ui_evidence. */
+function ranWithTestsPassed(ran: unknown): NodeReport["ran"] {
+  if (!Array.isArray(ran)) return [];
+  return ran.flatMap((x) => {
+    if (!x || typeof x !== "object") return [];
+    const o = x as { cmd?: unknown; exit_code?: unknown; tests_passed?: unknown };
+    if (typeof o.cmd !== "string" || typeof o.exit_code !== "number") return [];
+    return [{
+      cmd: o.cmd,
+      exit_code: o.exit_code,
+      ...(Number.isInteger(o.tests_passed) && (o.tests_passed as number) >= 0 ? { tests_passed: o.tests_passed as number } : {}),
+    }];
+  });
+}
+
+/** Copy worker fields only. Do not invent surface or ui_evidence. tests_passed stays on ran[]. */
 export function verdictReportFromNode(report: NodeReport): VerdictReport {
   return {
     dispatch_key: report.dispatch_key,
     status: report.status,
     summary: report.summary,
     ...(report.verdict ? { verdict: report.verdict } : {}),
-    ran: report.ran,
+    ran: ranWithTestsPassed(report.ran),
     ...(report.findings ? { findings: report.findings } : {}),
     ...(report.surface ? { surface: report.surface } : {}),
     ...(report.ui_evidence ? { ui_evidence: report.ui_evidence } : {}),
@@ -291,7 +342,7 @@ export function asGraphVerdict(state: GraphRunState): GraphVerdict | null {
   const level = v.level;
   if (level !== "live-ui-verified" && level !== "unit-test-verified" && level !== "type-check-only" && level !== "verifier-blocked" && level !== "verifier-failed") return null;
   return {
-    repo: String(state.repo ?? ""),
+    repo: ghRepoOf(state) ?? "",
     pr: state.pr ?? 0,
     base_ref: v.base_ref ?? "",
     base_sha: v.base_sha,
@@ -365,7 +416,7 @@ export function waitOnFromFacts(facts: PrFacts): Extract<AdvanceEvent, { type: "
 export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Promise<DoneCheckResult> {
   if (state.task_type === "investigation") {
     const start = completeStartState(state.start_state);
-    const current = await readContentFingerprint(ctx, state.repo ?? state.worktree ?? "");
+    const current = await readContentFingerprint(ctx, state.invocation_dir ?? "");
     if (!start || !current) {
       return { ok: false, next: { kind: "decide", gate_id: "done", question: "内容指纹未知，调查未完成。", options: ["retry", "stop"], context: { missing: ["指纹未知"] } } };
     }
@@ -384,7 +435,10 @@ export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Prom
   if (!CHANGE_TYPES.has(state.task_type)) return { ok: true };
   let facts: PrFacts | undefined;
   try {
-    if (state.pr != null) facts = await readPrFacts(ctx, { repo: state.repo, pr: state.pr, repo_dir: state.worktree });
+    if (state.pr != null) {
+      const gh = ghRepoOf(state);
+      facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: state.pr, repo_dir: state.worktree });
+    }
   } catch {
     facts = undefined;
   }
@@ -396,7 +450,11 @@ export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Prom
     return { ok: false, next: { kind: "decide", gate_id: "done", question: `尚未完成：${missing.join("；")}`, options: ["wait", "stop"], context: { missing } } };
   }
   const head = prHead ?? git.head ?? "";
-  const base = state.pr_binding?.base_sha ?? state.verdict?.base_sha ?? "";
+  const baseRef = facts?.snapshot.pr.baseRef;
+  const computed = state.worktree && baseRef
+    ? await node<{ base_sha?: string }>(ctx, "git/base-sha", { repo_dir: state.worktree, base_ref: baseRef }).catch(() => ({ base_sha: undefined as string | undefined }))
+    : { base_sha: undefined as string | undefined };
+  const base = computed.base_sha ?? "";
   let patch: { patch_id: string | null; patch_ok: boolean } = { patch_id: null, patch_ok: false };
   if (state.worktree && base && head) {
     const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: state.worktree, base_sha: base, head_sha: head }).catch(() => ({ ok: false, patch_id: undefined }));
@@ -420,7 +478,7 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
   const entries = runs.map((r) => {
     const s = r as unknown as GraphRunState;
     return {
-      workdir: String(s.worktree || s.repo || ""),
+      workdir: String(s.worktree || s.invocation_dir || s.repo_root || ""),
       run_id: String(s.run_id || ""),
       status: String(s.status || ""),
       current_node: String(s.cursor || ""),
@@ -431,6 +489,87 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
   host.broadcast({ type: "graph-delta", run_id: state.run_id, status: state.status, next: state.next, cursor: state.cursor, at: new Date(host.now()).toISOString() });
 }
 
+function rec(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+function pickId(...vals: unknown[]): string | undefined {
+  for (const v of vals) {
+    if (typeof v === "string" && v) return v;
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  }
+  return undefined;
+}
+
+function pluginReceipt(data: unknown): { task_id?: string; revision?: string; task_run_id?: string } {
+  const o = rec(data);
+  return {
+    ...(pickId(o.task_id, o.taskId) ? { task_id: pickId(o.task_id, o.taskId) } : {}),
+    ...(pickId(o.revision) ? { revision: pickId(o.revision) } : {}),
+    ...(pickId(o.task_run_id, o.taskRunId, o.run_id, o.runId) ? { task_run_id: pickId(o.task_run_id, o.taskRunId, o.run_id, o.runId) } : {}),
+  };
+}
+
+async function drainPluginOps(ctx: ToolContext, runId: string, out: AdvanceResult, opts: AdvanceOpts): Promise<AdvanceResult> {
+  const api = ctx.host.tasks;
+  if (!api) return out;
+  let current = out;
+  for (let i = 0; i < 8; i++) {
+    const n = current.next;
+    if (n.kind === "dispatch" && n.plugin_task) {
+      const input: PluginTaskInput = {
+        phase: n.plugin_task.phase,
+        request_key: n.plugin_task.request_key,
+        body: n.plugin_task.body,
+        task_id: n.plugin_task.task_id,
+        expected_revision: n.plugin_task.expected_revision,
+        text: n.plugin_task.text,
+      };
+      const invoked = await invokeCindyTasks(api, input);
+      const receipt = invoked.ok ? pluginReceipt(invoked.data) : {};
+      current = await advance(ctx.host, runId, {
+        type: "report",
+        phase: "accepted",
+        dispatch_key: n.dispatch_key,
+        ...receipt,
+      }, opts);
+      continue;
+    }
+    if (n.kind === "reconcile" && n.queries.every((q) => q.tool === "getRun" || q.tool === "readMessages")) {
+      const queries_result: ReconcileQueries = {};
+      for (const q of n.queries) {
+        if (q.tool === "getRun") {
+          const invoked = await invokeCindyTasks(api, { phase: "getRun", run_id: q.run_id, request_key: q.request_key, task_run_id: q.run_id });
+          const data = invoked.ok ? rec(invoked.data) : {};
+          const receipt = pluginReceipt(data);
+          queries_result.getRun = {
+            ok: invoked.ok,
+            complete: invoked.ok,
+            ...(receipt.task_run_id ? { run_id: receipt.task_run_id } : {}),
+            ...(receipt.task_id ? { task_id: receipt.task_id } : {}),
+            ...(receipt.revision ? { revision: receipt.revision } : {}),
+            ...(typeof data.status === "string" ? { status: data.status } : {}),
+            ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}),
+          };
+        }
+        if (q.tool === "readMessages") {
+          const invoked = await invokeCindyTasks(api, { phase: "readMessages", task_id: q.task_id });
+          queries_result.readMessages = { ok: invoked.ok, complete: invoked.ok, ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}) };
+        }
+      }
+      current = await advance(ctx.host, runId, {
+        type: "report",
+        phase: "reconcile",
+        dispatch_key: n.dispatch_key,
+        queries_result,
+      }, opts);
+      continue;
+    }
+    break;
+  }
+  return current;
+}
+
 async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promise<{ next: Next; state: GraphRunState }> {
   const cfg = await loadRuntimeConfig(ctx.host);
   const states = await loadGraphStates(ctx.host);
@@ -438,10 +577,12 @@ async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promi
   let profile;
   try { profile = st?.profile_id ? findProfile(cfg.manual, st.profile_id) : undefined; } catch { profile = undefined; }
   const graph = (st?.task_type ?? "bug-fix") as GraphKind;
-  const out = await advance(ctx.host, runId, event, {
+  const opts: AdvanceOpts = {
     gates: makeGates(ctx, runId, graph, profile?.direction_gate === "astra" ? "astra" : "lead"),
     doneCheck: (state) => runDoneCheck(ctx, state),
-  });
+  };
+  let out = await advance(ctx.host, runId, event, opts);
+  out = await drainPluginOps(ctx, runId, out, opts);
   await persistSideEffects(ctx.host, out.state);
   return out;
 }
@@ -469,10 +610,12 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
   const spec = PSTACK_GRAPHS[taskType];
   let worktree: string | undefined;
   let start_state: { head?: string; status_digest?: string; content_hash?: string } | undefined;
-  let origin: string | undefined;
+  let repo_root: string | undefined;
+  let gh_repo: string | undefined;
   try {
-    const st = await node<{ root?: string; branch?: string; head?: string }>(ctx, "git/state", { repo_dir: repoDir });
-    origin = st.root;
+    const st = await node<{ root?: string; branch?: string; head?: string; gh_repo?: string }>(ctx, "git/state", { repo_dir: repoDir });
+    repo_root = st.root;
+    if (isGhRepo(st.gh_repo)) gh_repo = st.gh_repo;
     if (taskType === "investigation") {
       const fp = await readContentFingerprint(ctx, repoDir);
       if (!fp) throw new KeelError("FINGERPRINT_UNKNOWN", "起始指纹未知，调查未完成。");
@@ -506,7 +649,10 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     entry: spec.entry,
     goal,
     sc,
-    repo: origin,
+    invocation_dir: repoDir,
+    repo_root,
+    gh_repo,
+    repo: gh_repo,
     worktree,
     pr,
     start_state,
@@ -528,7 +674,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
   if (phase === "setup") {
     const outcome = args.outcome && typeof args.outcome === "object" ? { ...(args.outcome as Record<string, unknown>) } : { ...args };
     const team_id = resolveTeamId(outcome, args, args.workspace_info, args.get_workspace_info);
-    const session = str(args.session_id) ?? str(outcome.session_id) ?? str(outcome.lead_session_id);
+    const session = resolveLeadSessionId(args, outcome, args.workspace_info, args.get_workspace_info);
     if (team_id) outcome.team_id = team_id;
     if (session) base.session_id = session;
     base.outcome = outcome;
@@ -537,6 +683,12 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const mapped = mapCreateWorkerReceipt(args);
     Object.assign(base, mapped);
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
+    const task_id = str(args.task_id);
+    const revision = str(args.revision);
+    const task_run_id = str(args.task_run_id);
+    if (task_id) base.task_id = task_id;
+    if (revision) base.revision = revision;
+    if (task_run_id) base.task_run_id = task_run_id;
   }
   if (phase === "reconcile") {
     const raw = args.queries_result && typeof args.queries_result === "object" ? args.queries_result as Record<string, unknown> : args;
@@ -547,6 +699,10 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       ...(raw.readMessages && typeof raw.readMessages === "object" ? { readMessages: raw.readMessages as ReconcileQueries["readMessages"] } : {}),
     };
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
+    const wf = resolveTeamId(args.get_workspace_info, args.workspace_info);
+    if (wf && base.queries_result?.list_workers) {
+      base.queries_result.list_workers = { ...base.queries_result.list_workers, team_id: wf };
+    }
   }
   if (phase === "recover") {
     if (typeof args.action === "string") base.action = args.action as "send_initial" | "diagnose" | "archive" | "verify_stopped";
@@ -557,7 +713,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       if (list.workers) ar.workers = list.workers;
       if (ar.ok === undefined) ar.ok = list.ok;
       if (ar.complete === undefined && list.complete !== undefined) ar.complete = list.complete;
-      const team_id = list.team_id ?? resolveTeamId(ar, args, args.workspace_info, args.get_workspace_info);
+      const team_id = resolveTeamId(args.get_workspace_info, args.workspace_info) ?? list.team_id ?? resolveTeamId(ar, args);
       if (team_id) {
         ar.team_id = team_id;
         ar.list_workers = { ...list, team_id };
@@ -588,7 +744,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         status: (typeof inline.status === "string" ? inline.status : "done") as NodeReport["status"],
         summary: typeof inline.summary === "string" ? inline.summary : "",
         files_changed: Array.isArray(inline.files_changed) ? inline.files_changed.filter((x): x is string => typeof x === "string") : [],
-        ran: Array.isArray(inline.ran) ? inline.ran as NodeReport["ran"] : [],
+        ran: ranWithTestsPassed(inline.ran),
         ...(typeof inline.citation === "string" ? { citation: inline.citation } : {}),
         ...(inline.sc_evidence && typeof inline.sc_evidence === "object" ? { sc_evidence: inline.sc_evidence as Record<string, boolean> } : {}),
         ...(typeof inline.head_sha === "string" ? { head_sha: inline.head_sha } : {}),
@@ -606,7 +762,10 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     if (nodeState?.planned_params?.writes) {
       const allow = nodeState.planned_params.scopeAllow;
       if (!allow?.length) throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
-      const changed = await node<{ files: string[] }>(ctx, "git/changed-files", { repo_dir: worktree ?? st?.worktree ?? "" });
+      const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
+        repo_dir: worktree ?? st?.worktree ?? "",
+        ...(nodeState.planned_params?.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
+      });
       const scope = checkScope(changed.files ?? [], allow);
       if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
     }
@@ -641,16 +800,24 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
           provider_id: nodeState.planned_params.provider_id,
           effort: nodeState.planned_params.effort,
         };
-        const stGit = await node<{ head?: string }>(ctx, "git/state", { repo_dir: st.worktree }).catch(() => ({ head: undefined }));
-        const headSha = stGit.head;
-        const baseSha = st.pr_binding?.base_sha;
+        const gh = ghRepoOf(st);
+        let facts: PrFacts | undefined;
+        try {
+          if (st.pr != null) facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: st.pr, repo_dir: st.worktree });
+        } catch { facts = undefined; }
+        const headSha = facts?.snapshot.pr.headSha ?? undefined;
+        const baseRef = facts?.snapshot.pr.baseRef ?? st.pr_binding?.base_ref;
+        const computed = baseRef
+          ? await node<{ base_sha?: string }>(ctx, "git/base-sha", { repo_dir: st.worktree, base_ref: baseRef }).catch(() => ({ base_sha: undefined as string | undefined }))
+          : { base_sha: undefined as string | undefined };
+        const baseSha = st.pr_binding?.base_sha ?? computed.base_sha;
         if (baseSha && headSha && route.model) {
           const pid = await node<{ ok?: boolean; patch_id?: string }>(ctx, "git/patch-id", { repo_dir: st.worktree, base_sha: baseSha, head_sha: headSha }).catch(() => ({ ok: false, patch_id: undefined }));
           if (pid.ok && pid.patch_id) {
             const gv = buildVerdict({
-              repo: String(st.repo ?? st.pr_binding?.repo ?? ""),
+              repo: gh ?? "",
               pr: st.pr ?? st.pr_binding?.number ?? 0,
-              base_ref: st.pr_binding?.base_ref ?? "",
+              base_ref: baseRef ?? "",
               base_sha: baseSha,
               head_sha: headSha,
               patch_id: pid.patch_id,
@@ -691,6 +858,7 @@ async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: str
   await withRun(ctx.host, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
     s.pr = found.number;
+    s.gh_repo = found.repo;
     s.repo = found.repo;
     s.pr_binding = {
       repo: found.repo,
@@ -743,7 +911,8 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
     let on: ReturnType<typeof waitOnFromFacts> = "wait";
     for (;;) {
       ctx.host.progress(ctx.callId);
-      const facts = await readPrFacts(ctx, { repo: fresh.repo, pr: fresh.pr, repo_dir: fresh.worktree });
+      const gh = ghRepoOf(fresh);
+      const facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: fresh.pr, repo_dir: fresh.worktree });
       on = waitOnFromFacts(facts);
       if (on !== "wait") break;
       if (ctx.host.now() + 15_000 > deadline) return keepWait();
@@ -756,6 +925,15 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   if (TOOL_PASS_NODES.has(cursor)) {
     ctx.host.progress(ctx.callId);
     const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
+  const spec = PSTACK_GRAPHS[(st?.spec_id ?? st?.task_type) as GraphTaskType];
+  const specNode = spec?.nodes.find((n) => n.id === cursor);
+  const inflight = Object.values(st?.nodes ?? {}).some((n) => n.dispatch_state && n.dispatch_state !== "terminal" && n.dispatch_state !== "reported");
+  if (specNode && (specNode.kind === "dispatch" || specNode.kind === "plugin_task") && inflight) {
+    ctx.host.progress(ctx.callId);
+    const { next } = await step(ctx, runId, { type: "tick" });
     return { run_id: runId, next, waited_seconds: waited() };
   }
 

@@ -2,6 +2,7 @@
 // can run them against fakes; production wires it to the real global in index.ts.
 
 import type { AgentModel } from "../shared/manual/schema.ts";
+import type { CindyTasksApi } from "./host/tasks.ts";
 
 export type { AgentModel };
 
@@ -63,6 +64,8 @@ export interface Host {
   kvGet(): Promise<Record<string, unknown>>;
   /** Sandbox GET /agent-models. */
   agentModels(): Promise<AgentModelsResponse>;
+  /** Optional cindy.tasks; plugin_task nodes run inside KEEL when present. */
+  tasks?: CindyTasksApi;
 }
 
 export class KeelError extends Error {

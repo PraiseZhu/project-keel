@@ -69,6 +69,8 @@ export interface ReconcileQueries {
     ok: boolean;
     complete?: boolean;
     run_id?: string;
+    task_id?: string;
+    revision?: string;
     status?: string;
     errorCode?: string;
   };
@@ -107,6 +109,7 @@ export type AdvanceEvent =
       task_id?: string;
       revision?: string;
       task_run_id?: string;
+      start_sha?: string;
     };
 
 export interface AdvanceOpts {
@@ -217,9 +220,17 @@ function pickRoute(
 function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
   return buildBrief(
     { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation" },
-    { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.repo, pr: state.pr, taskType: state.task_type },
+    { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.gh_repo ?? state.repo, pr: state.pr, taskType: state.task_type },
     { attempt, dispatch_key: dispatchKeyValue, ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}) },
   );
+}
+
+async function worktreeHead(host: Host, dir: string | undefined): Promise<string | undefined> {
+  if (!dir) return undefined;
+  const git = await host.node("git/state", { repo_dir: dir });
+  if (!git.ok || !git.result || typeof git.result !== "object") return undefined;
+  const head = (git.result as { head?: unknown }).head;
+  return typeof head === "string" && head ? head : undefined;
 }
 
 async function planOrca(
@@ -230,6 +241,7 @@ async function planOrca(
   models: readonly AgentModel[] | undefined,
   preferFallback: boolean,
   now: number,
+  host: Host,
 ): Promise<Next> {
   const role = (specNode.role ?? "worker") as Role;
   const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback);
@@ -245,6 +257,14 @@ async function planOrca(
   if (node.attempts >= specNode.max_attempts) {
     return nextDecide(state, `human:${specNode.id}`, `节点 ${specNode.id} 已达 max_attempts`, ["stop"], true);
   }
+  const workingDir = specNode.writes || specNode.role !== "researcher" ? state.worktree : undefined;
+  let start_sha: string | undefined;
+  if (specNode.writes) {
+    start_sha = await worktreeHead(host, workingDir ?? state.invocation_dir);
+    if (!start_sha) {
+      return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
+    }
+  }
   node.attempts += 1;
   const key = dispatchKey(state.run_id, specNode.id, node.attempts);
   const label = await workerLabel(specNode.id, key);
@@ -255,18 +275,20 @@ async function planOrca(
     model: picked.route.model,
     provider_id: picked.route.provider_id,
     effort: picked.route.effort,
-    working_dir: specNode.writes || specNode.role !== "researcher" ? state.worktree : undefined,
+    working_dir: workingDir,
     initial_task: brief(state, specNode, key, node.attempts),
     writes: specNode.writes,
     fallbacks: picked.fallbacks,
     route_index: picked.index,
     ...(state.scopeAllow?.length ? { scopeAllow: state.scopeAllow } : {}),
+    ...(start_sha ? { start_sha } : {}),
   };
   node.status = "active";
   node.dispatch_key = key;
   node.dispatch_state = "planned";
   node.dispatch_state_at = now;
   node.planned_params = params;
+  if (start_sha) node.start_sha = start_sha;
   node.worker_label = label;
   node.expected_recover_action = undefined;
   node.team_id = state.team?.team_id;
@@ -326,7 +348,7 @@ function nextWait(state: GraphRunState): Next {
       call: {
         tool: "pr_open",
         args: {
-          repo_dir: state.worktree ?? state.repo ?? "",
+          repo_dir: state.worktree ?? state.invocation_dir ?? "",
           ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
           ...(state.pr_binding?.base_ref ? { base: state.pr_binding.base_ref } : {}),
         },
@@ -455,7 +477,8 @@ function nextStop(state: GraphRunState, reason: string, needs: string[] = []): N
 
 function nextDone(state: GraphRunState, summary: string): Next {
   state.status = "done";
-  const pr_url = state.pr_binding && state.repo ? `https://github.com/${state.pr_binding.repo}/pull/${state.pr_binding.number}` : undefined;
+  const gh = state.pr_binding?.repo ?? state.gh_repo;
+  const pr_url = state.pr_binding && gh ? `https://github.com/${gh}/pull/${state.pr_binding.number}` : undefined;
   const next: Next = { kind: "done", summary, ...(pr_url ? { pr_url } : {}), ...(state.verdict ? { verdict: state.verdict } : {}) };
   state.next = next;
   return next;
@@ -541,7 +564,7 @@ function applySetup(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   const session = event.session_id ?? state.sol_session_id;
   // Without a team id no later query can be tied to this team, so stopping a writer could never be proven.
   if (!teamId) {
-    nextDecide(state, "human:setup", "团队初始化回执没有 team_id（可用 start_team 回执或 get_workspace_info 的 workflow id），无法绑定团队", ["retry_setup", "stop"], true);
+    nextDecide(state, "human:setup", "团队初始化回执没有 team_id（可用 start_team 回执或 get_workspace_info.workflow.workflow_id；workflow 为 null 则没有团队），无法绑定团队", ["retry_setup", "stop"], true);
     return;
   }
   if (state.team?.ready && hasInflightWriter(state, spec)) {
@@ -655,6 +678,21 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
     const run = q.getRun;
     const msgs = q.readMessages;
     const complete = (run?.ok === true && run.complete === true) || (msgs?.ok === true && msgs.complete === true);
+    const recoveredId = typeof run?.task_id === "string" && run.task_id ? run.task_id : undefined;
+    const recoveredRun = typeof run?.run_id === "string" && run.run_id ? run.run_id : undefined;
+    if (node.task.phase === "create" && complete && recoveredId) {
+      const spec = PSTACK_GRAPHS[state.spec_id as keyof typeof PSTACK_GRAPHS];
+      const specNode = spec?.nodes.find((n) => n.id === found.id);
+      node.task.task_id = recoveredId;
+      if (run?.revision) node.task.revision = run.revision;
+      node.task.phase = "send";
+      node.task.send_request_key = `send:${key}`;
+      node.task.expected_revision = run?.revision ?? node.task.revision;
+      if (specNode) node.task.send_text = brief(state, specNode, key, node.attempts);
+      node.dispatch_state = "planned";
+      node.dispatch_state_at = now;
+      return;
+    }
     if (!complete) {
       if ((node.reconcile_rounds ?? 0) >= MAX_RECONCILE_ROUNDS) {
         nextDecide(state, "human:reconcile", "插件任务对账仍不确定", ["retry_reconcile", "stop"], true, { rounds: node.reconcile_rounds });
@@ -663,6 +701,7 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
       beginReconcile(state, node, key, now);
       return;
     }
+    if (recoveredRun) node.task.run_id = recoveredRun;
     if (run?.status === "running" || run?.status === "completed") {
       node.dispatch_state = "running";
       node.started_at = node.started_at ?? now;
@@ -887,6 +926,46 @@ async function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceE
   if (event.phase === "final") return applyFinal(state, spec, event, now);
 }
 
+/** Consume a keel_gate answer that matches the current decide next. Leaves computeNext's early-return for unanswered decide. */
+function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): void {
+  if (state.next?.kind !== "decide") return;
+  if (state.status !== "await_sol" && state.status !== "waiting_human") return;
+  const gid = state.next.gate_id;
+  const i = state.sol_decisions.findIndex((d) => d.gate_id === gid);
+  if (i < 0) return;
+  const answer = state.sol_decisions[i]!.answer;
+  state.sol_decisions.splice(i, 1);
+  if (answer === "stop") {
+    nextStop(state, "主控选择停止");
+    return;
+  }
+  state.status = "running";
+  if (gid.startsWith("human:")) {
+    const nodeId = gid.slice("human:".length);
+    if (spec.nodes.some((n) => n.id === nodeId)) {
+      if (answer === "fail") failNode(state, spec, nodeId, now);
+      else succeed(state, spec, nodeId, now);
+    }
+    state.next = undefined;
+    return;
+  }
+  const specNode = spec.nodes.find((n) => n.id === gid);
+  if (specNode?.kind === "gate") {
+    const to = edgeOn(spec, gid, `gate:${answer}`);
+    if (!to) {
+      nextDecide(state, gid, `门 ${gid} 选项 ${answer} 没有边`, [answer], false);
+      return;
+    }
+    const node = ensureNode(state, gid);
+    node.status = "succeeded";
+    node.ended_at = now;
+    state.cursor = to;
+    state.next = undefined;
+    return;
+  }
+  state.next = undefined;
+}
+
 function applyTimeouts(state: GraphRunState, spec: GraphSpec, now: number, event: AdvanceEvent): void {
   for (const [id, node] of Object.entries(state.nodes)) {
     if (!node.dispatch_key || node.dispatch_state === "terminal" || node.dispatch_state === "reported") continue;
@@ -967,7 +1046,7 @@ function pluginSendNext(state: GraphRunState, node: NodeRunState): Next | undefi
 async function enter(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"] },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
   now: number,
   depth = 0,
 ): Promise<Next> {
@@ -1065,7 +1144,7 @@ async function enter(
 
   if (specNode.kind === "dispatch") {
     if (!state.team?.ready) return nextSetup(state);
-    return planOrca(state, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now);
+    return planOrca(state, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
 
   return nextStop(state, `未知节点 kind ${specNode.kind}`);
@@ -1088,7 +1167,7 @@ function clearStaleNext(state: GraphRunState): void {
 async function computeNext(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; doneCheck?: AdvanceOpts["doneCheck"] },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
   now: number,
 ): Promise<Next> {
   clearStaleNext(state);
@@ -1178,10 +1257,11 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     const models = opts.models ?? (await host.agentModels()).models;
     const now = host.now();
     await applyEvent(state, spec, event, opts.gates, now);
+    applyGateAnswer(state, spec, now);
     if (state.status !== "stopped" && state.status !== "done" && state.status !== "waiting_human" && state.status !== "await_sol") {
       applyTimeouts(state, spec, now, event);
     }
-    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck }, now);
+    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host }, now);
     state.next = next;
     state.updated_at = now;
     return { next, state };

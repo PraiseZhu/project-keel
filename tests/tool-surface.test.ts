@@ -3,7 +3,8 @@ import { TOOLS } from "../src/main/dispatch.ts";
 import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
 import { GATES } from "../src/main/graph/gates.ts";
-import { advanceEvidenceForNode, mapCreateWorkerReceipt, normalizeListWorkers, verdictReportFromNode } from "../src/main/tools/keel.ts";
+import { advanceEvidenceForNode, mapCreateWorkerReceipt, normalizeListWorkers, resolveLeadSessionId, resolveTeamId, verdictReportFromNode } from "../src/main/tools/keel.ts";
+import { buildVerdict } from "../src/main/graph/verdict.ts";
 import { parseNodeReport } from "../src/main/graph/report.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 import { graphStatePath, withRun } from "../src/main/store/runs.ts";
@@ -12,6 +13,22 @@ import { readFileSync } from "node:fs";
 
 const manifest = JSON.parse(readFileSync("plugin/ghost.json", "utf8"));
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
+
+describe("resolveTeamId reads the real get_workspace_info shape", () => {
+  const real = {
+    ok: true,
+    workflow: { workflow_id: "cmh0nested0001", lead_session_id: "e6831e58-77fe-48ea-a768-2b1da1e57364", status: "active" },
+    workers: [{ label: "lead" }],
+  };
+  it("takes nested workflow.workflow_id and lead_session_id", () => {
+    expect(resolveTeamId(real)).toBe("cmh0nested0001");
+    expect(resolveLeadSessionId(real)).toBe("e6831e58-77fe-48ea-a768-2b1da1e57364");
+  });
+  it("treats workflow:null as no team", () => {
+    expect(resolveTeamId({ ok: true, workflow: null, workers: [{ label: "w1" }] })).toBeUndefined();
+    expect(resolveLeadSessionId({ ok: true, workflow: null, workers: [] })).toBeUndefined();
+  });
+});
 
 describe("tool surface SC-9", () => {
   it("registers keel_run / report / wait / gate / status next to the legacy tools", () => {
@@ -270,6 +287,26 @@ describe("ui_evidence passthrough", () => {
     expect(mappedBare).not.toHaveProperty("ui_evidence");
     expect(mappedBare).not.toHaveProperty("surface");
   });
+  it("carries tests_passed into buildVerdict: ≥1 is unit-test-verified, missing is type-check-only", () => {
+    const route = { agent: "pi" as const, model: "gpt-6-astra", provider_id: "art-cindy" };
+    const base = {
+      repo: "o/r", pr: 1, base_ref: "main", base_sha: "b".repeat(40), head_sha: "a".repeat(40), patch_id: "p1", route,
+    };
+    const withCount = parseNodeReport(JSON.stringify({
+      dispatch_key: "run:ver:1", status: "done", summary: "ok", files_changed: [],
+      ran: [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }],
+      verdict: "PASS",
+    }), "run:ver:1");
+    expect(verdictReportFromNode(withCount).ran).toEqual([{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }]);
+    expect(buildVerdict({ ...base, report: verdictReportFromNode(withCount) }).level).toBe("unit-test-verified");
+    const missing = parseNodeReport(JSON.stringify({
+      dispatch_key: "run:ver:1", status: "done", summary: "ok", files_changed: [],
+      ran: [{ cmd: "npx vitest run", exit_code: 0 }],
+      verdict: "PASS",
+    }), "run:ver:1");
+    expect(verdictReportFromNode(missing).ran).toEqual([{ cmd: "npx vitest run", exit_code: 0 }]);
+    expect(buildVerdict({ ...base, report: verdictReportFromNode(missing) }).level).toBe("type-check-only");
+  });
 });
 
 describe("reconcile / recover / setup wiring", () => {
@@ -402,6 +439,42 @@ describe("reconcile / recover / setup wiring", () => {
     });
     expect(missing.ok).toBe(true);
     expect(missing.result.next).toMatchObject({ kind: "decide", gate_id: "human:setup" });
+  });
+  it("setup reads nested get_workspace_info.workflow.workflow_id and treats workflow:null as no team", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const runId = started.result.run_id as string;
+    const real = {
+      ok: true,
+      workflow: { workflow_id: "cmh0nested0001", lead_session_id: "e6831e58-77fe-48ea-a768-2b1da1e57364", status: "active" },
+      workers: [{ label: "lead" }],
+    };
+    const viaNested: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: runId,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions" },
+      get_workspace_info: real,
+    });
+    expect(viaNested.ok).toBe(true);
+    expect(JSON.parse(h.files.get(graphStatePath(runId))!).team).toMatchObject({
+      ready: true,
+      team_id: "cmh0nested0001",
+      lead_session_id: "e6831e58-77fe-48ea-a768-2b1da1e57364",
+    });
+    const h2 = fakeHost({ node: nodeFake("change") });
+    const s2: any = await runTool(makeContext(h2, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const workerSession: any = await runTool(makeContext(h2, "c2", profile), "keel_report", {
+      run_id: s2.result.run_id,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions" },
+      get_workspace_info: { ok: true, workflow: null, workers: [{ label: "w1" }] },
+    });
+    expect(workerSession.ok).toBe(true);
+    expect(workerSession.result.next).toMatchObject({ kind: "decide", gate_id: "human:setup" });
   });
   it("verify_stopped without matching team_id is not stopped", async () => {
     const h = fakeHost({ node: nodeFake("change") });

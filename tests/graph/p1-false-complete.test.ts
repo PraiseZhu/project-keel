@@ -335,6 +335,7 @@ describe("done uses the PR head, not an unpushed local head", () => {
         if (method === "pr/snapshot") return { ok: true, result: snapshot };
         if (method === "pr/threads") return { ok: true, result: { threads: [] } };
         if (method === "git/state") return { ok: true, result: { head: localHead } };
+        if (method === "git/base-sha") return { ok: true, result: { base_ref: "main", base_sha: verdict.base_sha } };
         if (method === "git/patch-id") return { ok: true, result: { ok: true, patch_id: "patch-1" } };
         return { ok: false, message: method };
       },

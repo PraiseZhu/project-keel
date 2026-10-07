@@ -39,6 +39,16 @@ describe("parseNodeReport", () => {
   });
 });
 
+describe("ran.tests_passed", () => {
+  it("passes through a non-negative integer and drops anything else", () => {
+    const body = (ran: unknown) => "```json\n" + JSON.stringify({ dispatch_key: "run:node:1", status: "done", summary: "s", files_changed: [], ran }) + "\n```\n";
+    expect(parseNodeReport(body([{ cmd: "npm test", exit_code: 0, tests_passed: 12 }]), "run:node:1").ran[0]).toEqual({ cmd: "npm test", exit_code: 0, tests_passed: 12 });
+    for (const bad of [-1, 1.5, "3", null]) {
+      expect(parseNodeReport(body([{ cmd: "npm test", exit_code: 0, tests_passed: bad }]), "run:node:1").ran[0]).toEqual({ cmd: "npm test", exit_code: 0 });
+    }
+  });
+});
+
 describe("report/read whitelist", () => {
   it("reads only worktree/.keel/<node>-<attempt>.md", async () => {
     mkdirSync("_tmp/test-runs", { recursive: true });

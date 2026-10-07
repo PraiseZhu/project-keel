@@ -1,6 +1,7 @@
 // Tool name → handler. The merge guard test asserts this table and ghost.json agree
 // and that neither ever contains a merge tool.
 
+import { loadRuntimeConfig } from "./config.ts";
 import { KeelError } from "./host.ts";
 import type { ToolContext } from "./context.ts";
 import { fanoutIngest, fanoutPlan } from "./fanout/tools.ts";
@@ -39,7 +40,14 @@ export async function runTool(ctx: ToolContext, tool: string, args: Record<strin
   const h = TOOLS[tool];
   if (!h) return { ok: false, errorCode: "UNKNOWN_TOOL", message: `Keel 没有 ${tool} 工具。` };
   try {
-    return { ok: true, result: await h(ctx, args ?? {}) };
+    const cfg = await loadRuntimeConfig(ctx.host, ctx.profile);
+    const inner: ToolContext = {
+      host: ctx.host,
+      callId: ctx.callId,
+      profile: { ...ctx.profile, lanes: cfg.lanes },
+      thresholds: cfg.thresholds,
+    };
+    return { ok: true, result: await h(inner, args ?? {}) };
   } catch (e) {
     if (e instanceof KeelError) return { ok: false, errorCode: e.code, message: e.message, ...(e.data ? { data: e.data } : {}) };
     return { ok: false, errorCode: "REQUEST_FAILED", message: `执行失败：${e instanceof Error ? e.message : String(e)}` };

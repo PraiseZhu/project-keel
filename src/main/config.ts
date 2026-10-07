@@ -4,7 +4,7 @@
 import { BUILT_PROFILE } from "./context.ts";
 import { KeelError, type Host } from "./host.ts";
 import { cloneManual, DEFAULT_MANUAL, ManualError, parseManual, type ModelManual } from "../shared/manual/schema.ts";
-import { DEFAULT_THRESHOLDS, type JevThresholds, type KeelProfile, type LaneMatch } from "../shared/types.ts";
+import { DEFAULT_THRESHOLDS, LANE_PRESETS, type JevThresholds, type KeelProfile, type LaneMatch, type LanePreset } from "../shared/types.ts";
 
 export interface RuntimeLimits {
   readonly concurrentRuns: number;
@@ -58,6 +58,36 @@ function readThresholds(raw: unknown): JevThresholds {
   };
 }
 
+function isLanePreset(v: unknown): v is LanePreset {
+  return typeof v === "string" && Object.hasOwn(LANE_PRESETS, v);
+}
+
+function parseLanes(raw: unknown, built: readonly LaneMatch[]): readonly LaneMatch[] {
+  if (raw === undefined) return built;
+  if (!Array.isArray(raw)) throw new KeelError("LANE_CONFIG_INVALID", "kv.lanes 必须是数组。");
+  return raw.map((item, i) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new KeelError("LANE_CONFIG_INVALID", `kv.lanes[${i}] 不是对象。`);
+    }
+    const o = item as Record<string, unknown>;
+    if (typeof o.repo !== "string" || !o.repo.trim()) {
+      throw new KeelError("LANE_CONFIG_INVALID", `kv.lanes[${i}] 缺少 repo。`);
+    }
+    if (!isLanePreset(o.preset)) {
+      throw new KeelError("LANE_CONFIG_INVALID", `kv.lanes[${i}] 的 preset 非法。`);
+    }
+    return {
+      repo: o.repo.trim(),
+      preset: o.preset,
+      ...(typeof o.preflight === "string" && o.preflight ? { preflight: o.preflight } : {}),
+      ...(typeof o.verifyCheck === "string" && o.verifyCheck ? { verifyCheck: o.verifyCheck } : {}),
+      ...(o.baseRuleFiles && typeof o.baseRuleFiles === "object" && !Array.isArray(o.baseRuleFiles)
+        ? { baseRuleFiles: o.baseRuleFiles as LaneMatch["baseRuleFiles"] }
+        : {}),
+    };
+  });
+}
+
 export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_PROFILE): Promise<RuntimeConfig> {
   const gen = cacheGen;
   const hit = cache.get(host);
@@ -82,7 +112,7 @@ export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_P
     }
   }
 
-  const lanes = Array.isArray(kv.lanes) ? (kv.lanes as LaneMatch[]) : built.lanes;
+  const lanes = parseLanes(kv.lanes, built.lanes);
   const config = { manual, lanes, limits: readLimits(kv.limits), thresholds: readThresholds(kv.thresholds) };
   // Invalidate during this read must not publish stale kv into the new generation.
   if (cacheGen === gen) cache.set(host, { gen, config });

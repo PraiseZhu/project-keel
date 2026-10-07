@@ -144,6 +144,7 @@ const manifest = {
   badge: true,
   confirm: true,
   fs: true,
+  sessionContext: true,
   card: true,
   subscribe: { topics: ["turn"] },
   agent: { schedule: true, background: true, tasks: true },

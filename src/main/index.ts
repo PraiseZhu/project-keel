@@ -76,10 +76,12 @@ const nudge = new NudgeController(
 
 cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "tool-call") {
-    const sessionId = typeof msg.session_context?.session_id === "string" && msg.session_context.session_id
-      ? msg.session_context.session_id as string
+    const args = msg.args ?? {};
+    const sessionCtx = args.session_context;
+    const sessionId = typeof sessionCtx?.session_id === "string" && sessionCtx.session_id
+      ? sessionCtx.session_id as string
       : undefined;
-    const out = await runTool(makeContext(host, msg.callId, BUILT_PROFILE, DEFAULT_THRESHOLDS, sessionId), msg.tool, msg.args ?? {});
+    const out = await runTool(makeContext(host, msg.callId, BUILT_PROFILE, DEFAULT_THRESHOLDS, sessionId), msg.tool, args);
     if (out.ok) {
       await flushNudgeCardOnToolCall({
         host,

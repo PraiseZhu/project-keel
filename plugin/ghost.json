@@ -964,6 +964,7 @@
   "badge": true,
   "confirm": true,
   "fs": true,
+  "sessionContext": true,
   "card": true,
   "subscribe": {
     "topics": [

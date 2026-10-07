@@ -24,7 +24,7 @@ import { withRun } from "../store/runs.ts";
 import { PSTACK_GRAPHS, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
 import { countWaitCiRuns, pollIntervalMs } from "../graph/poll.ts";
-import { invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
+import { collectTaskMessages, invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
 const CHANGE_TYPES = new Set(["bug-fix", "feature", "refactoring", "pr"]);
@@ -786,7 +786,7 @@ async function drainPluginOps(ctx: ToolContext, runId: string, out: AdvanceResul
             };
           }
           if (q.tool === "readMessages") {
-            const invoked = await invokeCindyTasks(api, { phase: "readMessages", task_id: q.task_id });
+            const invoked = q.task_id ? await collectTaskMessages(api, q.task_id) : await invokeCindyTasks(api, { phase: "readMessages", task_id: q.task_id });
             queries_result.readMessages = { ok: invoked.ok, complete: invoked.ok, ...(!invoked.ok ? { errorCode: invoked.errorCode } : {}) };
           }
         }
@@ -1231,7 +1231,7 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
         const status = pickStrId(rec(invoked.ok ? invoked.data : {}).status);
         if (status === "completed" || status === "failed" || status === "cancelled") {
           const msgs = inflightNode.task.task_id
-            ? await invokeCindyTasks(ctx.host.tasks, { phase: "readMessages", task_id: inflightNode.task.task_id })
+            ? await collectTaskMessages(ctx.host.tasks, inflightNode.task.task_id)
             : { ok: false as const, errorCode: "NO_TASK", message: "no task_id" };
           const inline = reportFromMessages(msgs.ok ? msgs.data : {}) ?? { status: status === "completed" ? "done" : "failed", summary: status };
           if (status !== "completed") inline.status = "failed";

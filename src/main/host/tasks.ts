@@ -21,7 +21,10 @@ export interface PluginTaskInput {
   readonly run_id?: string;
   readonly task_run_id?: string;
   readonly title?: string;
+  readonly after?: string;
 }
+
+export const READ_MESSAGES_MAX_PAGES = 8;
 
 export function toCindyTasksCall(input: PluginTaskInput): { method: PluginTaskPhase; args: Record<string, unknown> } {
   if (input.phase === "create") {
@@ -61,8 +64,56 @@ export function toCindyTasksCall(input: PluginTaskInput): { method: PluginTaskPh
   }
   return {
     method: "readMessages",
-    args: { taskId: input.task_id, limit: 50 },
+    args: { taskId: input.task_id, limit: 50, ...(input.after ? { after: input.after } : {}) },
   };
+}
+
+function rec(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+function pageItems(data: unknown): unknown[] {
+  const o = rec(data);
+  if (Array.isArray(o.items)) return o.items;
+  if (Array.isArray(o.messages)) return o.messages;
+  return [];
+}
+
+function pageCursor(data: unknown): string | undefined {
+  const c = rec(data).nextCursor;
+  return typeof c === "string" && c ? c : undefined;
+}
+
+function pageHasFinal(items: unknown[]): boolean {
+  for (const m of items) {
+    const row = rec(m);
+    const text = [row.text, row.content, row.body].find((x) => typeof x === "string" && x) as string | undefined;
+    if (!text) continue;
+    const fence = text.match(/```json\s*([\s\S]*?)```/);
+    const raw = fence?.[1] ?? (text.trim().startsWith("{") ? text : undefined);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof (parsed as { status?: unknown }).status === "string") return true;
+    } catch { /* next */ }
+  }
+  return false;
+}
+
+export async function collectTaskMessages(api: CindyTasksApi, taskId: string): Promise<{ ok: true; data: { items: unknown[]; messages: unknown[] } } | { ok: false; errorCode: string; message: string }> {
+  const items: unknown[] = [];
+  let after: string | undefined;
+  for (let i = 0; i < READ_MESSAGES_MAX_PAGES; i++) {
+    const invoked = await invokeCindyTasks(api, { phase: "readMessages", task_id: taskId, after });
+    if (!invoked.ok) return invoked;
+    const page = pageItems(invoked.data);
+    items.push(...page);
+    if (pageHasFinal(page)) break;
+    const next = pageCursor(invoked.data);
+    if (!next || next === after) break;
+    after = next;
+  }
+  return { ok: true, data: { items, messages: items } };
 }
 
 export async function invokeCindyTasks(api: CindyTasksApi, input: PluginTaskInput): Promise<{ ok: true; data: unknown } | { ok: false; errorCode: string; message: string }> {

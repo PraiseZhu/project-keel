@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { dispatch } from "../../src/node/rpc.ts";
+import { checkScope } from "../../src/main/graph/scope.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -75,3 +76,36 @@ describe("git changed-files / diff / exclude-keel", () => {
     expect(exclude.split("\n").filter((l) => l.trim() === ".keel/")).toHaveLength(1);
   });
 });
+
+describe("git changed-files guards the write scope", () => {
+  it("lists a rename's source path, so a move out of scope is visible", async () => {
+    const r = repo();
+    mkdirSync(join(r.dir, "outside"));
+    writeFileSync(join(r.dir, "outside", "keep.txt"), "k\n");
+    r.g("add", ".");
+    r.g("commit", "-q", "-m", "outside");
+    mkdirSync(join(r.dir, "allowed"));
+    r.g("mv", "outside/keep.txt", "allowed/keep.txt");
+    const out = await dispatch("git/changed-files", { repo_dir: r.dir, base: "HEAD" });
+    const files = (out.result as { files: string[] }).files;
+    expect(files).toContain("outside/keep.txt");
+    expect(checkScope(files, ["allowed/**"]).ok).toBe(false);
+  });
+
+  it("keeps names byte-exact: a trailing space is a different path", async () => {
+    const r = repo();
+    writeFileSync(join(r.dir, "allowed.txt "), "x\n");
+    const out = await dispatch("git/changed-files", { repo_dir: r.dir });
+    const files = (out.result as { files: string[] }).files;
+    expect(files).toEqual(["allowed.txt "]);
+    expect(checkScope(files, ["allowed.txt"]).ok).toBe(false);
+  });
+
+  it("a missing base is an error, not an empty change list", async () => {
+    const r = repo();
+    const out = await dispatch("git/changed-files", { repo_dir: r.dir, base: "does-not-exist" });
+    expect(out.result).toBeUndefined();
+    expect(out.error).toBeTruthy();
+  });
+});
+

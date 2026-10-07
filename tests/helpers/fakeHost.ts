@@ -14,6 +14,17 @@ export interface FakeHost extends Host {
   clock: { t: number };
 }
 
+const DEFAULT_AGENT_MODELS: AgentModel[] = [
+  { id: "grok-4.6", agent: "pi", providerId: "art-cindy" },
+  { id: "grok-4.6", agent: "claude-code", providerId: "art-cindy" },
+  { id: "gpt-6-luna", agent: "codex", providerId: "art-cindy" },
+  { id: "gpt-6-astra", agent: "codex", providerId: "art-cindy" },
+  { id: "gpt-6.1-sol", agent: "codex", providerId: "art-cindy" },
+  { id: "openai/gpt-6-luna", agent: "codex", providerId: "xd" },
+  { id: "openai/gpt-6-astra", agent: "codex", providerId: "xd" },
+  { id: "x-ai-grok/grok-4.6", agent: "pi", providerId: "xd" },
+];
+
 export function fakeHost(opts: {
   fetch?: (url: string, body?: string) => FetchResponse | Promise<FetchResponse>;
   node?: (method: string, params: any) => NodeResponse | Promise<NodeResponse>;
@@ -27,7 +38,7 @@ export function fakeHost(opts: {
   const h: FakeHost = {
     files, clock,
     kv: { ...(opts.kv ?? {}) },
-    agentModelList: [...(opts.agentModels ?? [])],
+    agentModelList: [...(opts.agentModels ?? DEFAULT_AGENT_MODELS)],
     kvReads: 0,
     fetches: [], nodeCalls: [], confirms: [], broadcasts: [], progressed: [],
     async fetch(req) {

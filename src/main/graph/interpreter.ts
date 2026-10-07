@@ -209,7 +209,8 @@ function bumpFingerprint(state: GraphRunState, nodeId: string, signature: string
 }
 
 function modelsAllow(models: readonly AgentModel[] | undefined, route: Route): boolean {
-  if (!models || models.length === 0) return true;
+  if (!models) return true;
+  if (models.length === 0) return false;
   return models.some((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id);
 }
 
@@ -221,6 +222,7 @@ function pickRoute(
   models: readonly AgentModel[] | undefined,
   preferFallback: boolean,
 ): { route: Route; fallbacks: readonly Route[]; index: number; note?: string } | { stop: string } {
+  if (models && models.length === 0) return { stop: "实时模型清单为空，不能把全部路线当可用" };
   const resolved = resolve(manual, state.profile_id, state.task_type, role);
   const chain = [resolved.primary, ...resolved.fallbacks];
   const skipFam = !writes && role === "verifier" ? new Set(state.author_families) : null;

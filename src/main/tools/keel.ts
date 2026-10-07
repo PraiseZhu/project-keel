@@ -504,12 +504,12 @@ export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDo
           review_entry: {
             head_sha: state.verdict?.head ?? "",
             checked_at: "",
-            result: "pass",
+            result: "",
             source: "",
           },
         },
       },
-      note: "交接车道的 done 门是 handoff，需要 pr_ready 收口，handoff 本身不算完成。",
+      note: "交接车道的 done 门是 handoff，需要 pr_ready 收口，handoff 本身不算完成。authorization_source 必须是用户对「转 Ready / 交接」的实际授权原话；review_entry 必须在核实审查机进场条件后按真实结果填写。拿不到这两项时停下来问用户，不能自己编。",
     };
   }
   return { kind: "decide", gate_id: "done", question: `尚未完成：${result.missing.join("；")}`, options: ["wait", "stop"], context: { missing: result.missing } };

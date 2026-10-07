@@ -493,6 +493,7 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
         extra.run_id = runId;
       }
       if (waitCall.tool === "pr_ready") {
+        // 合成外部输入：只验证编排是否把 review_entry 交给 pr_ready，和 RAN_OK 的 tests_passed 同类，不代表 KEEL 自己产生了这份进场证据。
         extra.review_entry = {
           head_sha: world.prHead,
           checked_at: new Date(host.now()).toISOString(),

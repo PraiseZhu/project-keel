@@ -6,6 +6,7 @@ import { ToolError, gh, resolveTool } from "./env.ts";
 import { audit, createWorktree, gitState, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
+import { inspectVigil } from "./pr/vigil-handoff.ts";
 import { roles } from "./routes/routing.ts";
 
 declare const __KEEL_PROFILE__: KeelProfile | undefined;
@@ -36,6 +37,7 @@ const methods: Record<string, Method> = {
   "pr/open": (p, profile) => prOpen(profile, p as any),
   "pr/resolve": (p) => resolveExisting(p as any),
   "pr/ready": (p, profile) => prReady(profile, p as any),
+  "pr/handoff-state": (p, profile) => inspectVigil(profile, p.repo, p.pr),
   "pr/threads": (p, profile) => prThreads(profile, p as any),
   "pr/reply": (p) => prReply(p as any),
   "pr/board": (p, profile) => prBoard(profile, p as any),

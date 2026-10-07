@@ -102,7 +102,7 @@ export class ToolError extends Error {
   }
 }
 
-export async function resolveTool(tool: "gh" | "git"): Promise<string> {
+export async function resolveTool(tool: "gh" | "git" | "node"): Promise<string> {
   const cached = toolCache.get(tool);
   if (cached) return cached;
   const probe = await runRaw(tool, ["--version"], { timeoutMs: 15_000 });
@@ -131,7 +131,7 @@ export async function resolveTool(tool: "gh" | "git"): Promise<string> {
     "TOOL_NOT_FOUND",
     tool === "gh"
       ? "这台电脑上找不到 gh。请安装 GitHub CLI（brew install gh）并执行 gh auth login 后重试。"
-      : "这台电脑上找不到 git。请安装 git 后重试。",
+      : `这台电脑上找不到 ${tool}。请安装 ${tool} 后重试。`,
   );
 }
 

@@ -59,8 +59,33 @@ export interface LaneMatch {
   readonly preflight?: string;
   /** Commit status a non-author verifier posts on the head it checked (e.g. `agent-verify`). When set, Keel reports neither Ready nor mergeable until it passes on the current head. */
   readonly verifyCheck?: string;
+  /** Optional Vigil CLI producer/inspector for this automation lane. Never a shell command. */
+  readonly handoffHelperPath?: string;
   /** Optional per-repo rule-file overrides. */
   readonly baseRuleFiles?: LaneRule["baseRuleFiles"];
+}
+
+export interface VigilReceipt {
+  readonly version: 1;
+  readonly id: string;
+  readonly repo: string;
+  readonly number: number;
+  readonly nodeId: string;
+  readonly head: string;
+  readonly releaseEpoch: string;
+  readonly author: string;
+}
+
+export interface VigilHandoffState {
+  readonly status: "author-owned" | "ready-unclaimed" | "handed-off" | "inactive";
+  readonly authorAuthorized: boolean;
+  readonly receipt: VigilReceipt | null;
+  readonly pr: {
+    readonly id: string; readonly repo: string; readonly number: number;
+    readonly state: "OPEN" | "CLOSED" | "MERGED"; readonly isDraft: boolean;
+    readonly headRefOid: string; readonly sameRepository: boolean;
+    readonly releaseEpoch: string; readonly author: { readonly login: string };
+  };
 }
 
 /** State of the lane's `verifyCheck` on the current head. */

@@ -5,7 +5,7 @@
   "name": "KEEL",
   "description": "日常随时可问的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）。",
   "whenToUse": "用户要问 Jev 做选择、评分或是非判断；或要推进 PR、盯 CI 与评审、修 bug、按 pstack 方法做调查/重构/功能，以及清理 worktree、查派工角色时使用。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -362,7 +362,7 @@
     },
     {
       "name": "pr_ready",
-      "description": "评估并（非 dry_run 时）把 Draft PR 转为 Ready（会写 GitHub）。要求当前 head 全部检查通过、无进行中、无冲突与未解决线程；门禁车道另要求必需检查非空且全部通过，否则返回 GATE_NOT_MET 与缺项；交接车道还要 review_entry（绑定当前 head、30 分钟内、result=pass 的服务器审查机进场核对结果），否则不转 Ready、不交接，dry_run 也会把它列进缺项；交接车道转 Ready 后写交接记录，之后推送/回帖类调用返回 LANE_HANDED_OFF。dry_run:true 只评估门禁，绝不执行 gh pr ready。非 dry_run 需要 authorization_source。",
+      "description": "评估并（非 dry_run 时）把 Draft PR 转为 Ready（会写 GitHub）。要求当前 head 全部检查通过、无进行中、无冲突与未解决线程；门禁车道另要求必需检查非空且全部通过，否则返回 GATE_NOT_MET 与缺项；交接车道还要 review_entry（绑定当前 head、30 分钟内、result=pass 的服务器审查机进场核对结果），否则不转 Ready、不交接，dry_run 也会把它列进缺项；交接车道转 Ready 后写交接记录；配置 handoffHelperPath 时必须先由本机 Node 调用 Vigil helper 发布绑定当前 HEAD 的作者回执，失败不算交接完成。之后推送/回帖类调用返回 LANE_HANDED_OFF，转 Draft 或新代次按外部归属重新核对。dry_run:true 只评估门禁，绝不执行 gh pr ready。非 dry_run 需要 authorization_source。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,

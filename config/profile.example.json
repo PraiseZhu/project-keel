@@ -2,7 +2,8 @@
   "lanes": [
     {
       "repo": "example-org/gated-app",
-      "preset": "draft-gated-handoff"
+      "preset": "draft-gated-handoff",
+      "handoffHelperPath": "/path/to/vigil/bin/mivo-handoff.mjs"
     },
     {
       "repo": "example-org/client",

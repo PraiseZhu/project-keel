@@ -15,7 +15,28 @@ export interface SnapshotArgs {
   /** `owner/repo`; optional when repo_dir has an origin remote. */
   readonly repo?: string;
   readonly pr?: number;
+  /** KEEL-recorded local push times (plugin data dir), never commit timestamps. */
+  readonly local_pushes?: readonly { readonly repo: string; readonly head: string; readonly at_ms: number }[];
+  readonly now_ms?: number;
 }
+
+export const PUSH_GRACE_MS = 2 * 60_000;
+
+export interface CheckSuiteAppearance {
+  readonly appSlug: string;
+  readonly status: string;
+  readonly checkRuns: number;
+}
+
+export interface NoChecksEvidence {
+  readonly hasRealCheckRuns: boolean;
+  readonly hasWorkflows: boolean | "query-failed";
+  readonly hasRequiredProtection: boolean | "query-failed";
+  readonly localPushedAtMs: number | null;
+  readonly nowMs: number;
+}
+
+export type GhApiResult = { readonly code: number; readonly stdout: string; readonly stderr: string };
 
 export async function resolvePr(args: SnapshotArgs): Promise<T.PrContext> {
   const reader = new GhGitHubReader();
@@ -129,9 +150,12 @@ export async function snapshot(profile: KeelProfile, args: SnapshotArgs): Promis
     mergeable: facts.mergeable, mergeStateStatus: facts.mergeStateStatus, reviewDecision: facts.reviewDecision,
     labels: meta.labels.map((l) => l.name),
   };
-  const decision = row.kind === "closed" ? { kind: "closed" as const } : "noChecks" in row ? noChecksDecision(row) : decisionOf(classifyPr(row, false));
+  const hasTerminalChecks = row.kind === "open" && !("noChecks" in row) && row.ci.all.some((c) => c.kind === "passed" || c.kind === "failed");
+  const evidence = row.kind === "open" && !hasTerminalChecks ? await collectNoChecksEvidence(repo, facts.headRefOid, facts.baseRefName, args) : null;
+  const treatAsNoChecks = Boolean(evidence) && ("noChecks" in row || !evidence!.hasRealCheckRuns);
+  const decision = row.kind === "closed" ? { kind: "closed" as const } : treatAsNoChecks && evidence && row.kind === "open" ? noChecksDecision(row, evidence) : decisionOf(classifyPr(row as T.PrSnapshot, false));
   const checks =
-    row.kind === "open" && !("noChecks" in row)
+    row.kind === "open" && !treatAsNoChecks && !("noChecks" in row)
       ? { failed: row.ci.failed.map((c) => c.name), pending: row.ci.pending.map((c) => c.name), passed: row.ci.all.filter((c) => c.kind === "passed").length }
       : { failed: [], pending: [], passed: 0 };
   let gate: RequiredGate = evaluateGate(rule, [], [], []);
@@ -149,7 +173,7 @@ export async function snapshot(profile: KeelProfile, args: SnapshotArgs): Promis
   const unresolvedThreads = row.kind === "open" ? row.threads.length : 0;
   // A repo with no CI has no check list yet: the verify status is simply not posted.
   const verification: Verification | null = match?.verifyCheck
-    ? verificationOf(match.verifyCheck, row.kind === "open" && !("noChecks" in row) ? row.ci.all : [])
+    ? verificationOf(match.verifyCheck, row.kind === "open" && !treatAsNoChecks && !("noChecks" in row) ? row.ci.all : [])
     : null;
   const base = { preset: rule.preset, rule, pr, decision, checks, unresolvedThreads, gate, verification, mergeReadyLabel: pr.labels.includes("review:merge-ready") };
   return { ...base, rendered: renderZh(base) };
@@ -164,13 +188,123 @@ async function noChecksRow(reader: GhGitHubReader, context: T.PrContext): Promis
   return { kind: "open", noChecks: true, context, facts, threads: await reader.reviewThreads(context) };
 }
 
-/** Same order as upstream classifyPr: conflict → threads → (no CI) → merge gate → ready. */
-export function noChecksDecision(row: Pick<NoChecksRow, "facts" | "threads">): { kind: DecisionKind; blocker?: string } {
+function decodeApi(res: GhApiResult): { ok: true; value: unknown } | { notFound: true } | { failed: true } {
+  if (res.code !== 0) {
+    const text = `${res.stdout}\n${res.stderr}`;
+    if (/404|Not Found/i.test(text)) return { notFound: true };
+    try {
+      const v = JSON.parse(res.stdout) as { message?: string; status?: string };
+      if (v?.message === "Not Found" || v?.status === "404") return { notFound: true };
+    } catch { /* fall through */ }
+    return { failed: true };
+  }
+  try {
+    return { ok: true, value: JSON.parse(res.stdout) };
+  } catch {
+    return { failed: true };
+  }
+}
+
+/** Call-site only: suites that never produced a check-run (queued trae-ai-cn / cursor) do not count. */
+export function parseCheckSuites(value: unknown): CheckSuiteAppearance[] | "query-failed" {
+  if (!value || typeof value !== "object") return "query-failed";
+  const list = (value as { check_suites?: unknown }).check_suites;
+  if (!Array.isArray(list)) return "query-failed";
+  return list.map((raw) => {
+    const s = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const app = s.app && typeof s.app === "object" ? (s.app as Record<string, unknown>) : {};
+    return { appSlug: String(app.slug ?? ""), status: String(s.status ?? ""), checkRuns: Number(s.latest_check_runs_count ?? 0) || 0 };
+  });
+}
+
+export function parseCheckRunCount(value: unknown): number | "query-failed" {
+  if (!value || typeof value !== "object") return "query-failed";
+  const o = value as { total_count?: unknown; check_runs?: unknown };
+  if (typeof o.total_count === "number") return o.total_count;
+  if (Array.isArray(o.check_runs)) return o.check_runs.length;
+  return "query-failed";
+}
+
+export function checksHaveAppeared(suites: readonly CheckSuiteAppearance[], runCount = 0): boolean {
+  return runCount > 0 || suites.some((s) => s.checkRuns > 0);
+}
+
+export function appearanceFromGithub(suitesValue: unknown, runsValue: unknown): boolean | "query-failed" {
+  const suites = parseCheckSuites(suitesValue);
+  const runs = parseCheckRunCount(runsValue);
+  if (suites === "query-failed" && runs === "query-failed") return "query-failed";
+  const appeared = (suites !== "query-failed" && checksHaveAppeared(suites, 0)) || (runs !== "query-failed" && runs > 0);
+  if (appeared) return true;
+  if (suites !== "query-failed") return checksHaveAppeared(suites, runs === "query-failed" ? 0 : runs);
+  return typeof runs === "number" && runs > 0;
+}
+
+export function workflowsFromContents(value: unknown): boolean | "query-failed" {
+  if (!Array.isArray(value)) return "query-failed";
+  return value.some((f) => {
+    const name = f && typeof f === "object" ? String((f as { name?: unknown; path?: unknown }).name ?? (f as { path?: unknown }).path ?? "") : "";
+    return /\.ya?ml$/i.test(name);
+  });
+}
+
+export function requiredChecksFromProtection(value: unknown): boolean | "query-failed" {
+  if (!value || typeof value !== "object") return "query-failed";
+  const o = value as { contexts?: unknown; checks?: unknown };
+  const contexts = Array.isArray(o.contexts) ? o.contexts.filter((x) => typeof x === "string" && x.length) : [];
+  const checks = Array.isArray(o.checks) ? o.checks.filter((c) => c && typeof c === "object" && typeof (c as { context?: unknown }).context === "string") : [];
+  return contexts.length > 0 || checks.length > 0;
+}
+
+export function localPushAt(pushes: SnapshotArgs["local_pushes"], repo: string, head: string | null): number | null {
+  if (!pushes?.length || !head) return null;
+  const hits = pushes.filter((p) => p.repo.toLowerCase() === repo.toLowerCase() && p.head === head);
+  return hits.length ? Math.max(...hits.map((p) => p.at_ms)) : null;
+}
+
+async function probe(repo: string, path: string): Promise<{ ok: true; value: unknown } | { notFound: true } | { failed: true }> {
+  return decodeApi(await ghRaw(["api", `repos/${repo}/${path}`], { timeoutMs: 30_000 }));
+}
+
+export async function collectNoChecksEvidence(repo: string, headSha: string | null, baseRef: string, args: Pick<SnapshotArgs, "local_pushes" | "now_ms">): Promise<NoChecksEvidence> {
+  const nowMs = args.now_ms ?? Date.now();
+  if (!headSha) {
+    return { hasRealCheckRuns: false, hasWorkflows: "query-failed", hasRequiredProtection: "query-failed", localPushedAtMs: localPushAt(args.local_pushes, repo, headSha), nowMs };
+  }
+  const sha = encodeURIComponent(headSha);
+  const base = encodeURIComponent(baseRef);
+  const [wfRes, protRes, suitesRes, runsRes] = await Promise.all([
+    probe(repo, `contents/.github/workflows?ref=${sha}`),
+    probe(repo, `branches/${base}/protection/required_status_checks`),
+    probe(repo, `commits/${sha}/check-suites`),
+    probe(repo, `commits/${sha}/check-runs`),
+  ]);
+  const hasWorkflows = "failed" in wfRes ? "query-failed" as const : "notFound" in wfRes ? false : workflowsFromContents(wfRes.value);
+  const hasRequiredProtection = "failed" in protRes ? "query-failed" as const : "notFound" in protRes ? false : requiredChecksFromProtection(protRes.value);
+  const appearance = appearanceFromGithub(
+    "ok" in suitesRes ? suitesRes.value : "failed" in suitesRes ? null : { check_suites: [] },
+    "ok" in runsRes ? runsRes.value : "failed" in runsRes ? null : { total_count: 0, check_runs: [] },
+  );
+  return {
+    hasRealCheckRuns: appearance === true,
+    hasWorkflows: appearance === "query-failed" && hasWorkflows !== true ? "query-failed" : hasWorkflows,
+    hasRequiredProtection: appearance === "query-failed" && hasRequiredProtection !== true ? "query-failed" : hasRequiredProtection,
+    localPushedAtMs: localPushAt(args.local_pushes, repo, headSha),
+    nowMs,
+  };
+}
+
+/** Same order as upstream classifyPr: conflict → threads → (no CI) → merge gate → ready.
+ *  Empty check lists are not "no CI" when workflows, branch protection, a recent KEEL push, or a failed query say otherwise. */
+export function noChecksDecision(row: Pick<NoChecksRow, "facts" | "threads">, evidence: NoChecksEvidence): { kind: DecisionKind; blocker?: string } {
   const f = row.facts;
   if (f.mergeable === "CONFLICTING" || f.mergeStateStatus === "DIRTY") return { kind: "blocker", blocker: "merge-conflicts" };
   if (row.threads.length) return { kind: "blocker", blocker: "review-threads" };
   if (f.isDraft) return { kind: "blocker", blocker: "draft-pr" };
   if (f.reviewDecision === "CHANGES_REQUESTED") return { kind: "blocker", blocker: "changes-requested" };
   if (f.mergeable === "UNKNOWN") return { kind: "waiting" };
+  if (evidence.hasRealCheckRuns) return { kind: "waiting" };
+  if (evidence.hasWorkflows === "query-failed" || evidence.hasRequiredProtection === "query-failed") return { kind: "waiting" };
+  if (evidence.hasWorkflows === true || evidence.hasRequiredProtection === true) return { kind: "waiting" };
+  if (evidence.localPushedAtMs !== null && evidence.nowMs - evidence.localPushedAtMs < PUSH_GRACE_MS) return { kind: "waiting" };
   return { kind: "ready" };
 }

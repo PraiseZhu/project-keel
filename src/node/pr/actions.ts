@@ -67,7 +67,8 @@ export async function prOpen(profile: KeelProfile, p: { repo_dir: string; title:
   if (draft) args.push("--draft");
   const url = (await gh(args, { cwd: p.repo_dir, timeoutMs: 60_000 })).trim().split("\n").pop() ?? "";
   const number = Number(url.match(/\/pull\/(\d+)/)?.[1] ?? 0);
-  return { url, number, draft, draft_forced_by_lane: forced, preset: rule.preset, preflight: match?.preflight ?? null };
+  const headSha = (await git(["rev-parse", "HEAD"], { cwd: p.repo_dir })).trim();
+  return { url, number, repo, head_sha: headSha, draft, draft_forced_by_lane: forced, preset: rule.preset, preflight: match?.preflight ?? null };
 }
 
 /** Ready needs the lane gate, every check green, and nothing ahead of the Draft flag. */

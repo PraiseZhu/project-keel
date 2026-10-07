@@ -6,15 +6,16 @@ import { allowedActions } from "../../shared/lanes.ts";
 import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
-import { assertNotHandedOff, readHandoff, writeHandoff } from "../handoff.ts";
+import { assertNotHandedOff, isCompleteHandoff, readHandoff, reconcileHandoff, writeHandoff, type HandoffRecord } from "../handoff.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
+import { listLocalPushes, recordLocalPush } from "../pushes.ts";
 
 type Snapshot = Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">;
 
-/** Ready by the upstream classifier, plus the lane's merge label and verify status when it has them. */
-export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr"> & { verification?: Snapshot["verification"] }): boolean =>
-  s.decision.kind === "ready" && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel)) && (!s.verification || s.verification.state === "pass");
+/** Ready by the upstream classifier, plus the lane's merge label, Ready gate, and verify status when it has them. */
+export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr" | "gate"> & { verification?: Snapshot["verification"] }): boolean =>
+  s.decision.kind === "ready" && !(s.gate.applies && !s.gate.ok) && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel)) && (!s.verification || s.verification.state === "pass");
 
 /** Next step when the lane's verify status is missing on the current head. The status-writing command stays with the verifier (keel/MANUAL.md rule 10), not in the author's hint. */
 export function verifyHint(check: string, pr: { headSha: string | null }): string {
@@ -30,9 +31,14 @@ function prArgs(args: Record<string, unknown>) {
   };
 }
 
+async function snapshotArgs(ctx: ToolContext, args: Record<string, unknown>) {
+  return { ...prArgs(args), local_pushes: await listLocalPushes(ctx.host), now_ms: ctx.host.now() };
+}
+
 export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { mergeable: boolean; jev?: unknown; merge_hint?: string }> {
-  const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
-  const handedOff = Boolean(await readHandoff(ctx.host, snap.pr.repo, snap.pr.number));
+  const snap = await node<Snapshot>(ctx, "pr/snapshot", await snapshotArgs(ctx, args));
+  const rec = await reconcileHandoff(ctx.host, await readHandoff(ctx.host, snap.pr.repo, snap.pr.number), snap);
+  const handedOff = isCompleteHandoff(rec);
   const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff, ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}) });
   let next: PrAction = allowed[0]!;
   let jev: unknown;
@@ -52,6 +58,8 @@ export async function status(ctx: ToolContext, args: Record<string, unknown>, op
   if (snap.verification && snap.verification.state !== "pass" && (snap.decision.kind === "ready" || snap.decision.blocker === "draft-pr"))
     return { ...out, merge_hint: verifyHint(snap.verification.check, snap.pr) };
   if (snap.decision.kind !== "ready") return out;
+  if (snap.gate.applies && !snap.gate.ok)
+    return { ...out, merge_hint: `Ready 门禁未满足（缺 ${[...snap.gate.missing, ...snap.gate.failing, ...snap.gate.pending].join("、") || "—"}），暂不算可合并。` };
   return mergeable
     ? { ...out, merge_hint: `可合并：请在 GitHub 打开 ${snap.pr.url} 自行合并。Keel 不提供合并。` }
     : { ...out, merge_hint: `CI 与评审已就绪，但还没有 ${snap.rule.mergeLabel} 标签，按车道规则暂不算可合并。` };
@@ -108,7 +116,8 @@ export async function prOpen(ctx: ToolContext, args: Record<string, unknown>) {
   // A branch whose PR was already handed off must not be pushed, even through pr_open.
   const existing = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: repoDir });
   if (existing) await assertNotHandedOff(ctx.host, existing.repo, existing.number);
-  const r = await node(ctx, "pr/open", { repo_dir: repoDir, title, sections: args.sections, ...(typeof args.base === "string" ? { base: args.base } : {}), ...(typeof args.draft === "boolean" ? { draft: args.draft } : {}), push: args.push === true });
+  const r = await node<{ url: string; number: number; repo?: string; head_sha?: string }>(ctx, "pr/open", { repo_dir: repoDir, title, sections: args.sections, ...(typeof args.base === "string" ? { base: args.base } : {}), ...(typeof args.draft === "boolean" ? { draft: args.draft } : {}), push: args.push === true });
+  if (args.push === true && r.repo && r.head_sha) await recordLocalPush(ctx.host, r.repo, r.head_sha, ctx.host.now());
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_open ${r.url}（授权：${auth}）`, evidence: r });
   return { ...r, authorization_source: auth };
 }
@@ -133,10 +142,10 @@ export function checkEntry(raw: unknown, headSha: string | null, now: number): {
 export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const dry = args.dry_run === true;
   const auth = dry ? null : requireAuth(args, "转 Ready ");
-  const snapArgs = prArgs(args);
+  const snapArgs = await snapshotArgs(ctx, args);
   const pre = await node<Snapshot>(ctx, "pr/snapshot", snapArgs);
   if (!dry) await assertNotHandedOff(ctx.host, pre.pr.repo, pre.pr.number);
-  const handed = Boolean(await readHandoff(ctx.host, pre.pr.repo, pre.pr.number));
+  const handed = isCompleteHandoff(await readHandoff(ctx.host, pre.pr.repo, pre.pr.number));
   // Handing off also needs the review machine's entry condition (window, tool health), which no
   // GitHub check exposes before Ready. The agent supplies what it checked; Keel binds it to this
   // head and a fresh time, and refuses failed, stale or unbound evidence.
@@ -144,15 +153,21 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const entry = entryNeeded ? checkEntry(args.review_entry, pre.pr.headSha, ctx.host.now()) : null;
   if (!dry && entry && !entry.ok)
     throw new KeelError("GATE_NOT_MET", `这个车道转 Ready 后交给自动化接管，服务器审查机进场证据不成立：${entry.problem}`, { missing: ["review_entry"], review_entry: entry });
+  const handoffBase = (): HandoffRecord => ({
+    repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: pre.pr.headSha,
+    gate: pre.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null },
+    was_draft: pre.pr.isDraft,
+  });
+  if (!dry && entryNeeded) await writeHandoff(ctx.host, { ...handoffBase(), status: "pending" });
   const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
   if (!r.gate.passed) {
     const v = pre.verification;
     const hint = v && v.state !== "pass" ? verifyHint(v.check, pre.pr) : "";
     throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。${hint}`, { missing: r.gate.missing, gate: r.gate });
   }
-  let handoff = null;
-  if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {
-    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null } };
+  let handoff: HandoffRecord | null = null;
+  if (!dry && r.ready && entryNeeded) {
+    handoff = { ...handoffBase(), status: "complete", head_sha: r.head_sha, gate: r.gate };
     await writeHandoff(ctx.host, handoff);
   }
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_ready ${dry ? "dry-run" : "执行"} ${pre.pr.repo}#${pre.pr.number} → ready=${r.ready}`, evidence: r.gate });

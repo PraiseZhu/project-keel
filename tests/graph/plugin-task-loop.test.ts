@@ -126,7 +126,7 @@ describe("plugin_task executes inside KEEL", () => {
       async readMessages() {
         const st = JSON.parse(h.files.get(graphStatePath("run-pt"))!) as GraphRunState;
         const key = st.nodes.research?.dispatch_key ?? "";
-        return { messages: [{ text: JSON.stringify({ dispatch_key: key, status: "done", summary: "ok", citation: "notes.md:1", sc_evidence: { "SC-1": true } }) }] };
+        return { messages: [{ role: "assistant", text: JSON.stringify({ dispatch_key: key, status: "done", summary: "ok", citation: "notes.md:1", sc_evidence: { "SC-1": true } }) }] };
       },
     });
     h = fakeHost({

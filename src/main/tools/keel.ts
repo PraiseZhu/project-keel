@@ -711,10 +711,6 @@ function pluginReceipt(data: unknown): { task_id?: string; revision?: number; ta
   };
 }
 
-function looksLikeReportJson(text: string): boolean {
-  return /```json\s*[\s\S]*?```/.test(text) || text.trim().startsWith("{");
-}
-
 function reportJsonPayload(text: string): string | undefined {
   const fence = text.match(/```json\s*([\s\S]*?)```/);
   if (fence?.[1]) return fence[1];
@@ -734,25 +730,18 @@ function isKeelNodeReport(raw: unknown, expectedKey: string): raw is Record<stri
 function reportFromMessages(data: unknown, expectedKey: string): { report?: Record<string, unknown>; unconfirmed: boolean } {
   const o = rec(data);
   const msgs = Array.isArray(o.messages) ? o.messages : Array.isArray(o.items) ? o.items : [];
-  let last: Record<string, unknown> | undefined;
-  let trailingInvalid = false;
-  for (const m of msgs) {
-    const row = rec(m);
-    const text = pickStrId(row.text, row.content, row.body);
-    if (!text || !looksLikeReportJson(text)) continue;
-    const payload = reportJsonPayload(text);
-    if (!payload) { trailingInvalid = true; continue; }
-    let parsed: unknown;
-    try { parsed = JSON.parse(payload); } catch { trailingInvalid = true; continue; }
-    if (isKeelNodeReport(parsed, expectedKey)) {
-      last = parsed;
-      trailingInvalid = false;
-    } else {
-      trailingInvalid = true;
-    }
-  }
-  if (trailingInvalid || !last) return { unconfirmed: true };
-  return { report: last, unconfirmed: false };
+  if (!msgs.length) return { unconfirmed: true };
+  const last = rec(msgs[msgs.length - 1]);
+  if (pickStrId(last.role) !== "assistant") return { unconfirmed: true };
+  const text = pickStrId(last.text, last.content, last.body);
+  if (!text) return { unconfirmed: true };
+  const payload = reportJsonPayload(text);
+  if (!payload) return { unconfirmed: true };
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (isKeelNodeReport(parsed, expectedKey)) return { report: parsed, unconfirmed: false };
+  } catch { /* truncated or invalid JSON */ }
+  return { unconfirmed: true };
 }
 
 async function findTaskByRequestKey(api: NonNullable<Host["tasks"]>, requestKey: string | undefined): Promise<{ task_id?: string; revision?: number } | undefined> {

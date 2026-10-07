@@ -225,6 +225,14 @@ function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, 
   );
 }
 
+async function worktreeHead(host: Host, dir: string | undefined): Promise<string | undefined> {
+  if (!dir) return undefined;
+  const git = await host.node("git/state", { repo_dir: dir });
+  if (!git.ok || !git.result || typeof git.result !== "object") return undefined;
+  const head = (git.result as { head?: unknown }).head;
+  return typeof head === "string" && head ? head : undefined;
+}
+
 async function planOrca(
   state: GraphRunState,
   specNode: GraphNode,
@@ -233,6 +241,7 @@ async function planOrca(
   models: readonly AgentModel[] | undefined,
   preferFallback: boolean,
   now: number,
+  host: Host,
 ): Promise<Next> {
   const role = (specNode.role ?? "worker") as Role;
   const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback);
@@ -248,6 +257,14 @@ async function planOrca(
   if (node.attempts >= specNode.max_attempts) {
     return nextDecide(state, `human:${specNode.id}`, `节点 ${specNode.id} 已达 max_attempts`, ["stop"], true);
   }
+  const workingDir = specNode.writes || specNode.role !== "researcher" ? state.worktree : undefined;
+  let start_sha: string | undefined;
+  if (specNode.writes) {
+    start_sha = await worktreeHead(host, workingDir ?? state.invocation_dir);
+    if (!start_sha) {
+      return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
+    }
+  }
   node.attempts += 1;
   const key = dispatchKey(state.run_id, specNode.id, node.attempts);
   const label = await workerLabel(specNode.id, key);
@@ -258,18 +275,20 @@ async function planOrca(
     model: picked.route.model,
     provider_id: picked.route.provider_id,
     effort: picked.route.effort,
-    working_dir: specNode.writes || specNode.role !== "researcher" ? state.worktree : undefined,
+    working_dir: workingDir,
     initial_task: brief(state, specNode, key, node.attempts),
     writes: specNode.writes,
     fallbacks: picked.fallbacks,
     route_index: picked.index,
     ...(state.scopeAllow?.length ? { scopeAllow: state.scopeAllow } : {}),
+    ...(start_sha ? { start_sha } : {}),
   };
   node.status = "active";
   node.dispatch_key = key;
   node.dispatch_state = "planned";
   node.dispatch_state_at = now;
   node.planned_params = params;
+  if (start_sha) node.start_sha = start_sha;
   node.worker_label = label;
   node.expected_recover_action = undefined;
   node.team_id = state.team?.team_id;
@@ -627,7 +646,6 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     const fam = family(node.actual_route.model);
     if (fam && !state.author_families.includes(fam)) state.author_families.push(fam);
   }
-  if (event.start_sha) node.start_sha = event.start_sha;
   node.worker_id = event.worker_id ?? node.worker_id;
   node.worker_session_id = event.worker_session_id ?? node.worker_session_id;
   node.queued_message_id = event.queued_message_id ?? node.queued_message_id;
@@ -1028,7 +1046,7 @@ function pluginSendNext(state: GraphRunState, node: NodeRunState): Next | undefi
 async function enter(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"] },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
   now: number,
   depth = 0,
 ): Promise<Next> {
@@ -1126,7 +1144,7 @@ async function enter(
 
   if (specNode.kind === "dispatch") {
     if (!state.team?.ready) return nextSetup(state);
-    return planOrca(state, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now);
+    return planOrca(state, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
 
   return nextStop(state, `未知节点 kind ${specNode.kind}`);
@@ -1149,7 +1167,7 @@ function clearStaleNext(state: GraphRunState): void {
 async function computeNext(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; doneCheck?: AdvanceOpts["doneCheck"] },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
   now: number,
 ): Promise<Next> {
   clearStaleNext(state);
@@ -1243,7 +1261,7 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     if (state.status !== "stopped" && state.status !== "done" && state.status !== "waiting_human" && state.status !== "await_sol") {
       applyTimeouts(state, spec, now, event);
     }
-    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck }, now);
+    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host }, now);
     state.next = next;
     state.updated_at = now;
     return { next, state };

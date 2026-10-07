@@ -37,8 +37,9 @@ export function fakeHost(opts: {
     },
     async node(method, params) {
       h.nodeCalls.push({ method, params });
-      if (!opts.node) return { ok: false, message: "no node" };
-      return opts.node(method, params);
+      if (opts.node) return opts.node(method, params);
+      if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } };
+      return { ok: false, message: "no node" };
     },
     async fs(req) {
       if (req.op === "write") { files.set(req.path!, req.content ?? ""); return { ok: true }; }

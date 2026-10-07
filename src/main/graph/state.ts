@@ -35,6 +35,8 @@ export interface PlannedParams extends CreateWorkerParams {
   route_index: number;
   /** Write-domain globs copied from the run / brief. Missing means no writes allowed. */
   scopeAllow?: readonly string[];
+  /** Worktree HEAD at plan time. Frozen for the attempt; final scope uses it as git/changed-files base. */
+  start_sha?: string;
 }
 
 export interface NodeReportSnap {

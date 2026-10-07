@@ -145,10 +145,9 @@ describe("F26-03 committed out-of-scope files", () => {
         attempts: 1,
         dispatch_key: key,
         dispatch_state: "running",
-        start_sha: START,
         planned_params: {
           label: "keel-impl-1", role: "keel-worker", agent: "pi", model: "grok-4.6", provider_id: "art-cindy",
-          initial_task: "x", writes: true, fallbacks: [], route_index: 0, scopeAllow: ["src/**"],
+          initial_task: "x", writes: true, fallbacks: [], route_index: 0, scopeAllow: ["src/**"], start_sha: START,
         },
       };
     });
@@ -160,6 +159,80 @@ describe("F26-03 committed out-of-scope files", () => {
     });
     expect(r).toMatchObject({ ok: false, errorCode: "SCOPE_VIOLATION" });
     expect(seenBase).toBe(START);
+  });
+
+  it("records start_sha at plan; a commit before accepted is still in scope", async () => {
+    const START_HEAD = START;
+    const AFTER_COMMIT = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let head = START_HEAD;
+    let seenBase: unknown;
+    const h = fakeHost({
+      node: (method: string, params: Record<string, unknown>) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head, gh_repo: "o/r" } };
+        if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        if (method === "git/changed-files") {
+          seenBase = params.base;
+          if (params.base === START_HEAD) return { ok: true, result: { files: ["outside.txt"] } };
+          return { ok: true, result: { files: [] } };
+        }
+        return { ok: false, message: method };
+      },
+    });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"],
+    });
+    const runId = started.result.run_id as string;
+    const setup: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: runId,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+    });
+    expect(setup.ok).toBe(true);
+    expect(setup.result.next.kind).toBe("dispatch");
+    const stPlan = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
+    const nodeId = Object.keys(stPlan.nodes).find((id) => stPlan.nodes[id]?.dispatch_key === setup.result.next.dispatch_key)!;
+    expect(stPlan.nodes[nodeId]?.planned_params?.start_sha).toBe(START_HEAD);
+    head = AFTER_COMMIT;
+    const acc: any = await runTool(makeContext(h, "c3", profile), "keel_report", {
+      run_id: runId,
+      phase: "accepted",
+      dispatch_key: setup.result.next.dispatch_key,
+      worker_id: "w1",
+      worker_session_id: "s1",
+      dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
+    });
+    expect(acc.ok).toBe(true);
+    expect(JSON.parse(h.files.get(graphStatePath(runId))!).nodes[nodeId].planned_params.start_sha).toBe(START_HEAD);
+    const fin: any = await runTool(makeContext(h, "c4", profile), "keel_report", {
+      run_id: runId,
+      phase: "final",
+      dispatch_key: setup.result.next.dispatch_key,
+      inline_report: { status: "done", summary: "ok", files_changed: ["outside.txt"], ran: [{ cmd: "npm test", exit_code: 0 }] },
+    });
+    expect(fin).toMatchObject({ ok: false, errorCode: "SCOPE_VIOLATION" });
+    expect(seenBase).toBe(START_HEAD);
+  });
+
+  it("does not dispatch a write node when plan-time HEAD is unknown", async () => {
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", gh_repo: "o/r" } };
+        if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        return { ok: false, message: method };
+      },
+    });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"],
+    });
+    const blocked: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: started.result.run_id,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+    });
+    expect(blocked.ok).toBe(true);
+    expect(blocked.result.next).toMatchObject({ kind: "decide" });
+    expect(blocked.result.next.question).toMatch(/HEAD/);
+    expect(blocked.result.next.kind === "dispatch").toBe(false);
   });
 });
 

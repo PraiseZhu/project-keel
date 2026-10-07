@@ -675,15 +675,6 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     if (task_id) base.task_id = task_id;
     if (revision) base.revision = revision;
     if (task_run_id) base.task_run_id = task_run_id;
-    const states = await loadGraphStates(ctx.host);
-    const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
-    const parsed = typeof base.dispatch_key === "string" ? parseDispatchKey(base.dispatch_key) : undefined;
-    const n = parsed ? st?.nodes[parsed.nodeId] : undefined;
-    const dir = st?.worktree ?? st?.invocation_dir;
-    if (n?.planned_params?.writes && dir) {
-      const git = await node<{ head?: string }>(ctx, "git/state", { repo_dir: dir }).catch(() => ({ head: undefined }));
-      if (git.head) base.start_sha = git.head;
-    }
   }
   if (phase === "reconcile") {
     const raw = args.queries_result && typeof args.queries_result === "object" ? args.queries_result as Record<string, unknown> : args;
@@ -759,7 +750,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       if (!allow?.length) throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
       const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
         repo_dir: worktree ?? st?.worktree ?? "",
-        ...(nodeState.start_sha ? { base: nodeState.start_sha } : {}),
+        ...(nodeState.planned_params?.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
       });
       const scope = checkScope(changed.files ?? [], allow);
       if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });

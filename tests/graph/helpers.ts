@@ -44,7 +44,12 @@ export function miniSpec(): GraphSpec {
 }
 
 export async function boot(extra: Partial<InitRunOpts> = {}, host?: FakeHost): Promise<{ h: FakeHost; spec: GraphSpec; opts: AdvanceOpts }> {
-  const h = host ?? fakeHost();
+  const h = host ?? fakeHost({
+    node: (method: string) => {
+      if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } };
+      return { ok: false, message: method };
+    },
+  });
   const spec = miniSpec();
   await createRun(h, {
     run_id: extra.run_id ?? "run1",

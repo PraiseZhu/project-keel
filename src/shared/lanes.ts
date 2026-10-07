@@ -61,7 +61,8 @@ export function allowedActions(i: ActionInput): PrAction[] {
     return ["wait_for_review"];
   }
   if (i.decision === "waiting") return ["wait_for_ci"];
-  // ready
+  // ready — a gated lane that has not passed its Ready gate is not mergeable and cannot hand off.
+  if (i.gate.applies && !i.gate.ok) return ["wait_for_ci"];
   if (i.verified === false) return ["verify_current_head"];
   if (i.rule.postReadyOwner === "automation") return ["handoff"];
   return ["report_mergeable"];

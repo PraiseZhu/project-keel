@@ -4,6 +4,7 @@ import { LANE_PRESETS, type KeelProfile } from "../src/shared/types.ts";
 import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
 import { writeHandoff } from "../src/main/handoff.ts";
+import { isMergeable } from "../src/main/tools/pr.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 
 const profile: KeelProfile = {
@@ -60,6 +61,11 @@ describe("allowed actions", () => {
     const unmet = evaluateGate(gated, ["build"], [], []);
     expect(allowedActions({ rule: gated, decision: "blocker", blocker: "draft-pr", isDraft: true, gate: unmet, handedOff: false })).toEqual(["wait_for_ci"]);
     expect(allowedActions({ rule: gated, decision: "blocker", blocker: "draft-pr", isDraft: true, gate, handedOff: false })).toContain("mark_ready");
+  });
+  it("a ready PR whose Ready gate applies and is unmet cannot hand off or report mergeable", () => {
+    const unmet = evaluateGate(gated, ["build"], [], []);
+    expect(allowedActions({ rule: gated, decision: "ready", isDraft: false, gate: unmet, handedOff: false })).toEqual(["wait_for_ci"]);
+    expect(allowedActions({ rule: LANE_PRESETS.personal, decision: "ready", isDraft: false, gate: evaluateGate(LANE_PRESETS.personal, [], [], []), handedOff: false })).toEqual(["report_mergeable"]);
   });
 });
 
@@ -173,6 +179,17 @@ describe("pr_ready / pr_reply lane enforcement", () => {
 });
 
 describe("final-review follow-ups at the tool level", () => {
+  it("isMergeable is false when the Ready gate applies and is unmet", () => {
+    const unmet = evaluateGate(gated, ["build"], [], []);
+    const readySnap = { decision: { kind: "ready" as const }, rule: gated, mergeReadyLabel: true, pr: { ...pr, isDraft: false, labels: ["review:merge-ready"] }, gate: unmet };
+    expect(isMergeable(readySnap as Parameters<typeof isMergeable>[0])).toBe(false);
+    expect(isMergeable({ ...readySnap, gate: evaluateGate(gated, ["build"], [{ name: "build", bucket: "pass" }], []) } as Parameters<typeof isMergeable>[0])).toBe(true);
+  });
+  it("pr_status does not report mergeable or handoff when the Ready gate applies and is unmet", async () => {
+    const unmet = snapshot(false);
+    const r: any = await runTool(makeContext(fakeHost({ node: () => ({ ok: true, result: { ...unmet, decision: { kind: "ready" }, pr: { ...pr, isDraft: false } } }) }), "c1", profile), "pr_status", { repo: "acme/gated-app", pr: 7 });
+    expect(r).toMatchObject({ ok: true, result: { mergeable: false, allowedActions: ["wait_for_ci"], nextAction: "wait_for_ci" } });
+  });
   it("a ready PR in a labelled lane is not reported mergeable until the label is there", async () => {
     const ready = (labels: string[]) => ({ ...snapshot(true), decision: { kind: "ready" }, pr: { ...pr, isDraft: false, labels }, mergeReadyLabel: labels.includes("review:merge-ready") });
     const run = async (labels: string[]) => runTool(makeContext(fakeHost({ node: () => ({ ok: true, result: ready(labels) }) }), "c1", profile), "pr_status", { repo: "acme/gated-app", pr: 7 });

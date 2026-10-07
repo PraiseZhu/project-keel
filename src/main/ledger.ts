@@ -45,7 +45,17 @@ async function readLines(host: Host, p: string): Promise<LedgerRow[] | null> {
   return (r.content ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l) as LedgerRow);
 }
 
-export async function append(host: Host, row: Omit<LedgerRow, "row_id" | "at">): Promise<LedgerRow> {
+/** One Promise chain per run covering the whole read-modify-write. Concurrent appends must not drop rows. */
+const chains = new Map<string, Promise<unknown>>();
+
+function serialized<T>(runId: string, work: () => Promise<T>): Promise<T> {
+  const prev = chains.get(runId) ?? Promise.resolve();
+  const next = prev.then(work, work);
+  chains.set(runId, next.then(() => undefined, () => undefined));
+  return next;
+}
+
+async function appendOnce(host: Host, row: Omit<LedgerRow, "row_id" | "at">): Promise<LedgerRow> {
   const p = path(row.run_id);
   const existing = (await readLines(host, p)) ?? [];
   const full: LedgerRow = { row_id: `${row.run_id}#${existing.length + 1}`, at: new Date(host.now()).toISOString(), ...row };
@@ -53,6 +63,10 @@ export async function append(host: Host, row: Omit<LedgerRow, "row_id" | "at">):
   const w = await host.fs({ op: "write", root: "data", path: p, content });
   if (!w.ok) throw new KeelError("LEDGER_WRITE_FAILED", `台账写入失败：${w.message ?? "未知原因"}`);
   return full;
+}
+
+export async function append(host: Host, row: Omit<LedgerRow, "row_id" | "at">): Promise<LedgerRow> {
+  return serialized(row.run_id, () => appendOnce(host, row));
 }
 
 export async function read(host: Host, runId?: string, limit = 50): Promise<LedgerRow[]> {

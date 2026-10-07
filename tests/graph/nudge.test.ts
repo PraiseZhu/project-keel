@@ -324,3 +324,36 @@ describe("healthy running suppresses completed", () => {
     expect(c.stateOf("run-1").consecutiveWithoutProgress).toBe(0);
   });
 });
+
+describe("card interval", () => {
+  it("cardOnly ticks within 10s only present the card once", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => clock.t, cardOnly: true });
+    const r = run({ associated: true });
+    expect((await c.maybeNudge(r)).action).toBe("card");
+    clock.t += 1;
+    expect((await c.maybeNudge(r)).reason).toBe("card_interval");
+    clock.t += 1;
+    expect((await c.maybeNudge(r)).reason).toBe("card_interval");
+    expect(p.log.cards).toHaveLength(1);
+    expect(p.log.continue).toHaveLength(0);
+  });
+});
+
+describe("pending expiry", () => {
+  it("lets B continue after A stops being ticked past 2x interval", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => clock.t });
+    const a = run({ run_id: "run-a", associated: true, session_id: "sess-a" });
+    const b = run({ run_id: "run-b", associated: true, session_id: "sess-b" });
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    clock.t += NUDGE_INTERVAL_MS;
+    expect((await c.maybeNudge(b)).action).toBe("continue");
+    clock.t += 2 * NUDGE_INTERVAL_MS + 1;
+    const out = await c.maybeNudge(b);
+    expect(out.action).toBe("continue");
+    expect(p.log.continue.filter((req) => req.sessionId === "sess-b")).toHaveLength(2);
+  });
+});

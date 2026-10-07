@@ -136,10 +136,12 @@ export interface NudgeState {
   paused: boolean;
   lastHostStatus?: string;
   lastHostError?: string;
+  cardShownAt: number | null;
+  cardShownVersion: number | null;
 }
 
 export function newNudgeState(associated = false): NudgeState {
-  return { consecutiveWithoutProgress: 0, versionAtLastNudge: null, associated, stalled: false, paused: false };
+  return { consecutiveWithoutProgress: 0, versionAtLastNudge: null, associated, stalled: false, paused: false, cardShownAt: null, cardShownVersion: null };
 }
 
 function isUnassociated(code?: string, message?: string): boolean {
@@ -172,6 +174,7 @@ export type CardActionResult =
 
 interface BackgroundPending {
   lastAttemptAt: number | null;
+  lastSeenAt: number;
 }
 
 export class NudgeController {
@@ -190,6 +193,13 @@ export class NudgeController {
 
   stateOf(runId: string): NudgeState {
     return this.byRun.get(runId) ?? newNudgeState();
+  }
+
+  private prunePending(now: number, intervalMs: number): void {
+    const ttl = 2 * intervalMs;
+    for (const [id, p] of this.bgPending) {
+      if (now - p.lastSeenAt > ttl) this.bgPending.delete(id);
+    }
   }
 
   private fairestPending(): string | undefined {
@@ -275,12 +285,21 @@ export class NudgeController {
     this.byRun.set(run.run_id, state);
 
     if (useCard) {
+      if (state.cardShownVersion === run.version && state.cardShownAt !== null && now - state.cardShownAt < intervalMs) {
+        return { action: "skip", reason: "card_interval" };
+      }
       const card = renderNudgeCard(run.run_id);
+      state.cardShownAt = now;
+      state.cardShownVersion = run.version;
+      this.byRun.set(run.run_id, state);
       await this.ports.presentCard(card);
       return { action: "card", reason: this.config.cardOnly ? "card_only" : "unassociated", prompt, card };
     }
 
-    if (!this.bgPending.has(run.run_id)) this.bgPending.set(run.run_id, { lastAttemptAt: null });
+    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenAt: now };
+    pending.lastSeenAt = now;
+    this.bgPending.set(run.run_id, pending);
+    this.prunePending(now, intervalMs);
     if (this.pluginInFlight) return { action: "skip", reason: "busy" };
     if (this.pluginLastSentAt !== null && now - this.pluginLastSentAt < intervalMs) return { action: "skip", reason: "interval" };
     const turn = this.fairestPending();
@@ -288,7 +307,6 @@ export class NudgeController {
 
     this.pluginInFlight = true;
     this.pluginLastSentAt = now;
-    const pending = this.bgPending.get(run.run_id)!;
     pending.lastAttemptAt = now;
 
     try {

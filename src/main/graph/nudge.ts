@@ -1,5 +1,6 @@
 // Wake the lead when a run is waiting on it. External continue / card / notify
 // go through NudgePorts so this module stays unwired from ghost.json and tools.
+// agent.run contract: Cindy 手册 §4.11 — promptTemplate 必须且只能出现一次 {{user_message}}。
 
 import { ENABLE_AUTOPILOT, PAUSE_RUN, renderNudgeCard, runIdFromCardAction, type CardActionEvent, type NudgeCard } from "./cards.ts";
 
@@ -9,9 +10,15 @@ export const MAX_NUDGE_STREAK = 3;
 export const LEAD_NEXT = new Set(["setup", "dispatch", "reconcile", "recover", "decide"]);
 export const QUIET_STATUS = new Set(["paused", "stopped", "done", "waiting_human"]);
 export const ASSOCIATED_STATUSES = new Set(["created", "resumed", "active", "queued"]);
+/** Cindy §4.11: host fills userMessage into this slot; must occur exactly once. */
+export const NUDGE_PROMPT_TEMPLATE = "{{user_message}}";
 
 export function nudgePrompt(runId: string): string {
   return `KEEL：run ${runId} 未完成，调用 keel_status 取下一步。`;
+}
+
+export function countUserMessageSlots(template: string): number {
+  return template.split("{{user_message}}").length - 1;
 }
 
 export type DispatchState = "planned" | "accepted" | "running" | "reported" | "terminal" | "reconciling";
@@ -73,8 +80,8 @@ export function shouldNudge(run: NudgeRun, now: number, opts: { idleMs?: number;
   const idleMs = opts.idleMs ?? IDLE_MS;
   if (QUIET_STATUS.has(run.status)) return { nudge: false, pause: false, reason: "quiet" };
   if (opts.turn?.endReason === "interrupted") return { nudge: false, pause: true, reason: "interrupted" };
-  if (opts.turn?.endReason === "completed") return { nudge: true, pause: false, reason: "turn_completed" };
   if (onlyHealthyRunning(run, now)) return { nudge: false, pause: false, reason: "healthy_running" };
+  if (opts.turn?.endReason === "completed") return { nudge: true, pause: false, reason: "turn_completed" };
   if (!pendingLeadAction(run, now)) return { nudge: false, pause: false, reason: "no_lead_action" };
   const last = run.last_keel_call_at ?? 0;
   if (now - last < idleMs) return { nudge: false, pause: false, reason: "idle_wait" };
@@ -86,14 +93,16 @@ export interface AssociateSessionReq {
   readonly userActionToken: string;
   readonly promptTemplate: string;
   readonly userMessage: string;
-  readonly event: "card-action";
+  readonly event: { readonly actionId: string; readonly callId?: string };
 }
 
 export interface ContinueSessionReq {
   readonly mode: "continue";
   readonly trigger: "background";
   readonly sessionId?: string;
-  readonly prompt: string;
+  readonly promptTemplate: string;
+  readonly userMessage: string;
+  readonly event: { readonly runId: string };
 }
 
 export interface AgentRunResult {
@@ -120,8 +129,6 @@ export interface NudgeConfig {
 }
 
 export interface NudgeState {
-  lastSentAt: number | null;
-  inFlight: boolean;
   consecutiveWithoutProgress: number;
   versionAtLastNudge: number | null;
   associated: boolean;
@@ -132,7 +139,7 @@ export interface NudgeState {
 }
 
 export function newNudgeState(associated = false): NudgeState {
-  return { lastSentAt: null, inFlight: false, consecutiveWithoutProgress: 0, versionAtLastNudge: null, associated, stalled: false, paused: false };
+  return { consecutiveWithoutProgress: 0, versionAtLastNudge: null, associated, stalled: false, paused: false };
 }
 
 function isUnassociated(code?: string, message?: string): boolean {
@@ -163,8 +170,18 @@ export type CardActionResult =
   | { ok: true; action: "pause"; run_id: string }
   | { ok: false; error: string; run_id?: string };
 
+interface BackgroundPending {
+  lastAttemptAt: number | null;
+}
+
 export class NudgeController {
   private readonly byRun = new Map<string, NudgeState>();
+  /** Plugin-level: at most one background agent.run in flight. */
+  private pluginInFlight = false;
+  /** Plugin-level: last background agent.run attempt (success or host error). */
+  private pluginLastSentAt: number | null = null;
+  /** Runs waiting to background-continue; fairness uses oldest lastAttemptAt. */
+  private readonly bgPending = new Map<string, BackgroundPending>();
 
   constructor(
     private readonly ports: NudgePorts,
@@ -175,6 +192,19 @@ export class NudgeController {
     return this.byRun.get(runId) ?? newNudgeState();
   }
 
+  private fairestPending(): string | undefined {
+    let best: string | undefined;
+    let bestT = Infinity;
+    for (const [id, p] of this.bgPending) {
+      const t = p.lastAttemptAt ?? Number.NEGATIVE_INFINITY;
+      if (t < bestT) {
+        bestT = t;
+        best = id;
+      }
+    }
+    return best;
+  }
+
   async handleCardAction(ev: CardActionEvent): Promise<CardActionResult> {
     const runId = runIdFromCardAction(ev);
     if (!runId) return { ok: false, error: "缺少 run_id" };
@@ -183,6 +213,7 @@ export class NudgeController {
       s.associated = false;
       s.paused = true;
       this.byRun.set(runId, s);
+      this.bgPending.delete(runId);
       return { ok: true, action: "pause", run_id: runId };
     }
     if (ev.actionId !== ENABLE_AUTOPILOT) return { ok: false, error: `未知卡片动作 ${ev.actionId}`, run_id: runId };
@@ -191,9 +222,9 @@ export class NudgeController {
     const r = await this.ports.associateSession({
       mode: "continue",
       userActionToken: ev.userActionToken,
-      promptTemplate: prompt,
+      promptTemplate: NUDGE_PROMPT_TEMPLATE,
       userMessage: prompt,
-      event: "card-action",
+      event: { actionId: ev.actionId, ...(ev.callId ? { callId: ev.callId } : {}) },
     });
     const s = this.stateOf(runId);
     s.lastHostStatus = r.status;
@@ -221,17 +252,19 @@ export class NudgeController {
     const maxStreak = this.config.maxStreak ?? MAX_NUDGE_STREAK;
     const judged = shouldNudge(run, now, { idleMs, ...(opts.turn ? { turn: opts.turn } : {}) });
     if (judged.pause) return { action: "pause", reason: judged.reason, pause: true };
-    if (!judged.nudge) return { action: "skip", reason: judged.reason };
+    if (!judged.nudge) {
+      this.bgPending.delete(run.run_id);
+      return { action: "skip", reason: judged.reason };
+    }
 
     const state = this.byRun.get(run.run_id) ?? newNudgeState(Boolean(run.associated));
     if (state.paused) return { action: "skip", reason: "paused" };
     if (state.stalled) return { action: "skip", reason: "stalled" };
-    if (state.inFlight) return { action: "skip", reason: "busy" };
-    if (state.lastSentAt !== null && now - state.lastSentAt < intervalMs) return { action: "skip", reason: "interval" };
 
     if (state.versionAtLastNudge === run.version && state.consecutiveWithoutProgress >= maxStreak) {
       state.stalled = true;
       this.byRun.set(run.run_id, state);
+      this.bgPending.delete(run.run_id);
       const notify = `KEEL：run ${run.run_id} 连续 ${maxStreak} 次叫醒无进展，已停推并开人工门。`;
       await this.ports.notifyUser(notify);
       return { action: "stall", reason: "no_progress", notify, stalled: true };
@@ -239,39 +272,53 @@ export class NudgeController {
 
     const prompt = nudgePrompt(run.run_id);
     const useCard = this.config.cardOnly || !state.associated;
-    state.inFlight = true;
-    state.lastSentAt = now;
-    state.consecutiveWithoutProgress = state.versionAtLastNudge === run.version ? state.consecutiveWithoutProgress + 1 : 1;
-    state.versionAtLastNudge = run.version;
     this.byRun.set(run.run_id, state);
 
     if (useCard) {
       const card = renderNudgeCard(run.run_id);
-      try {
-        await this.ports.presentCard(card);
-      } finally {
-        state.inFlight = false;
-      }
+      await this.ports.presentCard(card);
       return { action: "card", reason: this.config.cardOnly ? "card_only" : "unassociated", prompt, card };
     }
+
+    if (!this.bgPending.has(run.run_id)) this.bgPending.set(run.run_id, { lastAttemptAt: null });
+    if (this.pluginInFlight) return { action: "skip", reason: "busy" };
+    if (this.pluginLastSentAt !== null && now - this.pluginLastSentAt < intervalMs) return { action: "skip", reason: "interval" };
+    const turn = this.fairestPending();
+    if (turn !== undefined && turn !== run.run_id) return { action: "skip", reason: "fairness" };
+
+    this.pluginInFlight = true;
+    this.pluginLastSentAt = now;
+    const pending = this.bgPending.get(run.run_id)!;
+    pending.lastAttemptAt = now;
 
     try {
       const r = await this.ports.continueSession({
         mode: "continue",
         trigger: "background",
         ...(run.session_id ? { sessionId: run.session_id } : {}),
-        prompt,
+        promptTemplate: NUDGE_PROMPT_TEMPLATE,
+        userMessage: prompt,
+        event: { runId: run.run_id },
       });
+      state.lastHostStatus = r.status;
+      state.lastHostError = r.ok ? undefined : (r.errorCode ?? r.message);
       if (!r.ok && isUnassociated(r.errorCode, r.message)) {
         state.associated = false;
+        this.bgPending.delete(run.run_id);
         const card = renderNudgeCard(run.run_id, "关联已丢失");
         await this.ports.presentCard(card);
         return { action: "card", reason: "association_lost", prompt, card };
       }
-      if (!r.ok) return { action: "skip", reason: r.errorCode ?? "continue_failed" };
+      if (!r.ok) {
+        // RATE_LIMITED / BUSY / other host refusals: not no-progress.
+        return { action: "skip", reason: r.errorCode ?? "continue_failed" };
+      }
+      state.consecutiveWithoutProgress = state.versionAtLastNudge === run.version ? state.consecutiveWithoutProgress + 1 : 1;
+      state.versionAtLastNudge = run.version;
       return { action: "continue", reason: judged.reason, prompt };
     } finally {
-      state.inFlight = false;
+      this.pluginInFlight = false;
+      this.byRun.set(run.run_id, state);
     }
   }
 }

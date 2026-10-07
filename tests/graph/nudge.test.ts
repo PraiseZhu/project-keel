@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ENABLE_AUTOPILOT, PAUSE_RUN, renderNudgeCard, runIdFromCardAction } from "../../src/main/graph/cards.ts";
 import {
+  countUserMessageSlots,
   IDLE_MS,
   NUDGE_INTERVAL_MS,
+  NUDGE_PROMPT_TEMPLATE,
   NudgeController,
   nudgePrompt,
   onlyHealthyRunning,
@@ -54,6 +56,7 @@ describe("shouldNudge", () => {
     });
     expect(onlyHealthyRunning(r, t0 + 1000)).toBe(true);
     expect(shouldNudge(r, t0 + IDLE_MS * 2).nudge).toBe(false);
+    expect(shouldNudge(r, t0 + 1000, { turn: { endReason: "completed" } })).toEqual({ nudge: false, pause: false, reason: "healthy_running" });
   });
   it("treats accepted / reconciling / timed-out running as lead work", () => {
     expect(pendingLeadAction(run({ next: { kind: "wait" }, nodes: [{ dispatch_state: "accepted" }] }), t0)).toBe(true);
@@ -103,7 +106,15 @@ describe("NudgeController queue and streak", () => {
     expect(busy.reason).toBe("busy");
     p.release({ ok: true });
     expect((await first).action).toBe("continue");
-    expect(p.log.continue[0]).toMatchObject({ mode: "continue", trigger: "background", sessionId: "sess-1", prompt: nudgePrompt("run-1") });
+    expect(p.log.continue[0]).toMatchObject({
+      mode: "continue",
+      trigger: "background",
+      sessionId: "sess-1",
+      promptTemplate: NUDGE_PROMPT_TEMPLATE,
+      userMessage: nudgePrompt("run-1"),
+      event: { runId: "run-1" },
+    });
+    expect(p.log.continue[0]).not.toHaveProperty("prompt");
     expect(p.log.continue[0]).not.toHaveProperty("userActionToken");
     clock.t += NUDGE_INTERVAL_MS - 1;
     expect((await c.maybeNudge(r)).reason).toBe("interval");
@@ -198,9 +209,9 @@ describe("cards and host-issued userActionToken", () => {
     expect(p.log.associate).toEqual([{
       mode: "continue",
       userActionToken: token,
-      promptTemplate: nudgePrompt("run-1"),
+      promptTemplate: NUDGE_PROMPT_TEMPLATE,
       userMessage: nudgePrompt("run-1"),
-      event: "card-action",
+      event: { actionId: ENABLE_AUTOPILOT, callId: "c2" },
     }]);
     expect(c.stateOf("run-1").associated).toBe(true);
   });
@@ -233,5 +244,83 @@ describe("cards and host-issued userActionToken", () => {
     expect(p.log.continue[0]).toMatchObject({ trigger: "background" });
     expect(p.log.continue[0]).not.toHaveProperty("userActionToken");
     expect(p.log.associate[0]?.userActionToken).toBe("host-uat");
+  });
+});
+
+describe("§4.11 promptTemplate contract", () => {
+  it("uses a template with exactly one {{user_message}} slot", () => {
+    expect(countUserMessageSlots(NUDGE_PROMPT_TEMPLATE)).toBe(1);
+    expect(countUserMessageSlots(nudgePrompt("run-1"))).toBe(0);
+  });
+  it("background continue fields match the Cindy §4.11 agent.run background call", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => clock.t });
+    await c.maybeNudge(run({ associated: true }));
+    const req = p.log.continue[0]!;
+    expect(req.mode).toBe("continue");
+    expect(req.trigger).toBe("background");
+    expect(req.sessionId).toBe("sess-1");
+    expect(req.promptTemplate).toBe(NUDGE_PROMPT_TEMPLATE);
+    expect(countUserMessageSlots(req.promptTemplate)).toBe(1);
+    expect(req.userMessage).toBe(nudgePrompt("run-1"));
+    expect(req.event).toEqual({ runId: "run-1" });
+    expect(req).not.toHaveProperty("prompt");
+    expect(req).not.toHaveProperty("userActionToken");
+  });
+});
+
+describe("plugin-level background queue", () => {
+  it("keeps one in-flight across runs, rotates fairly, and does not count RATE_LIMITED as no_progress", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p, hangWaiters } = ports();
+    hangWaiters.useHang = true;
+    const c = new NudgeController(p, { now: () => clock.t });
+    const a = run({ run_id: "run-a", associated: true, session_id: "sess-a" });
+    const b = run({ run_id: "run-b", associated: true, session_id: "sess-b" });
+    const first = c.maybeNudge(a);
+    const busy = await c.maybeNudge(b);
+    expect(busy.action).toBe("skip");
+    expect(busy.reason).toBe("busy");
+    expect(p.log.continue).toHaveLength(1);
+    p.release({ ok: true });
+    expect((await first).action).toBe("continue");
+
+    hangWaiters.useHang = false;
+    hangWaiters.next = { ok: false, errorCode: "RATE_LIMITED" };
+    for (let i = 0; i < 4; i++) {
+      clock.t += NUDGE_INTERVAL_MS;
+      await c.maybeNudge(a);
+      await c.maybeNudge(b);
+      const inflight = p.log.continue.length;
+      expect(inflight).toBeGreaterThan(0);
+    }
+    const bSends = p.log.continue.filter((req) => req.sessionId === "sess-b");
+    expect(bSends.length).toBeGreaterThanOrEqual(1);
+    expect(c.stateOf("run-b").stalled).toBe(false);
+    expect(c.stateOf("run-b").consecutiveWithoutProgress).toBe(0);
+    expect(c.stateOf("run-a").consecutiveWithoutProgress).toBe(1);
+  });
+});
+
+describe("healthy running suppresses completed", () => {
+  it("does not wake or stall after 4 completed events while workers are healthy in timebox", async () => {
+    const clock = { t: t0 + 1000 };
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => clock.t });
+    const healthy = run({
+      next: { kind: "wait" },
+      associated: true,
+      nodes: [{ dispatch_state: "running", started_at: t0, timebox_ms: IDLE_MS * 10 }],
+    });
+    for (let i = 0; i < 4; i++) {
+      const out = await c.onTurnEnd(healthy, { endReason: "completed" });
+      expect(out.action).toBe("skip");
+      expect(out.reason).toBe("healthy_running");
+    }
+    expect(p.log.continue).toHaveLength(0);
+    expect(p.log.notes).toHaveLength(0);
+    expect(c.stateOf("run-1").stalled).toBe(false);
+    expect(c.stateOf("run-1").consecutiveWithoutProgress).toBe(0);
   });
 });

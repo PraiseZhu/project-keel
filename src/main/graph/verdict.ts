@@ -55,7 +55,7 @@ export function levelMeets(actual: OrchLevel, required: OrchLevel = "unit-test-v
 type Ran = readonly { readonly cmd: string; readonly exit_code: number }[];
 
 // Flags and subcommands that list, build or describe tests without running them.
-const INFO_ONLY = new Set(["--version", "--help", "--list", "-list", "--listtests", "--collect-only", "--co", "--showconfig", "--no-run", "--dry-run"]);
+const INFO_ONLY = new Set(["--version", "--help", "-h", "--list", "-list", "--listtests", "--collect-only", "--co", "--showconfig", "--no-run", "--dry-run"]);
 const VITEST_NON_RUN = new Set(["list", "bench", "typecheck", "init"]);
 const PM = new Set(["npm", "pnpm", "yarn", "bun"]);
 const RUNNERS = new Set(["vitest", "jest", "mocha", "pytest"]);
@@ -77,6 +77,8 @@ function classifySimple(tokens: string[]): TestKind | null {
   if (PM.has(exe) && (args[0] === "exec" || args[0] === "dlx")) return classifySimple(rest.slice(args[1] === "--" ? 2 : 1));
   // Global flags may come before the subcommand (`vitest --no-cache list`), so check every word.
   if (exe === "vitest" && args.some((a) => VITEST_NON_RUN.has(a))) return null;
+  // `-v` is the version flag for vitest and jest (pytest uses it for verbose output).
+  if ((exe === "vitest" || exe === "jest") && args.includes("-v")) return null;
   if (RUNNERS.has(exe)) return "unit";
   if ((exe === "python" || exe === "python3") && args[0] === "-m" && args[1] === "pytest") return "unit";
   if ((exe === "go" || exe === "cargo") && args[0] === "test") return "unit";

@@ -62,8 +62,10 @@ export async function discoverDataDir(ownersRoot) {
   throw err;
 }
 
-function quote(p) {
-  return `"${String(p).replace(/"/g, '\\"')}"`;
+// POSIX single-quote quoting: inside '...' the shell expands nothing ($, `, \, ! are literal),
+// and an embedded ' is closed, escaped, and reopened. Paths reach the hook as exact argv.
+export function quote(p) {
+  return `'${String(p).replace(/'/g, "'\\''")}'`;
 }
 
 export function keelCommand(target, indexPath, execPath = process.execPath, script = GATE_SCRIPT) {

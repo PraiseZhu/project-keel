@@ -202,3 +202,22 @@ describe("active index helper", () => {
     expect(["a", "b"]).toContain(stored["/r"].run_id);
   });
 });
+
+describe("keelCommand shell quoting (review F16-01 / CodeQL)", () => {
+  it("passes paths with shell metacharacters to the hook as exact argv", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { keelCommand } = await import("../../scripts/hooks/install.mjs");
+    const nasty = [
+      "/tmp/data/$(printf SUBSTITUTED)/runs/active.json",
+      "/tmp/data/`printf TICKED`/active.json",
+      "/tmp/it's here/\\back\\slash/\"dq\"/active.json",
+      "/Users/me/Library/Application Support/Cindy/owners/x/ghost-fs/keel/runs/active.json",
+    ];
+    for (const path of nasty) {
+      // printf '%s\n' prints each argv element on its own line; the last one is the --index value.
+      const cmd = keelCommand("codex", path, "/usr/bin/printf", "%s\\n");
+      const out = execFileSync("/bin/sh", ["-c", cmd], { encoding: "utf8" }).split("\n").filter(Boolean);
+      expect(out.at(-1)).toBe(path);
+    }
+  });
+});

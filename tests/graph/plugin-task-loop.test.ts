@@ -25,7 +25,7 @@ function recordingTasks(over: Partial<CindyTasksApi> = {}): { api: CindyTasksApi
     async send(args) { calls.push({ method: "send", args }); return impl.send(args); },
     async getRun(args) { calls.push({ method: "getRun", args }); return impl.getRun(args); },
     async readMessages(args) { calls.push({ method: "readMessages", args }); return impl.readMessages(args); },
-    async list(args) { calls.push({ method: "list", args }); return impl.list(args); },
+    async list(args) { calls.push({ method: "list", args }); return (impl.list ?? (async () => ({ items: [] })))(args); },
   };
   return { api, calls };
 }

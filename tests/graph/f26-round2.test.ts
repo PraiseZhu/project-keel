@@ -212,6 +212,60 @@ describe("F26-05 keel_wait does not complete a running verifier", () => {
   });
 });
 
+describe("investigation final reads report from invocation_dir", () => {
+  it("final without worktree uses invocation_dir for report/read", async () => {
+    const reads: Record<string, unknown>[] = [];
+    const h = fakeHost({
+      node: (method: string, params: Record<string, unknown>) => {
+        if (method === "git/state") return { ok: true, result: { root: "/invoked", branch: "main", head: HEAD_A } };
+        if (method === "git/content-fingerprint") return { ok: true, result: { head: HEAD_A, status_digest: "d", content_hash: "h" } };
+        if (method === "report/read") {
+          reads.push(params);
+          return {
+            ok: true,
+            result: {
+              path: "/invoked/.keel/explore-1.md",
+              content: "```json\n" + JSON.stringify({
+                dispatch_key: "run-inv:explore:1",
+                status: "done",
+                summary: "ok",
+                files_changed: [],
+                ran: [],
+                citation: "https://example.com/x",
+                sc_evidence: { "SC-1": true },
+              }) + "\n```\n",
+            },
+          };
+        }
+        return { ok: false, message: method };
+      },
+    });
+    const spec = PSTACK_GRAPHS.investigation;
+    await createRun(h, {
+      run_id: "run-inv", spec_id: spec.id, profile_id: "sol", lead_harness: "codex",
+      task_type: "investigation", entry: "explore", goal: "调查超时原理",
+      invocation_dir: "/invoked", sc: [{ id: "SC-1", text: "根因" }], now: h.now(),
+    });
+    const key = "run-inv:explore:1";
+    await withRun(h, "run-inv", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.team = { ready: true, team_id: "t1" };
+      s.nodes.explore = {
+        status: "active", attempts: 1, dispatch_key: key, dispatch_state: "running",
+        planned_params: {
+          label: "keel-ex", role: "keel-explorer", agent: "pi", model: "grok-4.6",
+          provider_id: "art-cindy", initial_task: "e", writes: false, fallbacks: [], route_index: 0,
+        },
+      };
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_report", {
+      run_id: "run-inv", phase: "final", dispatch_key: key,
+    });
+    expect(r.ok, r.message).toBe(true);
+    expect(reads[0]).toMatchObject({ worktree: "/invoked", node: "explore", attempt: 1 });
+  });
+});
+
 describe("F26-06 open-pr next.call includes sections", () => {
   it("pr_open accepts next.call.args plus authorization_source", async () => {
     const h = fakeHost({

@@ -8,7 +8,7 @@ export interface CindyTasksApi {
   send(args: Record<string, unknown>): Promise<unknown>;
   getRun(args: Record<string, unknown>): Promise<unknown>;
   readMessages(args: Record<string, unknown>): Promise<unknown>;
-  list(args: Record<string, unknown>): Promise<unknown>;
+  list?(args: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface PluginTaskInput {
@@ -68,7 +68,9 @@ export function toCindyTasksCall(input: PluginTaskInput): { method: PluginTaskPh
 export async function invokeCindyTasks(api: CindyTasksApi, input: PluginTaskInput): Promise<{ ok: true; data: unknown } | { ok: false; errorCode: string; message: string }> {
   const { method, args } = toCindyTasksCall(input);
   try {
-    const data = await api[method](args);
+    const fn = api[method];
+    if (typeof fn !== "function") return { ok: false, errorCode: "TASKS_FAILED", message: `${method} unavailable` };
+    const data = await fn(args);
     return { ok: true, data };
   } catch (e) {
     const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "TASKS_FAILED";

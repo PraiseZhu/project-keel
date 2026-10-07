@@ -533,7 +533,7 @@ function reportFromMessages(data: unknown): Record<string, unknown> | undefined 
 }
 
 async function findTaskByRequestKey(api: NonNullable<Host["tasks"]>, requestKey: string | undefined): Promise<{ task_id?: string; revision?: number } | undefined> {
-  if (!requestKey) return undefined;
+  if (!requestKey || typeof api.list !== "function") return undefined;
   const invoked = await invokeCindyTasks(api, { phase: "list" });
   if (!invoked.ok) return undefined;
   const items = rec(invoked.data).items;
@@ -779,7 +779,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const parsedKey = parseDispatchKey(key);
     const states = await loadGraphStates(ctx.host);
     const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
-    const worktree = st?.worktree;
+    const reportDir = st?.worktree ?? st?.invocation_dir;
     let parsed: NodeReport | undefined;
     const inline = args.inline_report && typeof args.inline_report === "object" ? args.inline_report as Record<string, unknown> : undefined;
     if (inline) {
@@ -798,8 +798,8 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         ...(inline.surface === "live-ui" || inline.surface === "unit-test" || inline.surface === "type-check" || inline.surface === "blocked" ? { surface: inline.surface } : {}),
       };
     } else {
-      if (!worktree || !parsedKey) throw new KeelError("REPORT_INVALID", "final 需要 worktree 与 dispatch_key。");
-      const file = await node<{ path: string; content: string }>(ctx, "report/read", { worktree, node: parsedKey.nodeId, attempt: parsedKey.attempt });
+      if (!reportDir || !parsedKey) throw new KeelError("REPORT_INVALID", "final 需要 worktree 或 invocation_dir，以及 dispatch_key。");
+      const file = await node<{ path: string; content: string }>(ctx, "report/read", { worktree: reportDir, node: parsedKey.nodeId, attempt: parsedKey.attempt });
       parsed = parseNodeReport(file.content, key);
       base.report_path = file.path;
     }
@@ -808,7 +808,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       const allow = nodeState.planned_params.scopeAllow;
       if (!allow?.length) throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
       const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
-        repo_dir: worktree ?? st?.worktree ?? "",
+        repo_dir: reportDir ?? st?.worktree ?? st?.invocation_dir ?? "",
         ...(nodeState.planned_params?.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
       });
       const scope = checkScope(changed.files ?? [], allow);

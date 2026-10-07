@@ -12,4 +12,9 @@
 <h3>当前派工路由</h3>
 <div><select id="roles-lead"><option value="claude-code">lead：Claude Code</option><option value="codex">lead：Codex</option><option value="pi">lead：Pi</option></select><button type="button" id="roles-refresh">现读 routing.json</button></div>
 <div id="roles"></div>
+<h3>编排模型说明书</h3>
+<p class="hint">编排器节点模型存在 KEEL 的 /kv，改完下次派工即生效。下方「现读 routing.json」仍只管普通派工。</p>
+<p id="manual-status" role="status"></p>
+<div id="manual"></div>
+<input id="manual-file" type="file" accept="application/json" hidden>
 <script src="/settings.js"></script></body></html>

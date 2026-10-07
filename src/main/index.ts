@@ -1,5 +1,6 @@
 // main.js entry: wires the `cindy` sandbox global into Host and dispatches tool calls.
 
+import { invalidateRuntimeConfig } from "./config.ts";
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import type { AgentModel, Host } from "./host.ts";
@@ -44,10 +45,15 @@ cindy.onHostMessage(async (msg: any) => {
   else cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: out.errorCode, message: out.message });
 });
 
+channel?.addEventListener("message", (ev: MessageEvent) => {
+  if ((ev.data as { type?: string } | null)?.type === "manual-changed") invalidateRuntimeConfig();
+});
+
 // Panel requests: { reqId, op: "board" | "ledger" }. Deduplicate by reqId; the panel resends until acked.
 const seen = new Set<string>();
 channel?.addEventListener("message", async (ev: MessageEvent) => {
-  const m = ev.data as { reqId?: string; op?: string; lead_agent?: string };
+  const m = ev.data as { reqId?: string; op?: string; lead_agent?: string; type?: string };
+  if (m?.type === "manual-changed") return;
   if (!m?.reqId || seen.has(m.reqId) || m.op === undefined) return;
   seen.add(m.reqId);
   channel.postMessage({ type: "ack", reqId: m.reqId });

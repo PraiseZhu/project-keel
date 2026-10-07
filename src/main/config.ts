@@ -25,6 +25,14 @@ export const DEFAULT_LIMITS: RuntimeLimits = {
   astraBudget: 4,
 };
 
+let cacheGen = 0;
+const cache = new WeakMap<Host, { gen: number; config: RuntimeConfig }>();
+
+/** Drop the in-memory RuntimeConfig so the next load re-reads /kv. */
+export function invalidateRuntimeConfig(): void {
+  cacheGen += 1;
+}
+
 function positiveInt(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
@@ -51,6 +59,8 @@ function readThresholds(raw: unknown): JevThresholds {
 }
 
 export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_PROFILE): Promise<RuntimeConfig> {
+  const hit = cache.get(host);
+  if (hit && hit.gen === cacheGen) return hit.config;
   let kv: Record<string, unknown>;
   try {
     kv = await host.kvGet();
@@ -72,5 +82,7 @@ export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_P
   }
 
   const lanes = Array.isArray(kv.lanes) ? (kv.lanes as LaneMatch[]) : built.lanes;
-  return { manual, lanes, limits: readLimits(kv.limits), thresholds: readThresholds(kv.thresholds) };
+  const config = { manual, lanes, limits: readLimits(kv.limits), thresholds: readThresholds(kv.thresholds) };
+  cache.set(host, { gen: cacheGen, config });
+  return config;
 }

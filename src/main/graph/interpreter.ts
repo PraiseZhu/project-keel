@@ -389,6 +389,8 @@ function clearlyStoppedStatus(status: string | undefined): boolean {
 function isVerifiedStopped(result: Record<string, unknown>, node: NodeRunState): boolean {
   if (result.ok !== true) return false;
   if (result.complete !== true) return false;
+  // A list from another team (or with no team) says nothing about the original writer.
+  if (!node.team_id || result.team_id !== node.team_id) return false;
   if (result.status === "archived") return false;
   const workers = result.workers;
   if (Array.isArray(workers)) {
@@ -512,8 +514,13 @@ function applySetup(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     nextDecide(state, "human:setup", "团队权限不是 bypassPermissions", ["retry_setup", "stop"], true, { mode });
     return;
   }
-  const teamId = event.outcome && typeof event.outcome.team_id === "string" ? event.outcome.team_id : undefined;
+  const teamId = event.outcome && typeof event.outcome.team_id === "string" && event.outcome.team_id ? event.outcome.team_id : undefined;
   const session = event.session_id ?? state.sol_session_id;
+  // Without a team id no later query can be tied to this team, so stopping a writer could never be proven.
+  if (!teamId) {
+    nextDecide(state, "human:setup", "团队初始化回执没有 team_id（可用 start_team 回执或 get_workspace_info 的 workflow id），无法绑定团队", ["retry_setup", "stop"], true);
+    return;
+  }
   if (state.team?.ready && hasInflightWriter(state, spec)) {
     state.prior_teams = [...(state.prior_teams ?? []), state.team];
   }
@@ -699,12 +706,10 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
     nextDecide(state, "human:send_initial", "补投结果未知，不能再发", ["stop"], true);
     return;
   }
+  // Idle with an empty queue looks the same whether the task was never accepted or already
+  // finished; Orca gives no history to tell them apart, so never resend automatically.
   if (hit.status === "idle" && !node.started_at && node.dispatch_state !== "running") {
-    node.send_initial_attempted = true;
-    nextRecover(state, node, key, "send_initial", "send_to_worker", {
-      worker_id: node.worker_id,
-      message: node.planned_params?.initial_task ?? "",
-    }, now);
+    nextDecide(state, "human:reconcile", "worker 空闲且队列为空：无法区分“从未受理”和“已经做完”，不自动补投，请查看该 worker 的输出", ["retry_reconcile", "stop"], true, { worker_id: node.worker_id });
     return;
   }
   if (hit.status === "idle") {

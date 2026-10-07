@@ -7,12 +7,19 @@ export type OrchLevel = Verdict;
 export type NodeVerdict = "PASS" | "PASS+NOTES" | "FAIL";
 export type EvidenceSurface = "live-ui" | "unit-test" | "type-check" | "blocked";
 
+export interface RanCommand {
+  readonly cmd: string;
+  readonly exit_code: number;
+  /** Test cases the runner's own summary says it executed and passed. Unit-level evidence needs at least one. */
+  readonly tests_passed?: number;
+}
+
 export interface NodeReport {
   readonly dispatch_key?: string;
   readonly status?: "done" | "partial" | "blocked" | "failed";
   readonly summary?: string;
   readonly verdict?: NodeVerdict;
-  readonly ran?: readonly { readonly cmd: string; readonly exit_code: number }[];
+  readonly ran?: readonly RanCommand[];
   readonly findings?: readonly string[];
   /** Self-reported surface. It can lower the level but never raise it above the evidence. */
   readonly surface?: EvidenceSurface;
@@ -52,7 +59,7 @@ export function levelMeets(actual: OrchLevel, required: OrchLevel = "unit-test-v
   return LEVEL_RANK[actual] > 0 && LEVEL_RANK[actual] >= LEVEL_RANK[required];
 }
 
-type Ran = readonly { readonly cmd: string; readonly exit_code: number }[];
+type Ran = readonly RanCommand[];
 
 // Flags and subcommands that list, build or describe tests without running them.
 const INFO_ONLY = new Set(["--version", "--help", "-h", "--list", "-list", "--listtests", "--collect-only", "--co", "--showconfig", "--no-run", "--dry-run"]);
@@ -99,7 +106,8 @@ function classifySimple(tokens: string[]): TestKind | null {
 function testInvocation(cmd: string): TestKind | null {
   // Quotes and escapes change how the shell splits words; without a real shell parser we
   // cannot tell a runner from text, so such commands prove nothing.
-  if (/\|\||\||;|`|\$\(|["'\\]/.test(cmd)) return null;
+  // Comments, newlines, background `&` and redirections are likewise not parsed.
+  if (/\|\||\||;|`|\$\(|["'\\#\n<>]|(^|[^&])&(?!&)/.test(cmd)) return null;
   let kind: TestKind | null = null;
   for (const seg of cmd.split("&&")) {
     const k = classifySimple(seg.trim().split(/\s+/));
@@ -116,7 +124,12 @@ function isRealTest(cmd: string): boolean {
 function evidenceSurface(report: NodeReport): EvidenceSurface {
   const ran: Ran = report.ran ?? [];
   if (ran.some((r) => r.exit_code !== 0 && isRealTest(r.cmd))) return "type-check";
-  const tests = ran.filter((r) => r.exit_code === 0).map((r) => testInvocation(r.cmd)).filter((k): k is TestKind => k !== null);
+  // A runner can exit 0 without running anything (listing, version, help, collect, compile).
+  // Flags vary by runner and release, so the proof is the runner's own count of passed tests.
+  const tests = ran
+    .filter((r) => r.exit_code === 0 && (r.tests_passed ?? 0) >= 1)
+    .map((r) => testInvocation(r.cmd))
+    .filter((k): k is TestKind => k !== null);
   const ui = (report.ui_evidence ?? []).some((e) => e.trim().length > 0);
   if (ui && (report.surface === "live-ui" || tests.includes("ui"))) return "live-ui";
   if (tests.length) return "unit-test";

@@ -67,7 +67,8 @@ describe("pr-facts path never calls legacy Jev", () => {
     const base = { repo: "acme/app", number: 9, at: "2026-10-07T00:00:00Z", head_sha: "abc", gate: null, evidence: null };
 
     const pending = fakeHost({ node });
-    pending.files.set(key, JSON.stringify({ ...base, status: "pending" }));
+    // Pending for an older head: reconcile must leave it pending, so it is not a handoff.
+    pending.files.set(key, JSON.stringify({ ...base, head_sha: "older", status: "pending" }));
     const p = await readPrFacts(makeContext(pending, "c1"), { repo: "acme/app", pr: 9 });
     expect(p.handedOff).toBe(false);
     expect(p.nextAction).not.toBe("stopped_after_handoff");

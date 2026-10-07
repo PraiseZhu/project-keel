@@ -4,8 +4,8 @@
 import { allowedActions } from "../../shared/lanes.ts";
 import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { node, type ToolContext } from "../context.ts";
-import { readHandoff } from "../handoff.ts";
-import { isMergeable } from "../tools/pr.ts";
+import { isCompleteHandoff, readHandoff, reconcileHandoff } from "../handoff.ts";
+import { isMergeable, snapshotArgs } from "../tools/pr.ts";
 
 type Snapshot = Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">;
 
@@ -36,11 +36,11 @@ export interface PrFacts {
 }
 
 export async function readPrFacts(ctx: ToolContext, args: Record<string, unknown>): Promise<PrFacts> {
-  const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
+  // Same snapshot inputs and handoff semantics as pr_status, so the graph cannot see a different state.
+  const snap = await node<Snapshot>(ctx, "pr/snapshot", await snapshotArgs(ctx, args));
   const raw = await node<{ threads?: PrThread[] }>(ctx, "pr/threads", prArgs(args));
-  // A pending record (Ready not yet confirmed) is not a handoff; records without status are complete.
-  const rec = (await readHandoff(ctx.host, snap.pr.repo, snap.pr.number)) as { status?: string } | null;
-  const handedOff = Boolean(rec) && rec!.status !== "pending";
+  const rec = await reconcileHandoff(ctx.host, await readHandoff(ctx.host, snap.pr.repo, snap.pr.number), snap);
+  const handedOff = isCompleteHandoff(rec);
   const allowed = allowedActions({
     rule: snap.rule,
     decision: snap.decision.kind,

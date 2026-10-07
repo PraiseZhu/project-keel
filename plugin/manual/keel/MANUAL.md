@@ -1,6 +1,6 @@
 # KEEL：中文入口
 
-主控协议：聊清需求后调 `keel_run({goal, sc, repo_dir, lead, profile?, pr?})`。之后只照 `next` 做：`setup` 就 `start_team({worker_permission_mode:"bypassPermissions"})`；`dispatch` 就把 `create_worker` 参数原样传入（不按 routing.json 换档），并立刻 `keel_report({phase:"accepted", ...回执})`；`reconcile` / `recover` 只做 next 指定的动作；worker 回报后 `keel_report({phase:"final"})`。只有 `next.kind=done` 才算完成；KEEL 永不合并。`decide` 时自己裁决，拿不准才问用户。pstack 手册是深读材料。
+主控协议：聊清需求后调 `keel_run({goal, sc, repo_dir, lead, profile?, pr?})`。之后只照 `next` 做：`setup` 就 `start_team({worker_permission_mode:"bypassPermissions"})`，`keel_report({phase:"setup", outcome:{worker_permission_mode, team_id}})` 的 team_id 先取 start_team 回执，没有就用 `get_workspace_info` 的 workflow id，缺则 human:setup；`dispatch` 就把 `create_worker` 参数原样传入（不按 routing.json 换档），并立刻 `keel_report({phase:"accepted", ...回执})`；`reconcile` / `recover` 的 `list_workers` 必须带同一 team_id。worker 回报后 `keel_report({phase:"final"})`。只有 `next.kind=done` 才算完成；KEEL 永不合并。`decide` 时自己裁决，拿不准才问用户。pstack 手册是深读材料。
 
 - 本机车道表与路径：`ghost_manual({ ghost_id: "keel", path: "keel/profile.md" })`
 - pstack 上游镜像与路由表：`ghost_manual({ ghost_id: "keel", path: "pstack/MANUAL.md" })`

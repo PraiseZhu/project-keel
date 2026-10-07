@@ -320,6 +320,7 @@ describe("reconcile / recover / setup wiring", () => {
         expected_recover_action: action,
         worker_id: "w1",
         worker_label: "keel-impl",
+        team_id: "t1",
       };
     });
     return { runId, key };
@@ -340,7 +341,7 @@ describe("reconcile / recover / setup wiring", () => {
       phase: "recover",
       dispatch_key: key,
       action: "verify_stopped",
-      action_result: { ok: true, complete: true, status: "archived", list_workers: { ok: true, complete: true, workers: [{ label: "keel-impl", worker_id: "w1", status: "archived" }] } },
+      action_result: { ok: true, complete: true, status: "archived", list_workers: { ok: true, complete: true, team_id: "t1", workers: [{ label: "keel-impl", worker_id: "w1", status: "archived" }] } },
     });
     expect(archived.ok).toBe(true);
     expect(archived.result.next.kind).toBe("decide");
@@ -375,5 +376,47 @@ describe("reconcile / recover / setup wiring", () => {
     expect(r.ok).toBe(true);
     const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
     expect(st.team).toMatchObject({ ready: true, team_id: "team-9", lead_session_id: "sol-sess" });
+  });
+  it("setup falls back to get_workspace_info workflow id and rejects a missing team_id", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const runId = started.result.run_id as string;
+    const viaWorkflow: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: runId,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions" },
+      get_workspace_info: { workflow_id: "wf-7" },
+    });
+    expect(viaWorkflow.ok).toBe(true);
+    expect(JSON.parse(h.files.get(graphStatePath(runId))!).team.team_id).toBe("wf-7");
+    const h2 = fakeHost({ node: nodeFake("change") });
+    const s2: any = await runTool(makeContext(h2, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    const missing: any = await runTool(makeContext(h2, "c2", profile), "keel_report", {
+      run_id: s2.result.run_id,
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions" },
+    });
+    expect(missing.ok).toBe(true);
+    expect(missing.result.next).toMatchObject({ kind: "decide", gate_id: "human:setup" });
+  });
+  it("verify_stopped without matching team_id is not stopped", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const planted = await plantRecover(h);
+    const r: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: planted.runId,
+      phase: "recover",
+      dispatch_key: planted.key,
+      action: "verify_stopped",
+      action_result: {
+        list_workers: { ok: true, complete: true, workers: [] },
+        worker_status: { ok: true, complete: true, status: "idle" },
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result.next).toMatchObject({ kind: "decide", gate_id: "human:verify_stopped" });
   });
 });

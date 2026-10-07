@@ -108,6 +108,17 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
 }
 
+/** start_team receipt first, else get_workspace_info workflow id. */
+export function resolveTeamId(...sources: unknown[]): string | undefined {
+  for (const src of sources) {
+    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+    const o = src as Record<string, unknown>;
+    const id = str(o.team_id) ?? str(o.teamId) ?? str(o.workflow_id) ?? str(o.workflowId);
+    if (id) return id;
+  }
+  return undefined;
+}
+
 type ContentFp = { head: string; status_digest: string; content_hash: string };
 
 /** Git failure is "fingerprint unknown", never a synthetic hash and never a pass. */
@@ -516,7 +527,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
   const base: Extract<AdvanceEvent, { type: "report" }> = { type: "report", phase: phase as Extract<AdvanceEvent, { type: "report" }> ["phase"] };
   if (phase === "setup") {
     const outcome = args.outcome && typeof args.outcome === "object" ? { ...(args.outcome as Record<string, unknown>) } : { ...args };
-    const team_id = str(outcome.team_id) ?? str(args.team_id);
+    const team_id = resolveTeamId(outcome, args, args.workspace_info, args.get_workspace_info);
     const session = str(args.session_id) ?? str(outcome.session_id) ?? str(outcome.lead_session_id);
     if (team_id) outcome.team_id = team_id;
     if (session) base.session_id = session;
@@ -546,6 +557,11 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       if (list.workers) ar.workers = list.workers;
       if (ar.ok === undefined) ar.ok = list.ok;
       if (ar.complete === undefined && list.complete !== undefined) ar.complete = list.complete;
+      const team_id = list.team_id ?? resolveTeamId(ar, args, args.workspace_info, args.get_workspace_info);
+      if (team_id) {
+        ar.team_id = team_id;
+        ar.list_workers = { ...list, team_id };
+      }
     }
     if (ar.worker_status && typeof ar.worker_status === "object") {
       const ws = ar.worker_status as Record<string, unknown>;

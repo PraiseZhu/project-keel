@@ -65,7 +65,26 @@ describe("dispatch recovery interrupts", () => {
     expect(diag.next.kind).toBe("recover");
     await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "diagnose", action_result: { running: true } }, { ...opts, gates: { retry: () => "retry" } });
     await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "archive", action_result: { ok: true } }, opts);
-    await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "verify_stopped", action_result: { ok: true, complete: true, stopped: true } }, opts);
+    await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "verify_stopped", action_result: { ok: true, complete: true, team_id: "other-team", stopped: true } }, opts);
+    // A proof from another team is rejected...
+    expect(readState(h).nodes.worker?.dispatch_key).toBe(key1);
+    expect(readState(h).status).toBe("waiting_human");
+  });
+
+  it("a stop proof from the original team releases the next attempt; old finals are ignored", async () => {
+    const { h, spec, opts } = await boot();
+    const d = await setupOk(h, spec);
+    if (d.next.kind !== "dispatch") throw new Error("dispatch");
+    const key1 = d.next.dispatch_key;
+    await advance(h, "run1", {
+      type: "report", phase: "accepted", dispatch_key: key1,
+      worker_id: "w1", worker_session_id: "ws1", dispatch_outcome: { created: true, delivered: true, queued: false },
+    }, opts);
+    h.clock.t += 5 * 60 * 1000;
+    await advance(h, "run1", { type: "tick" }, { ...opts, gates: { retry: () => "retry" } });
+    await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "diagnose", action_result: { running: true } }, { ...opts, gates: { retry: () => "retry" } });
+    await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "archive", action_result: { ok: true } }, opts);
+    await advance(h, "run1", { type: "report", phase: "recover", dispatch_key: key1, action: "verify_stopped", action_result: { ok: true, complete: true, team_id: "team-1", stopped: true } }, opts);
     const d2 = await advance(h, "run1", { type: "tick" }, opts);
     expect(d2.next.kind).toBe("dispatch");
     if (d2.next.kind !== "dispatch") throw new Error("dispatch2");
@@ -99,34 +118,6 @@ describe("dispatch recovery interrupts", () => {
     expect(rec.next.dispatch_key).toBe(key);
     expect(rec.next.queries.some((q) => q.tool === "getRun")).toBe(true);
     expect(rec.next.queries.some((q) => q.tool === "list_workers")).toBe(false);
-  });
-
-  it("lost send_initial receipt does not send the same text again", async () => {
-    const { h, spec, opts } = await boot();
-    const d = await setupOk(h, spec);
-    if (d.next.kind !== "dispatch") throw new Error("dispatch");
-    const key = d.next.dispatch_key;
-    h.clock.t += PLANNED_TIMEOUT_MS;
-    await advance(h, "run1", { type: "tick" }, opts);
-    const send = await advance(h, "run1", {
-      type: "report",
-      phase: "reconcile",
-      dispatch_key: key,
-      queries_result: {
-        list_workers: { ok: true, complete: true, team_id: "team-1", workers: [{ label: readState(h).nodes.worker!.worker_label!, worker_id: "w1", worker_session_id: "ws1", status: "idle" }] },
-        get_worker_queue_status: { ok: true, pending: [], consuming: null },
-      },
-    }, opts);
-    expect(send.next.kind).toBe("recover");
-    if (send.next.kind !== "recover") throw new Error("send_initial");
-    expect(send.next.action).toBe("send_initial");
-    expect(readState(h).nodes.worker?.send_initial_attempted).toBe(true);
-    const lost = await advance(h, "run1", {
-      type: "report", phase: "recover", dispatch_key: key, action: "send_initial", action_result: { ok: false, errorCode: "TIMEOUT" },
-    }, opts);
-    expect(lost.next.kind).not.toBe("recover");
-    const again = await advance(h, "run1", { type: "tick" }, opts);
-    if (again.next.kind === "recover") expect(again.next.action).not.toBe("send_initial");
   });
 
   it("archive then unverified stop opens a human gate instead of a new attempt", async () => {

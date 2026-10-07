@@ -5,7 +5,7 @@ import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
 import type { CardActionEvent } from "./graph/cards.ts";
-import { NudgeController, QUIET_STATUS, type NudgeRun } from "./graph/nudge.ts";
+import { NudgeController, NUDGE_INTERVAL_MS, scanNudgeClock, type NudgeRun } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
@@ -103,11 +103,24 @@ cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "did-turn-end" || msg.topic === "turn") {
     const reason = msg.endReason === "interrupted" || msg.endReason === "error" ? msg.endReason : "completed";
     const runs = await loadGraphStates(host);
-    const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => r != null && !QUIET_STATUS.has(r.status));
-    nudge.syncActive(mapped.map((r) => r.run_id));
-    for (const nr of mapped) await nudge.onTurnEnd(nr, { endReason: reason });
+    for (const r of runs) {
+      const nr = asNudgeRun(r);
+      if (nr) await nudge.onTurnEnd(nr, { endReason: reason });
+    }
+    return;
+  }
+  if (msg.type === "nudge-clock") {
+    await tickNudgeClock();
   }
 });
+
+async function tickNudgeClock(): Promise<void> {
+  const runs = await loadGraphStates(host);
+  const mapped = runs.map(asNudgeRun).filter((r): r is NudgeRun => r != null);
+  await scanNudgeClock(nudge, mapped);
+}
+
+if (typeof setInterval === "function") setInterval(() => { void tickNudgeClock(); }, NUDGE_INTERVAL_MS);
 
 channel?.addEventListener("message", (ev: MessageEvent) => {
   if ((ev.data as { type?: string } | null)?.type === "manual-changed") invalidateRuntimeConfig();

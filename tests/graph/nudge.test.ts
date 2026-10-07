@@ -7,6 +7,7 @@ import {
   NUDGE_PROMPT_TEMPLATE,
   NudgeController,
   nudgePrompt,
+  scanNudgeClock,
   onlyHealthyRunning,
   pendingLeadAction,
   shouldNudge,
@@ -432,6 +433,36 @@ describe("fairness waits only for runs asking in the current send window", () =>
     expect(calls).toEqual(["sess-a", "sess-a"]);
   });
 
+  it("clock scan calls syncActive once with the full driven set before scanning each run", async () => {
+    const { clock, c, a, b } = setup(false);
+    const done = run({ run_id: "run-done", status: "done", associated: true, session_id: "sess-done" });
+    const paused = run({ run_id: "run-paused", status: "paused", associated: true, session_id: "sess-paused" });
+    const seen: string[][] = [];
+    const real = c.syncActive.bind(c);
+    c.syncActive = (ids) => {
+      seen.push([...ids]);
+      real(ids);
+    };
+    const outcomes = await scanNudgeClock(c, [a, done, b, paused]);
+    expect(seen).toEqual([["run-a", "run-b"]]);
+    expect(outcomes).toHaveLength(2);
+    clock.t += NUDGE_INTERVAL_MS;
+    const second = await scanNudgeClock(c, [a, b]);
+    expect(seen[1]).toEqual(["run-a", "run-b"]);
+    expect(second).toHaveLength(2);
+  });
+  it("fairness, busy, or interval skips do not abort the rest of the clock pass", async () => {
+    const { clock, c, a, b, calls } = setup(false);
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    clock.t += 1;
+    const outcomes = await scanNudgeClock(c, [a, b]);
+    expect(outcomes.map((o) => o.reason)).toEqual(["interval", "interval"]);
+    expect(outcomes).toHaveLength(2);
+    clock.t += NUDGE_INTERVAL_MS;
+    const next = await scanNudgeClock(c, [a, b]);
+    expect(next).toHaveLength(2);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
   it("a paused waiter gives up its turn instead of blocking the window", async () => {
     const { clock, c, a, b, calls } = setup(false);
     expect((await c.maybeNudge(a)).action).toBe("continue");

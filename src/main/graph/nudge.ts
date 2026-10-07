@@ -357,3 +357,20 @@ export class NudgeController {
     }
   }
 }
+
+/** Runs the clock still drives this pass: not paused / stopped / done / waiting_human. */
+export function drivenNudgeRuns(runs: readonly NudgeRun[]): NudgeRun[] {
+  return runs.filter((r) => r?.run_id && !QUIET_STATUS.has(r.status));
+}
+
+/**
+ * One clock pass: syncActive once with the full driven set, then scan every run.
+ * fairness / busy / interval skips do not abort the rest of this pass.
+ */
+export async function scanNudgeClock(controller: NudgeController, runs: readonly NudgeRun[]): Promise<NudgeOutcome[]> {
+  const driven = drivenNudgeRuns(runs);
+  controller.syncActive(driven.map((r) => r.run_id));
+  const outcomes: NudgeOutcome[] = [];
+  for (const r of driven) outcomes.push(await controller.maybeNudge(r));
+  return outcomes;
+}

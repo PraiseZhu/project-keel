@@ -150,10 +150,12 @@ export async function snapshot(profile: KeelProfile, args: SnapshotArgs): Promis
     mergeable: facts.mergeable, mergeStateStatus: facts.mergeStateStatus, reviewDecision: facts.reviewDecision,
     labels: meta.labels.map((l) => l.name),
   };
-  const hasTerminalChecks = row.kind === "open" && !("noChecks" in row) && row.ci.all.some((c) => c.kind === "passed" || c.kind === "failed");
-  const evidence = row.kind === "open" && !hasTerminalChecks ? await collectNoChecksEvidence(repo, facts.headRefOid, facts.baseRefName, args) : null;
-  const treatAsNoChecks = Boolean(evidence) && ("noChecks" in row || !evidence!.hasRealCheckRuns);
-  const decision = row.kind === "closed" ? { kind: "closed" as const } : treatAsNoChecks && evidence && row.kind === "open" ? noChecksDecision(row, evidence) : decisionOf(classifyPr(row as T.PrSnapshot, false));
+  // Only an empty rollup takes the no-checks path. Any context the rollup reported (check-run or
+  // legacy commit status, pending included) is real CI and stays with upstream classifyPr; ghost
+  // suites that never produced a check-run do not appear in the rollup at all.
+  const evidence = row.kind === "open" && "noChecks" in row ? await collectNoChecksEvidence(repo, facts.headRefOid, facts.baseRefName, args) : null;
+  const treatAsNoChecks = Boolean(evidence);
+  const decision = row.kind === "closed" ? { kind: "closed" as const } : decideOpenRow(row, evidence);
   const checks =
     row.kind === "open" && !treatAsNoChecks && !("noChecks" in row)
       ? { failed: row.ci.failed.map((c) => c.name), pending: row.ci.pending.map((c) => c.name), passed: row.ci.all.filter((c) => c.kind === "passed").length }
@@ -291,6 +293,16 @@ export async function collectNoChecksEvidence(repo: string, headSha: string | nu
     localPushedAtMs: localPushAt(args.local_pushes, repo, headSha),
     nowMs,
   };
+}
+
+/** Route an open row: an empty rollup goes to noChecksDecision (with its evidence); anything the
+ *  rollup reported — check-runs or legacy commit statuses, pending included — goes to upstream classifyPr. */
+export function decideOpenRow(row: T.PrSnapshot | NoChecksRow, evidence: NoChecksEvidence | null): { kind: DecisionKind; blocker?: string } {
+  if ("noChecks" in row) {
+    if (!evidence) return { kind: "waiting" };
+    return noChecksDecision(row, evidence);
+  }
+  return decisionOf(classifyPr(row, false));
 }
 
 /** Same order as upstream classifyPr: conflict → threads → (no CI) → merge gate → ready.

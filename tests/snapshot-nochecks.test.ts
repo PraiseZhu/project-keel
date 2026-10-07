@@ -153,3 +153,22 @@ describe("KEEL local push records", () => {
     expect(snapCall[1].now_ms).toBe(h.now());
   });
 });
+
+describe("legacy commit status still pending (review F14-01)", () => {
+  it("keeps a pending StatusContext with upstream classifyPr instead of reporting ready", async () => {
+    const { readSnapshot } = await import("../src/node/pr/upstream/policy.ts");
+    const { fakeReader, pendingCheck } = await import("./helpers/upstream-fakes.ts");
+    const { parsePrNumber } = await import("../src/node/pr/upstream/types.ts");
+    const { decideOpenRow } = await import("../src/node/pr/snapshot.ts");
+    const row = await readSnapshot({
+      reader: fakeReader({ fastPath: { kind: "checks", checks: [pendingCheck("jenkins/test")] } }),
+      context: { owner: "acme", repo: "solo", number: parsePrNumber(1) },
+      pendingHistory: "omit",
+      allowDraft: false,
+    });
+    // No workflows, no branch protection, last KEEL push long ago: the old code turned this into "ready".
+    const stale = { ...none, localPushedAtMs: 0, nowMs: PUSH_GRACE_MS * 10 };
+    expect(decideOpenRow(row, stale).kind).toBe("waiting");
+    expect(decideOpenRow(row, null).kind).toBe("waiting");
+  });
+});

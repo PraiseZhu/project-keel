@@ -139,6 +139,7 @@ const manifest = {
   // tool behind the setup card until a key is saved.
   setup: { requires: [] },
   panel: { title: "KEEL", html: "panel.html" },
+  mainView: { title: "KEEL", icon: "chart-column", html: "graph-view.html" },
   badge: true,
   confirm: true,
   fs: true,

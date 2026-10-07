@@ -26,21 +26,22 @@ import { keywordRoute } from "./pstack.ts";
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
 const CHANGE_TYPES = new Set(["bug-fix", "feature", "refactoring", "pr"]);
 
-export function isFailFirstNode(nodeId: string): boolean {
-  const id = nodeId.toLowerCase();
-  return id === "reproduce" || id.includes("fail-first") || id.includes("failing-test");
-}
+/** G-advance predecessors in the unit graphs. ran[] stays raw; only this adapter maps acceptance. */
+export const ADVANCE_PREDECESSORS = ["research", "verify-same-surface", "equivalence"] as const;
 
 /**
- * G-advance exit_code is acceptance, not the raw command status.
- * Fail-first / reproduce: expected test failure → 0; unexpected pass → 1.
+ * Acceptance for G-advance, never a rewrite of the report's ran[].
+ * verify-same-surface: original tests now pass → 0.
+ * equivalence: check commands pass → 0.
+ * research: no test command, omit exit_code.
  */
 export function acceptanceExitCode(nodeId: string, ran: readonly { cmd: string; exit_code: number }[]): number | undefined {
-  if (!ran.length) return undefined;
-  const anyFail = ran.some((r) => r.exit_code !== 0);
-  if (isFailFirstNode(nodeId)) return anyFail ? 0 : 1;
-  const last = ran[ran.length - 1]!;
-  return anyFail ? last.exit_code || 1 : 0;
+  if (nodeId === "research") return undefined;
+  if (nodeId === "verify-same-surface" || nodeId === "equivalence") {
+    if (!ran.length) return undefined;
+    return ran.every((r) => r.exit_code === 0) ? 0 : 1;
+  }
+  return undefined;
 }
 
 export function advanceEvidenceForNode(input: {
@@ -53,7 +54,7 @@ export function advanceEvidenceForNode(input: {
   const ran = input.ran ?? [];
   const code = acceptanceExitCode(input.nodeId, ran);
   return {
-    evidence_present: ran.length > 0,
+    evidence_present: ran.length > 0 || input.nodeId === "research",
     ...(input.head_matches !== undefined ? { head_matches: input.head_matches } : {}),
     ...(code !== undefined ? { exit_code: code } : {}),
     new_evidence: input.new_report === true || input.new_commit === true,
@@ -179,27 +180,29 @@ function consumeGateAnswer(state: GraphRunState, gateId: string): string | undef
   return answer;
 }
 
-function previousReport(state: GraphRunState, gateId: string): { nodeId: string; report: NodeReportSnap } | undefined {
-  let best: { nodeId: string; at: number; report: NodeReportSnap } | undefined;
-  for (const [id, n] of Object.entries(state.nodes)) {
-    if (id === gateId || !n.last_report) continue;
-    const at = n.ended_at ?? 0;
-    if (!best || at >= best.at) best = { nodeId: id, at, report: n.last_report };
+function predecessorOfGate(state: GraphRunState, gateId: string): { nodeId: string; report?: NodeReportSnap } | undefined {
+  const spec = PSTACK_GRAPHS[state.spec_id as GraphTaskType];
+  const froms = spec?.edges.filter((e) => e.to === gateId).map((e) => e.from) ?? [];
+  for (const id of froms) {
+    const n = state.nodes[id];
+    if (n?.last_report) return { nodeId: id, report: n.last_report };
   }
-  return best ? { nodeId: best.nodeId, report: best.report } : undefined;
+  if (froms[0]) return { nodeId: froms[0], report: state.nodes[froms[0]]?.last_report };
+  return undefined;
 }
 
 function evidenceForGate(state: GraphRunState, gateId: string): Evidence {
-  const prev = previousReport(state, gateId);
+  const prev = predecessorOfGate(state, gateId);
   if (!prev) return { evidence_present: false, new_evidence: false };
+  const report = prev.report;
   const ev = advanceEvidenceForNode({
     nodeId: prev.nodeId,
-    ran: prev.report.ran,
-    ...(typeof prev.report.head_matches === "boolean" ? { head_matches: prev.report.head_matches } : {}),
-    new_report: prev.report.fresh === true,
-    new_commit: (prev.report.files_changed?.length ?? 0) > 0,
+    ran: report?.ran,
+    ...(typeof report?.head_matches === "boolean" ? { head_matches: report.head_matches } : {}),
+    new_report: report?.fresh === true,
+    new_commit: (report?.files_changed?.length ?? 0) > 0,
   });
-  if (prev.report.fresh) prev.report.fresh = false;
+  if (report?.fresh) report.fresh = false;
   return ev;
 }
 

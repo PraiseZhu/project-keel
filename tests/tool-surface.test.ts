@@ -180,49 +180,66 @@ describe("report / status / gate", () => {
   });
 });
 
-describe("G-advance evidence from reproduce", () => {
-  it("expected failing tests advance; unexpected pass stays", () => {
-    const expectedFail = advanceEvidenceForNode({
-      nodeId: "reproduce",
-      ran: [{ cmd: "npm test", exit_code: 1 }],
-      head_matches: true,
-      new_report: true,
-    });
-    expect(expectedFail.exit_code).toBe(0);
-    expect(expectedFail.new_evidence).toBe(true);
-    expect(GATES["G-advance"].deterministic(expectedFail)).toBe("advance");
-
-    const unexpectedPass = advanceEvidenceForNode({
-      nodeId: "reproduce",
+describe("G-advance evidence adapters", () => {
+  it("verify-same-surface advances when the original tests now pass, stays when they fail", () => {
+    const ok = advanceEvidenceForNode({
+      nodeId: "verify-same-surface",
       ran: [{ cmd: "npm test", exit_code: 0 }],
       head_matches: true,
       new_report: true,
     });
-    expect(unexpectedPass.exit_code).toBe(1);
-    expect(GATES["G-advance"].deterministic(unexpectedPass)).toBe("stay");
-    expect(GATES["G-advance"].deterministic({ ...unexpectedPass, new_evidence: true })).toBe("stay");
-  });
-  it("other nodes keep the command exit code", () => {
+    expect(ok.exit_code).toBe(0);
+    expect(GATES["G-advance"].deterministic(ok)).toBe("advance");
     const red = advanceEvidenceForNode({
-      nodeId: "implement",
+      nodeId: "verify-same-surface",
       ran: [{ cmd: "npm test", exit_code: 1 }],
       head_matches: true,
       new_report: true,
     });
     expect(red.exit_code).toBe(1);
     expect(GATES["G-advance"].deterministic(red)).toBe("stay");
-    const green = advanceEvidenceForNode({
-      nodeId: "implement",
-      ran: [{ cmd: "npm test", exit_code: 0 }],
+  });
+  it("equivalence advances when the check commands pass, stays when they fail", () => {
+    const ok = advanceEvidenceForNode({
+      nodeId: "equivalence",
+      ran: [{ cmd: "npm run equiv", exit_code: 0 }],
       head_matches: true,
       new_report: true,
     });
-    expect(green.exit_code).toBe(0);
-    expect(GATES["G-advance"].deterministic(green)).toBe("advance");
+    expect(ok.exit_code).toBe(0);
+    expect(GATES["G-advance"].deterministic(ok)).toBe("advance");
+    const red = advanceEvidenceForNode({
+      nodeId: "equivalence",
+      ran: [{ cmd: "npm run equiv", exit_code: 1 }],
+      head_matches: true,
+      new_report: true,
+    });
+    expect(red.exit_code).toBe(1);
+    expect(GATES["G-advance"].deterministic(red)).toBe("stay");
   });
-  it("new_evidence is only true for a new report or new commit", () => {
-    const stale = advanceEvidenceForNode({ nodeId: "reproduce", ran: [{ cmd: "npm test", exit_code: 1 }], head_matches: true });
-    expect(stale.new_evidence).toBe(false);
+  it("research omits exit_code; a head mismatch stays, otherwise Jev/lead decide", () => {
+    const ok = advanceEvidenceForNode({
+      nodeId: "research",
+      ran: [{ cmd: "rg foo src", exit_code: 1 }],
+      head_matches: true,
+      new_report: true,
+    });
+    expect(ok).not.toHaveProperty("exit_code");
+    expect(GATES["G-advance"].deterministic(ok)).toBeUndefined();
+    const mismatch = advanceEvidenceForNode({
+      nodeId: "research",
+      ran: [{ cmd: "rg foo src", exit_code: 0 }],
+      head_matches: false,
+      new_report: true,
+    });
+    expect(mismatch).not.toHaveProperty("exit_code");
+    expect(GATES["G-advance"].deterministic(mismatch)).toBe("stay");
+  });
+  it("does not rewrite ran[] and does not invert reproduce", () => {
+    const ran = [{ cmd: "npm test", exit_code: 1 }];
+    const repro = advanceEvidenceForNode({ nodeId: "reproduce", ran, head_matches: true, new_report: true });
+    expect(repro).not.toHaveProperty("exit_code");
+    expect(ran[0]!.exit_code).toBe(1);
   });
 });
 

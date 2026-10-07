@@ -75,7 +75,7 @@ describe("P1-1 change graph cannot false-complete", () => {
 describe("P1-2 gates use evidence and runGate", () => {
   it("G-advance with exit_code 1 stays without asking the lead", async () => {
     const ev = advanceEvidenceForNode({
-      nodeId: "implement",
+      nodeId: "verify-same-surface",
       ran: [{ cmd: "npm test", exit_code: 1 }],
       head_matches: true,
       new_report: true,
@@ -126,7 +126,7 @@ describe("P1-2 gates use evidence and runGate", () => {
           const leftover = s.sol_decisions.find((d) => d.gate_id === "g-advance-mechanism");
           expect(leftover).toBeUndefined();
           const ev = advanceEvidenceForNode({
-            nodeId: "research",
+            nodeId: "verify-same-surface",
             ran: [{ cmd: "npm test", exit_code: 1 }],
             head_matches: true,
             new_report: true,

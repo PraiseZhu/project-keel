@@ -5,6 +5,7 @@ import { cardUpdateMessage, parseCardActionEvent, parseTurnEndEvent, renderNudge
 import { loadGraphStates } from "./graph-snapshot.ts";
 import { NudgeController, drivenNudgeRuns, scanNudgeClock, type NudgeOutcome, type NudgeRun } from "./graph/nudge.ts";
 import type { Host } from "./host.ts";
+import { PSTACK_GRAPHS, type GraphTaskType } from "../shared/graph/pstack.ts";
 import { withRun } from "./store/runs.ts";
 
 export const NUDGE_CARD_TOOLS = new Set(["keel_run", "keel_status", "keel_wait"]);
@@ -13,13 +14,18 @@ export type HostNudgeRun = NudgeRun & { sol_session_id?: string };
 
 export function asNudgeRun(r: Record<string, any> | null | undefined): HostNudgeRun | null {
   if (!r?.run_id) return null;
-  const nodes = Object.entries((r.nodes ?? {}) as Record<string, any>).map(([id, n]) => ({
-    id,
-    dispatch_state: n.dispatch_state,
-    started_at: n.started_at,
-    timebox_ms: n.timebox_ms,
-    queued: Boolean(n.queued_message_id),
-  }));
+  const spec = PSTACK_GRAPHS[(r.spec_id ?? r.task_type) as GraphTaskType];
+  const nodes = Object.entries((r.nodes ?? {}) as Record<string, any>).map(([id, n]) => {
+    const fromSpec = spec?.nodes.find((node) => node.id === id)?.timebox_min;
+    const timebox_ms = typeof n.timebox_ms === "number" ? n.timebox_ms : typeof fromSpec === "number" ? fromSpec * 60_000 : undefined;
+    return {
+      id,
+      dispatch_state: n.dispatch_state,
+      started_at: n.started_at,
+      ...(timebox_ms !== undefined ? { timebox_ms } : {}),
+      queued: Boolean(n.queued_message_id),
+    };
+  });
   return {
     run_id: r.run_id,
     status: (r.status as NudgeRun["status"]) ?? "running",

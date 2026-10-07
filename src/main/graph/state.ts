@@ -231,6 +231,8 @@ export interface GraphRunState {
   repo?: string;
   worktree?: string;
   pr?: number | string;
+  /** True only when keel_run received an explicit pr. Branch resolve / pr_open must not overwrite it. */
+  pr_explicit?: boolean;
   goal: string;
   sc: SuccessCriterion[];
   status: RunStatus;
@@ -268,6 +270,7 @@ export interface InitRunOpts {
   repo?: string;
   worktree?: string;
   pr?: number | string;
+  pr_explicit?: boolean;
   sol_session_id?: string;
   start_state?: StartState;
   pr_binding?: PrBinding;
@@ -296,6 +299,7 @@ export function initGraphState(opts: InitRunOpts): GraphRunState {
     repo: opts.gh_repo ?? opts.repo,
     worktree: opts.worktree,
     pr: opts.pr,
+    ...(opts.pr_explicit ? { pr_explicit: true } : {}),
     goal: opts.goal,
     sc: opts.sc ?? [],
     status: "running",

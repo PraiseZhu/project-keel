@@ -21,6 +21,7 @@ import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
 import { withRun } from "../store/runs.ts";
 import { PSTACK_GRAPHS, TASK_TYPES, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
+import { countWaitCiRuns, pollIntervalMs } from "../graph/poll.ts";
 import { invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
 import { keywordRoute } from "./pstack.ts";
 
@@ -700,6 +701,7 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     repo: gh_repo,
     worktree,
     pr,
+    ...(pr !== undefined ? { pr_explicit: true } : {}),
     start_state,
     astra_budget: cfg.limits.astraBudget,
     now: ctx.host.now(),
@@ -887,21 +889,60 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
 const CI_WAIT_NODES = new Set(["wait-ci", "ci-rerun-once"]);
 const TOOL_PASS_NODES = new Set(["report", "report-ready"]);
 
-async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: string): Promise<{ bound: boolean; next?: Next }> {
-  const found = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: worktree }).catch(() => null);
-  if (!found?.number) return { bound: false };
-  const facts = await readPrFacts(ctx, { repo_dir: worktree, repo: found.repo, pr: found.number });
+function explicitPrNumber(pr: unknown): number | undefined {
+  if (typeof pr === "number" && Number.isInteger(pr) && pr > 0) return pr;
+  if (typeof pr === "string" && /^\d+$/.test(pr)) {
+    const n = Number(pr);
+    if (n > 0) return n;
+  }
+  return undefined;
+}
+
+function branchName(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  return ref.replace(/^refs\/heads\//, "");
+}
+
+async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: string): Promise<{ bound: boolean; mismatch?: { pr: number; expected_branch?: string; actual_branch?: string } }> {
+  const states = await loadGraphStates(ctx.host);
+  const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+  const git = await node<{ root?: string; branch?: string; head?: string; gh_repo?: string }>(ctx, "git/state", { repo_dir: worktree }).catch(() => ({ branch: undefined as string | undefined, gh_repo: undefined as string | undefined }));
+  const actualBranch = branchName(git.branch);
+  const given = st?.pr_explicit ? explicitPrNumber(st.pr) : undefined;
+  let repo: string | undefined;
+  let number: number | undefined;
+  if (given) {
+    number = given;
+    repo = ghRepoOf(st!) ?? (isGhRepo(git.gh_repo) ? git.gh_repo : undefined);
+  } else {
+    const found = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: worktree }).catch(() => null);
+    if (!found?.number) return { bound: false };
+    number = found.number;
+    repo = found.repo;
+  }
+  const facts = await readPrFacts(ctx, { repo_dir: worktree, ...(repo ? { repo } : {}), pr: number });
+  const expectedBranch = branchName(facts.snapshot.pr.headRef);
+  if (given && expectedBranch && actualBranch && expectedBranch !== actualBranch) {
+    return { bound: false, mismatch: { pr: given, expected_branch: expectedBranch, actual_branch: actualBranch } };
+  }
   const baseRef = facts.snapshot.pr.baseRef;
   const head = facts.snapshot.pr.headSha ?? undefined;
+  const headRepo = (isGhRepo(git.gh_repo) ? git.gh_repo : undefined) ?? facts.snapshot.pr.repo;
   const base = await node<{ base_sha?: string; base_ref: string }>(ctx, "git/base-sha", { repo_dir: worktree, base_ref: baseRef }).catch(() => ({ base_ref: baseRef, base_sha: undefined as string | undefined }));
   await withRun(ctx.host, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
-    s.pr = found.number;
-    s.gh_repo = found.repo;
-    s.repo = found.repo;
+    if (!given) {
+      s.pr = number;
+      if (facts.snapshot.pr.repo) {
+        s.gh_repo = facts.snapshot.pr.repo;
+        s.repo = facts.snapshot.pr.repo;
+      }
+    }
     s.pr_binding = {
-      repo: found.repo,
-      number: found.number,
+      repo: facts.snapshot.pr.repo,
+      number: number!,
+      ...(headRepo ? { head_repo: headRepo } : {}),
+      ...(expectedBranch ? { branch: expectedBranch } : {}),
       ...(head ? { head_sha: head } : {}),
       ...(baseRef ? { base_ref: baseRef } : {}),
       ...(base.base_sha ? { base_sha: base.base_sha } : {}),
@@ -928,12 +969,27 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
     waited_seconds: waited(),
   });
 
+  const interval = pollIntervalMs(countWaitCiRuns(states as unknown as GraphRunState[]));
+
   if (cursor === "open-pr") {
     ctx.host.progress(ctx.callId);
     if (!st?.worktree) {
       return { run_id: runId, next: { kind: "decide" as const, gate_id: "open-pr", question: "open-pr 没有 worktree，无法查 PR。", options: ["retry", "stop"] }, waited_seconds: waited() };
     }
     const bind = await bindPrFromWorktree(ctx, runId, st.worktree);
+    if (bind.mismatch) {
+      return {
+        run_id: runId,
+        next: {
+          kind: "decide" as const,
+          gate_id: "human:pr",
+          question: `显式 PR #${bind.mismatch.pr} 的分支是 ${bind.mismatch.expected_branch}，当前工作树是 ${bind.mismatch.actual_branch}。不能改绑。`,
+          options: ["retry", "stop"],
+          context: bind.mismatch,
+        },
+        waited_seconds: waited(),
+      };
+    }
     if (!bind.bound) return keepWait("尚未开 PR。主控先 pr_open，再 keel_wait。");
     const { next } = await step(ctx, runId, { type: "wait_done", on: "ok" });
     return { run_id: runId, next, waited_seconds: waited() };
@@ -975,8 +1031,8 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
           });
           return { run_id: runId, next, waited_seconds: waited() };
         }
-        if (ctx.host.now() + 15_000 > deadline) return keepWait();
-        await ctx.host.sleep(15_000);
+        if (ctx.host.now() + interval > deadline) return keepWait();
+        await ctx.host.sleep(interval);
       }
     }
     const { next } = await step(ctx, runId, { type: "tick" });
@@ -984,10 +1040,23 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
   }
 
   if (CI_WAIT_NODES.has(cursor)) {
-    if (st?.pr == null && st?.worktree) {
+    if (st?.worktree) {
       ctx.host.progress(ctx.callId);
       const bind = await bindPrFromWorktree(ctx, runId, st.worktree);
-      if (!bind.bound) return keepWait("尚未开 PR。");
+      if (bind.mismatch) {
+        return {
+          run_id: runId,
+          next: {
+            kind: "decide" as const,
+            gate_id: "human:pr",
+            question: `显式 PR #${bind.mismatch.pr} 的分支是 ${bind.mismatch.expected_branch}，当前工作树是 ${bind.mismatch.actual_branch}。不能改绑。`,
+            options: ["retry", "stop"],
+            context: bind.mismatch,
+          },
+          waited_seconds: waited(),
+        };
+      }
+      if (st.pr == null && !bind.bound) return keepWait("尚未开 PR。");
     }
     const fresh = (await loadGraphStates(ctx.host)).find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
     if (fresh?.pr == null) return keepWait("wait-ci 还没有绑定 PR。");
@@ -998,8 +1067,8 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
       const facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: fresh.pr, repo_dir: fresh.worktree });
       on = waitOnFromFacts(facts);
       if (on !== "wait") break;
-      if (ctx.host.now() + 15_000 > deadline) return keepWait();
-      await ctx.host.sleep(15_000);
+      if (ctx.host.now() + interval > deadline) return keepWait();
+      await ctx.host.sleep(interval);
     }
     const { next } = await step(ctx, runId, { type: "wait_done", on });
     return { run_id: runId, next, waited_seconds: waited() };

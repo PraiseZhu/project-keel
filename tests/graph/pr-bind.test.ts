@@ -152,6 +152,48 @@ describe("tool nodes that are not CI", () => {
   });
 });
 
+describe("AUDIT-01 explicit PR is not overwritten by branch resolve", () => {
+  it("keel_run pr:12 plus a branch that belongs to PR 13 stops without rebinding", async () => {
+    const h = fakeHost({
+      node: (method: string, params: Record<string, unknown>) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/other", head: HEAD, gh_repo: "fork/r" } };
+        if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        if (method === "pr/resolve") return { ok: true, result: { repo: "o/r", number: 13 } };
+        if (method === "pr/snapshot") {
+          const n = params.pr === 13 ? 13 : 12;
+          return prSnap({ pr: {
+            repo: "o/r", number: n, url: `https://github.com/o/r/pull/${n}`, title: "t", state: "OPEN",
+            isDraft: false, headSha: HEAD, headRef: n === 12 ? "feat/explicit" : "feat/other", baseRef: "main",
+            mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: null, labels: [],
+          } });
+        }
+        if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+        if (method === "git/base-sha") return { ok: true, result: { base_ref: "main", base_sha: BASE } };
+        if (method === "git/content-fingerprint") return { ok: true, result: { head: HEAD, status_digest: "d", content_hash: "h" } };
+        return { ok: false, message: method };
+      },
+    });
+    const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "推进已有功能", repo_dir: "/repo", lead: "codex", playbook: "pr", pr: 12,
+    });
+    const runId = started.result.run_id as string;
+    await withRun(h, runId, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.cursor = "open-pr";
+      s.worktree = "/repo/.worktrees/x";
+      s.pr = 12;
+      s.next = { kind: "wait", call: { tool: "keel_wait", args: { run_id: runId } } };
+    });
+    const r: any = await runTool(makeContext(h, "c2", profile), "keel_wait", { run_id: runId });
+    expect(r.ok).toBe(true);
+    expect(r.result.next.kind).not.toBe("done");
+    expect(["decide", "stop"]).toContain(r.result.next.kind);
+    const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
+    expect(st.pr).toBe(12);
+    expect(st.pr_binding?.number).not.toBe(13);
+  });
+});
+
 describe("verifier verdict uses pr_binding.base_sha", () => {
   it("builds a verdict with base_sha from the bound PR", async () => {
     const h = fakeHost({ node: bindNode });

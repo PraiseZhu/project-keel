@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ENABLE_AUTOPILOT, cardUpdateMessage, parseCardActionEvent, parseTurnEndEvent, renderNudgeCard, runIdFromCardAction } from "../../src/main/graph/cards.ts";
 import type { AgentRunResult, AssociateSessionReq, ContinueSessionReq, NudgePorts } from "../../src/main/graph/nudge.ts";
-import { NudgeController } from "../../src/main/graph/nudge.ts";
+import { NudgeController, onlyHealthyRunning, shouldNudge } from "../../src/main/graph/nudge.ts";
 import {
   asNudgeRun,
   flushNudgeCardOnToolCall,
@@ -160,6 +160,34 @@ describe("handbook host events and cards", () => {
     seedRun(host, "run-1", { status: "stalled" });
     await tickNudgeClockFor(c, host, [asNudgeRun(JSON.parse(host.files.get("runs/run-1/graph-state.json")!))!]);
     expect(p.log.continue).toHaveLength(0);
+  });
+
+  it("asNudgeRun fills timebox_ms from the graph spec so a late running node is nudged", async () => {
+    const { p } = ports();
+    const started = t0;
+    const host = fakeHost();
+    host.clock.t = started + 2 * 60 * 60_000;
+    seedRun(host, "run-tb", {
+      spec_id: "bug-fix",
+      task_type: "bug-fix",
+      status: "running",
+      next: { kind: "wait" },
+      updated_at: started,
+      nodes: {
+        "verify-head": {
+          status: "active",
+          dispatch_state: "running",
+          started_at: started,
+        },
+      },
+    });
+    const mapped = asNudgeRun(JSON.parse(host.files.get("runs/run-tb/graph-state.json")!))!;
+    expect(mapped.nodes?.[0]?.timebox_ms).toBe(40 * 60_000);
+    expect(onlyHealthyRunning(mapped, host.clock.t)).toBe(false);
+    expect(shouldNudge(mapped, host.clock.t).nudge).toBe(true);
+    const c = new NudgeController(p, { now: () => host.clock.t });
+    await tickNudgeClockFor(c, host, [mapped]);
+    expect(JSON.parse(host.files.get("runs/run-tb/graph-state.json")!).nudge_pending_card).toBe(true);
   });
 
   it("remembered mapping still resolves after a later tool-call", async () => {

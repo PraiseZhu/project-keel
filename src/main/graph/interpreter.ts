@@ -543,7 +543,7 @@ function applySetup(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   const session = event.session_id ?? state.sol_session_id;
   // Without a team id no later query can be tied to this team, so stopping a writer could never be proven.
   if (!teamId) {
-    nextDecide(state, "human:setup", "团队初始化回执没有 team_id（可用 start_team 回执或 get_workspace_info 的 workflow id），无法绑定团队", ["retry_setup", "stop"], true);
+    nextDecide(state, "human:setup", "团队初始化回执没有 team_id（可用 start_team 回执或 get_workspace_info.workflow.workflow_id；workflow 为 null 则没有团队），无法绑定团队", ["retry_setup", "stop"], true);
     return;
   }
   if (state.team?.ready && hasInflightWriter(state, spec)) {

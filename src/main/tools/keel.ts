@@ -108,12 +108,36 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
 }
 
-/** start_team receipt first, else get_workspace_info workflow id. */
+function workflowObj(src: Record<string, unknown>): Record<string, unknown> | undefined {
+  // Worker session: get_workspace_info.workflow is null → this source has no team.
+  if ("workflow" in src && (src.workflow === null || src.workflow === undefined)) return undefined;
+  if (src.workflow && typeof src.workflow === "object" && !Array.isArray(src.workflow)) return src.workflow as Record<string, unknown>;
+  return src;
+}
+
+/** start_team receipt first, else get_workspace_info.workflow.workflow_id. workflow:null = no team. */
 export function resolveTeamId(...sources: unknown[]): string | undefined {
   for (const src of sources) {
     if (!src || typeof src !== "object" || Array.isArray(src)) continue;
     const o = src as Record<string, unknown>;
-    const id = str(o.team_id) ?? str(o.teamId) ?? str(o.workflow_id) ?? str(o.workflowId);
+    if ("workflow" in o && (o.workflow === null || o.workflow === undefined)) continue;
+    const wf = workflowObj(o);
+    const id = str(o.team_id) ?? str(o.teamId) ?? str(o.workflow_id) ?? str(o.workflowId)
+      ?? (wf ? str(wf.workflow_id) ?? str(wf.workflowId) ?? str(wf.team_id) : undefined);
+    if (id) return id;
+  }
+  return undefined;
+}
+
+/** Main-control session may take get_workspace_info.workflow.lead_session_id. */
+export function resolveLeadSessionId(...sources: unknown[]): string | undefined {
+  for (const src of sources) {
+    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+    const o = src as Record<string, unknown>;
+    if ("workflow" in o && (o.workflow === null || o.workflow === undefined)) continue;
+    const wf = workflowObj(o);
+    const id = str(o.session_id) ?? str(o.lead_session_id) ?? str(o.leadSessionId)
+      ?? (wf ? str(wf.lead_session_id) ?? str(wf.leadSessionId) ?? str(wf.session_id) : undefined);
     if (id) return id;
   }
   return undefined;
@@ -552,7 +576,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
   if (phase === "setup") {
     const outcome = args.outcome && typeof args.outcome === "object" ? { ...(args.outcome as Record<string, unknown>) } : { ...args };
     const team_id = resolveTeamId(outcome, args, args.workspace_info, args.get_workspace_info);
-    const session = str(args.session_id) ?? str(outcome.session_id) ?? str(outcome.lead_session_id);
+    const session = resolveLeadSessionId(args, outcome, args.workspace_info, args.get_workspace_info);
     if (team_id) outcome.team_id = team_id;
     if (session) base.session_id = session;
     base.outcome = outcome;

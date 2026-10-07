@@ -375,7 +375,7 @@ describe("F26-07 / team_id from get_workspace_info at reconcile", () => {
         list_workers: { ok: true, complete: true, team_id: "stale-copy", workers: [{ label: "keel-impl", worker_id: "w1", worker_session_id: "ws1", status: "running" }] },
         get_worker_queue_status: { ok: true, pending: [], consuming: null },
       },
-      get_workspace_info: { workflow_id: "wf-live" },
+      get_workspace_info: { ok: true, workflow: { workflow_id: "wf-live", lead_session_id: "sess-live", status: "active" }, workers: [] },
     });
     expect(r.ok).toBe(true);
     expect(r.result.next.kind).not.toBe("decide");

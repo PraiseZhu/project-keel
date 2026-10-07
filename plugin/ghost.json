@@ -125,9 +125,33 @@
           "sc": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "text"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "verify": {
+                  "type": "string"
+                },
+                "min_level": {
+                  "type": "string",
+                  "enum": [
+                    "live-ui-verified",
+                    "unit-test-verified",
+                    "type-check-only"
+                  ]
+                }
+              }
             },
-            "description": "成功标准 {id,text,verify?}[]。"
+            "description": "成功标准 {id,text,verify?,min_level?}[]。"
           },
           "repo_dir": {
             "type": "string",

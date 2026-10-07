@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { makeContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
+import { normalizeSc } from "../../src/main/tools/keel.ts";
 import { isChangeGraphDone } from "../../src/main/graph/done.ts";
 import { advance, createRun } from "../../src/main/graph/interpreter.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
@@ -194,6 +195,141 @@ describe("R26-03 open-pr next pushes a branch with no upstream", () => {
     });
     expect(opened.number).toBe(42);
     expect(git(wt, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").trim()).toMatch(/origin\//);
+  });
+});
+
+describe("R26-R04 invalid SC is rejected, not dropped", () => {
+  it("keel_run rejects missing text/id and illegal min_level with INVALID_SC", async () => {
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: HEAD, gh_repo: "o/r" } };
+        if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        return { ok: false, message: method };
+      },
+    });
+    const missingText: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", playbook: "bug-fix",
+      sc: [{ id: "SC-2", min_level: "live-ui-verified", verify: "npx playwright test" }],
+    });
+    expect(missingText.ok).toBe(false);
+    expect(missingText.errorCode).toBe("INVALID_SC");
+    expect(missingText.message).toMatch(/sc\[0\]/);
+    expect(missingText.message).toMatch(/text/);
+    expect(missingText.data).toMatchObject({ index: 0, missing: expect.arrayContaining(["text"]) });
+    expect([...h.files.keys()].some((k) => k.includes("graph-state"))).toBe(false);
+
+    const missingId: any = await runTool(makeContext(h, "c2", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", playbook: "bug-fix",
+      sc: [{ text: "点击成功", min_level: "live-ui-verified", verify: "npx playwright test" }],
+    });
+    expect(missingId.ok).toBe(false);
+    expect(missingId.errorCode).toBe("INVALID_SC");
+    expect(missingId.data).toMatchObject({ index: 0, missing: expect.arrayContaining(["id"]) });
+
+    const badLevel: any = await runTool(makeContext(h, "c3", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", playbook: "bug-fix",
+      sc: [{ id: "SC-1", text: "点击成功", min_level: "not-a-level", verify: "npx vitest run" }],
+    });
+    expect(badLevel.ok).toBe(false);
+    expect(badLevel.errorCode).toBe("INVALID_SC");
+    expect(badLevel.data).toMatchObject({ index: 0, missing: expect.arrayContaining(["min_level"]) });
+
+    const manifest = JSON.parse(readFileSync("plugin/ghost.json", "utf8"));
+    const items = manifest.tools.find((t: { name: string }) => t.name === "keel_run").parameters.properties.sc.items;
+    expect(items.required).toEqual(expect.arrayContaining(["id", "text"]));
+    expect(items.properties.min_level.enum).toEqual(["live-ui-verified", "unit-test-verified", "type-check-only"]);
+  });
+});
+
+describe("R26-R05 quoted UI verify still implies live-ui", () => {
+  it("quoted, piped, and env-prefixed UI commands infer live-ui; vitest does not", () => {
+    const ui = [
+      'npx playwright test --project="chromium"',
+      "npx playwright test | tee log.txt",
+      "CI=1 npx playwright test",
+      "pnpm exec cypress run --spec 'a.js'",
+    ];
+    for (const verify of ui) {
+      expect(normalizeSc([{ id: "SC-1", text: "实际界面验收", verify }])[0]?.min_level, verify).toBe("live-ui-verified");
+    }
+    expect(normalizeSc([{ id: "SC-1", text: "单测", verify: "npx vitest run" }])[0]?.min_level).toBeUndefined();
+  });
+});
+
+describe("R26-R06 late final cannot overwrite hard gate after concurrent retry", () => {
+  it("blocked git/base-sha then attempt2 FAIL: only failure is written externally", async () => {
+    let release!: () => void;
+    let reached!: () => void;
+    const paused = new Promise<void>((r) => { release = r; });
+    const atBase = new Promise<void>((r) => { reached = r; });
+    let baseCalls = 0;
+    const host = fakeHost({
+      node: async (method: string) => {
+        if (method === "git/state") return { ok: true, result: { head: HEAD, root: "/repo", branch: "feat/x" } };
+        if (method === "pr/snapshot") return prSnap();
+        if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+        if (method === "git/base-sha") {
+          if (++baseCalls === 1) { reached(); await paused; }
+          return { ok: true, result: { base_sha: BASE } };
+        }
+        if (method === "git/patch-id") return { ok: true, result: { ok: true, patch_id: "patch" } };
+        if (method === "orch/run" || method === "gh/commit-status") return { ok: true, result: {} };
+        return { ok: false, message: method };
+      },
+    });
+    await createRun(host, {
+      run_id: "race-verifier", spec_id: "bug-fix", task_type: "bug-fix", profile_id: "sol",
+      lead_harness: "codex", entry: "verify-head", goal: "修复", worktree: "/repo/wt", pr: 1, repo: "o/r", now: host.now(),
+    });
+    await withRun(host, "race-verifier", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.status = "running";
+      s.next = { kind: "wait", call: { tool: "keel_wait", args: { run_id: "race-verifier" } } };
+      s.team = { ready: true, team_id: "t1" };
+      s.author_families = ["grok"];
+      s.nodes["verify-head"] = {
+        status: "active", attempts: 1, dispatch_key: "race-verifier:verify-head:1", dispatch_state: "running",
+        started_at: host.now() - 40 * 60_000 + 1000, dispatch_state_at: host.now() - 40 * 60_000 + 1000,
+        worker_id: "w1", worker_label: "ver1", team_id: "t1",
+        planned_params: {
+          label: "ver1", role: "keel-verifier", agent: "codex", model: "gpt-6-luna",
+          provider_id: "art-cindy", initial_task: "v", writes: false, fallbacks: [], route_index: 0,
+        },
+        actual_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" },
+      };
+    });
+    const ctx = { ...EMPTY_PROFILE, lanes: [{ repo: "o/r", preset: "personal" as const, verifyCheck: "keel/verifier" }] };
+    const pending = runTool(makeContext(host, "race", ctx), "keel_report", {
+      run_id: "race-verifier", phase: "final", dispatch_key: "race-verifier:verify-head:1",
+      inline_report: { status: "done", summary: "old", verdict: "PASS", head_sha: HEAD, ran: [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 1 }] },
+    });
+    await atBase;
+    host.clock.t += 2000;
+    const opts = { gates: { retry: () => "retry" as const } };
+    const timed = await advance(host, "race-verifier", { type: "tick" }, opts);
+    expect(timed.next).toMatchObject({ kind: "recover", action: "diagnose" });
+    await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:verify-head:1", action: "diagnose", action_result: { running: true } }, opts);
+    await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:verify-head:1", action: "archive", action_result: { ok: true } }, opts);
+    const retry = await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:verify-head:1", action: "verify_stopped", action_result: { ok: true, complete: true, team_id: "t1", workers: [] } }, opts);
+    expect(retry.next).toMatchObject({ kind: "dispatch", dispatch_key: "race-verifier:verify-head:2" });
+    const accepted: any = await runTool(makeContext(host, "new-accepted"), "keel_report", {
+      run_id: "race-verifier", phase: "accepted", dispatch_key: "race-verifier:verify-head:2",
+      worker_id: "w2", worker_session_id: "ws2", dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
+    });
+    expect(accepted.ok).toBe(true);
+    await runTool(makeContext(host, "new-final", ctx), "keel_report", {
+      run_id: "race-verifier", phase: "final", dispatch_key: "race-verifier:verify-head:2",
+      inline_report: { status: "failed", summary: "new attempt failed", verdict: "FAIL", head_sha: HEAD, ran: [{ cmd: "npx vitest run", exit_code: 1, tests_passed: 0 }] },
+    });
+    release();
+    const out: any = await pending;
+    expect(out.ok).toBe(true);
+    const state = JSON.parse(host.files.get("runs/race-verifier/graph-state.json")!) as GraphRunState;
+    expect(state.verdict?.level).toBe("verifier-failed");
+    expect(state.late_reports).toHaveLength(1);
+    const writes = host.nodeCalls.filter((c) => c.method === "gh/commit-status" || (c.method === "orch/run" && (c.params as { op?: string }).op === "ledger.record"));
+    expect(writes.filter((c) => c.method === "gh/commit-status").map((c) => (c.params as { state?: string }).state)).toEqual(["failure"]);
+    expect(writes.filter((c) => c.method === "orch/run").map((c) => (c.params as { args?: { verdict?: string } }).args?.verdict)).toEqual(["verifier-failed"]);
   });
 });
 

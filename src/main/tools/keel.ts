@@ -14,7 +14,7 @@ import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
 import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type SuccessCriterion, type Verdict } from "../graph/state.ts";
 import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
-import { buildVerdict, classifyVerifyCommand, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
+import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
 import { newRunId } from "../ledger.ts";
@@ -458,24 +458,35 @@ function asScMinLevel(v: unknown): SuccessCriterion["min_level"] {
   return undefined;
 }
 
+/** Loose SC.verify surface: any independent playwright/cypress token tightens the requirement. */
+export function scVerifyImpliesLiveUi(verify: string): boolean {
+  return /(^|[^A-Za-z0-9_])(playwright|cypress)([^A-Za-z0-9_]|$)/i.test(verify);
+}
+
 export function normalizeSc(raw: unknown): SuccessCriterion[] {
-  if (!Array.isArray(raw)) return [];
-  const out: SuccessCriterion[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new KeelError("INVALID_SC", "sc 必须是数组。", { field: "sc" });
+  return raw.map((item, i) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new KeelError("INVALID_SC", `sc[${i}] 不是对象。`, { index: i, missing: ["object"] });
+    }
     const o = item as Record<string, unknown>;
-    if (typeof o.id !== "string" || !o.id || typeof o.text !== "string") continue;
-    const verify = typeof o.verify === "string" ? o.verify : undefined;
+    const missing: string[] = [];
+    if (typeof o.id !== "string" || !o.id.trim()) missing.push("id");
+    if (typeof o.text !== "string" || !o.text.trim()) missing.push("text");
+    const hasMin = Object.prototype.hasOwnProperty.call(o, "min_level") || Object.prototype.hasOwnProperty.call(o, "minLevel");
     const named = asScMinLevel(o.min_level) ?? asScMinLevel(o.minLevel);
-    const inferred = !named && verify && classifyVerifyCommand(verify) === "ui" ? "live-ui-verified" as const : undefined;
-    out.push({
-      id: o.id,
-      text: o.text,
+    if (hasMin && !named) missing.push("min_level");
+    if (missing.length) throw new KeelError("INVALID_SC", `sc[${i}] 缺少或非法：${missing.join("、")}`, { index: i, missing });
+    const verify = typeof o.verify === "string" ? o.verify : undefined;
+    const inferred = !named && verify && scVerifyImpliesLiveUi(verify) ? "live-ui-verified" as const : undefined;
+    return {
+      id: o.id as string,
+      text: o.text as string,
       ...(verify ? { verify } : {}),
       ...(named ?? inferred ? { min_level: named ?? inferred } : {}),
-    });
-  }
-  return out;
+    };
+  });
 }
 
 function scRows(state: GraphRunState): ScRow[] {
@@ -859,8 +870,11 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     if (Object.keys(ar).length) base.action_result = ar;
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
   }
+  let pendingSink: GraphVerdict | undefined;
+  let finalKey: string | undefined;
   if (phase === "final") {
     const key = requireString(args, "dispatch_key");
+    finalKey = key;
     base.dispatch_key = key;
     const parsedKey = parseDispatchKey(key);
     const states = await loadGraphStates(ctx.host);
@@ -930,15 +944,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         fresh: true,
       };
       base.report = snap;
-      const currentAttempt = Boolean(
-        nodeState
-        && nodeState.dispatch_key === key
-        && nodeState.status !== "succeeded"
-        && nodeState.status !== "failed"
-        && nodeState.status !== "skipped"
-        && nodeState.dispatch_state !== "terminal",
-      );
-      if (currentAttempt && nodeState?.planned_params?.role === "keel-verifier" && st?.worktree && headMatches && parsed.head_sha) {
+      if (nodeState?.planned_params?.role === "keel-verifier" && st?.worktree && headMatches && parsed.head_sha) {
         const route = nodeState.actual_route ?? {
           agent: nodeState.planned_params.agent as Harness,
           model: nodeState.planned_params.model,
@@ -963,7 +969,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
               report: verdictReportFromNode(parsed),
               route,
             });
-            const verdict: Verdict = {
+            base.verdict = {
               head: gv.head_sha,
               base_ref: gv.base_ref,
               base_sha: gv.base_sha,
@@ -974,14 +980,16 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
               by_route: gv.by_route as Verdict["by_route"],
               by_family: gv.by_family,
             };
-            base.verdict = verdict;
-            await recordVerifierVerdict(ctx, st, gv);
+            pendingSink = gv;
           }
         }
       }
     }
   }
-  const { next } = await step(ctx, runId, base);
+  const { next, state } = await step(ctx, runId, base);
+  if (pendingSink && finalKey && !(state.late_reports ?? []).some((r) => r.dispatch_key === finalKey)) {
+    await recordVerifierVerdict(ctx, state, pendingSink);
+  }
   return { run_id: runId, next };
 }
 

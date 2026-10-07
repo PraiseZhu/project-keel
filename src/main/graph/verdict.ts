@@ -54,7 +54,9 @@ export function levelMeets(actual: OrchLevel, required: OrchLevel = "unit-test-v
 
 type Ran = readonly { readonly cmd: string; readonly exit_code: number }[];
 
-const INFO_ONLY = new Set(["--version", "--help", "--list", "--listtests", "--collect-only", "--showconfig"]);
+// Flags and subcommands that list, build or describe tests without running them.
+const INFO_ONLY = new Set(["--version", "--help", "--list", "-list", "--listtests", "--collect-only", "--co", "--showconfig", "--no-run", "--dry-run"]);
+const VITEST_NON_RUN = new Set(["list", "bench", "typecheck", "init"]);
 const PM = new Set(["npm", "pnpm", "yarn", "bun"]);
 const RUNNERS = new Set(["vitest", "jest", "mocha", "pytest"]);
 
@@ -72,7 +74,8 @@ function classifySimple(tokens: string[]): TestKind | null {
   if (args.some((a) => INFO_ONLY.has(a))) return null;
   if (exe === "npx" || exe === "bunx") return classifySimple(rest.filter((a, i) => !(i === 0 && a.startsWith("-"))));
   if (exe === "uv" && args[0] === "run") return classifySimple(rest.slice(1));
-  if (PM.has(exe) && (args[0] === "exec" || args[0] === "dlx")) return classifySimple(rest.slice(1));
+  if (PM.has(exe) && (args[0] === "exec" || args[0] === "dlx")) return classifySimple(rest.slice(args[1] === "--" ? 2 : 1));
+  if (exe === "vitest" && args[0] && !args[0].startsWith("-") && VITEST_NON_RUN.has(args[0])) return null;
   if (RUNNERS.has(exe)) return "unit";
   if ((exe === "python" || exe === "python3") && args[0] === "-m" && args[1] === "pytest") return "unit";
   if ((exe === "go" || exe === "cargo") && args[0] === "test") return "unit";
@@ -91,7 +94,9 @@ function classifySimple(tokens: string[]): TestKind | null {
  * the exit code covers it: pipes, `||` and `;` let a failing test still exit 0, so they prove nothing.
  */
 function testInvocation(cmd: string): TestKind | null {
-  if (/\|\||\||;|`|\$\(/.test(cmd)) return null;
+  // Quotes and escapes change how the shell splits words; without a real shell parser we
+  // cannot tell a runner from text, so such commands prove nothing.
+  if (/\|\||\||;|`|\$\(|["'\\]/.test(cmd)) return null;
   let kind: TestKind | null = null;
   for (const seg of cmd.split("&&")) {
     const k = classifySimple(seg.trim().split(/\s+/));

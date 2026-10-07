@@ -53,6 +53,13 @@ describe("list_workers normalization", () => {
     expect(normalizeListWorkers({ ok: true, workers: [{ label: "a" }] }).complete).toBe(true);
     expect(normalizeListWorkers({ ok: true, workers: [], count: 0, team_id: "t1" }).team_id).toBe("t1");
   });
+  it("maps platform workerId/sessionId onto worker_id/worker_session_id", () => {
+    const out = normalizeListWorkers({
+      ok: true,
+      workers: [{ label: "keel-w", workerId: "w1", sessionId: "s1", status: "running" }],
+    });
+    expect(out.workers?.[0]).toMatchObject({ label: "keel-w", worker_id: "w1", worker_session_id: "s1", status: "running" });
+  });
   it("maps create_worker receipts from real Orca fields", () => {
     const r = mapCreateWorkerReceipt({
       worker_id: "w1",

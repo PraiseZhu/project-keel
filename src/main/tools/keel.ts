@@ -68,7 +68,19 @@ export function normalizeListWorkers(raw: unknown): NonNullable<ReconcileQueries
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, complete: false };
   const o = raw as Record<string, unknown>;
   const ok = o.ok === true;
-  const workers = Array.isArray(o.workers) ? o.workers as NonNullable<ReconcileQueries["list_workers"]>["workers"] : undefined;
+  const workers = Array.isArray(o.workers)
+    ? o.workers.map((row) => {
+        const w = rec(row);
+        const worker_id = str(w.worker_id) ?? str(w.workerId);
+        const worker_session_id = str(w.worker_session_id) ?? str(w.sessionId) ?? str(w.workerSessionId);
+        return {
+          label: str(w.label) ?? "",
+          ...(worker_id ? { worker_id } : {}),
+          ...(worker_session_id ? { worker_session_id } : {}),
+          ...(str(w.status) ? { status: str(w.status) } : {}),
+        };
+      })
+    : undefined;
   const count = typeof o.count === "number" ? o.count : undefined;
   const complete = ok && Array.isArray(workers) && (count === undefined || count === workers.length);
   const team_id = str(o.team_id) ?? str(o.teamId);

@@ -3,24 +3,24 @@ import { dirname, join } from "node:path";
 import { ToolError, git, gitRaw } from "../env.ts";
 import { repoRoot } from "./worktree.ts";
 
+// -z keeps names byte-exact (no trimming, no quoting); --no-renames lists a rename's source too.
 function splitNames(out: string): string[] {
-  return out.split("\n").map((s) => s.trim()).filter(Boolean);
+  return out.split("\0").filter(Boolean);
 }
 
 export async function changedFiles(p: { repo_dir?: string; base?: string }): Promise<{ files: string[] }> {
   if (!p.repo_dir) throw new ToolError("INVALID_INPUT", "缺少 repo_dir。");
   const cwd = p.repo_dir;
+  const diff = ["diff", "--name-only", "--no-renames", "--relative", "-z"];
+  // Any failed query throws: a query that could not run is never reported as "no changes".
+  const outs = await Promise.all([
+    ...(p.base ? [git([...diff, p.base], { cwd })] : []),
+    git(diff, { cwd }),
+    git([...diff, "--cached"], { cwd }),
+    git(["ls-files", "--others", "--exclude-standard", "-z"], { cwd }),
+  ]);
   const names = new Set<string>();
-  if (p.base) {
-    const vsBase = await gitRaw(["diff", "--name-only", "--relative", p.base], { cwd });
-    if (vsBase.code === 0) for (const n of splitNames(vsBase.stdout)) names.add(n);
-  }
-  const unstaged = await gitRaw(["diff", "--name-only", "--relative"], { cwd });
-  const staged = await gitRaw(["diff", "--name-only", "--cached", "--relative"], { cwd });
-  const untracked = await gitRaw(["ls-files", "--others", "--exclude-standard"], { cwd });
-  for (const n of splitNames(unstaged.stdout)) names.add(n);
-  for (const n of splitNames(staged.stdout)) names.add(n);
-  for (const n of splitNames(untracked.stdout)) names.add(n);
+  for (const out of outs) for (const n of splitNames(out)) names.add(n);
   return { files: [...names].sort() };
 }
 

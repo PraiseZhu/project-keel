@@ -12,6 +12,7 @@ import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
 import { checkScope } from "../graph/scope.ts";
 import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type Verdict } from "../graph/state.ts";
+import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
 import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
@@ -470,8 +471,10 @@ export async function runDoneCheck(ctx: ToolContext, state: GraphRunState): Prom
     openHumanGates: openHumanGates(state),
   };
   const result = isChangeGraphDone(input);
-  if (result.done) return { ok: true, summary: "变更图完成" };
-  return { ok: false, next: mapChangeDoneFailure(state, result) };
+  const ledger = await confirmLedgerHead(ctx, state, head);
+  const missing = [...result.missing, ...ledger.missing];
+  if (missing.length === 0) return { ok: true, summary: "变更图完成" };
+  return { ok: false, next: mapChangeDoneFailure(state, { done: false, missing, next: result.next ?? "wait" }) };
 }
 
 async function persistSideEffects(host: Host, state: GraphRunState): Promise<void> {
@@ -877,6 +880,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
               by_family: gv.by_family,
             };
             base.verdict = verdict;
+            await recordVerifierVerdict(ctx, st, gv);
           }
         }
       }

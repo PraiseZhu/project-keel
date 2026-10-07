@@ -11,6 +11,7 @@ import { parseDispatchKey, type GraphRunState, type Next } from "../../src/main/
 import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { ToolError } from "../../src/node/env.ts";
+import { runOrch } from "../../src/node/orch/rpc.ts";
 import { changedFiles } from "../../src/node/git/files.ts";
 import { contentFingerprint } from "../../src/node/git/fingerprint.ts";
 import { patchId } from "../../src/node/git/patch.ts";
@@ -311,6 +312,21 @@ export function makeE2eHost(world: World): FakeHost {
       }
       if (method === "pr/snapshot") return { ok: true, result: prSnapshot(world) };
       if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+      if (method === "orch/run") {
+        try {
+          const result = await runOrch({
+            store: String(params.store),
+            op: String(params.op),
+            args: params.args,
+            force: Boolean(params.force),
+          });
+          return { ok: true, result };
+        } catch (e) {
+          const code = e instanceof ToolError ? e.code : "ORCH_ERROR";
+          return { ok: false, message: `${code}: ${e instanceof Error ? e.message : String(e)}` };
+        }
+      }
+      if (method === "gh/commit-status") return { ok: true, result: { ok: true, repo: params.repo, sha: params.sha, context: params.context, state: params.state } };
       return { ok: false, message: `UNEXPECTED ${method}` };
     },
   });

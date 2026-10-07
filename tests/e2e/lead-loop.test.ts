@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { family } from "../../src/shared/fanout.ts";
+/**
+ * 假主控 e2e：只执行 next.call（note 允许补 authorization_source / run_id）。
+ * RAN_OK.tests_passed 是合成输入，只验证编排是否读取该字段，不代表目标仓真的跑过测试。
+ */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {

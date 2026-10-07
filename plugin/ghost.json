@@ -118,16 +118,55 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "goal": { "type": "string", "description": "任务目标原话。" },
-          "sc": { "type": "array", "items": { "type": "object" }, "description": "成功标准 {id,text,verify?}[]。" },
-          "repo_dir": { "type": "string", "description": "仓库绝对路径。" },
-          "lead": { "type": "string", "enum": ["codex", "claude-code", "pi"], "description": "当前主控 harness。" },
-          "profile": { "type": "string", "description": "点名主控方案 id。" },
-          "pr": { "type": ["integer", "string"], "description": "已有 PR 编号（pr 任务类型）。" },
-          "playbook": { "type": "string", "description": "可选：bug-fix / feature / refactoring / investigation / pr。" },
-          "branch": { "type": "string", "description": "pr 类型要检出的已有分支。" }
+          "goal": {
+            "type": "string",
+            "description": "任务目标原话。"
+          },
+          "sc": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "成功标准 {id,text,verify?}[]。"
+          },
+          "repo_dir": {
+            "type": "string",
+            "description": "仓库绝对路径。"
+          },
+          "lead": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude-code",
+              "pi"
+            ],
+            "description": "当前主控 harness。"
+          },
+          "profile": {
+            "type": "string",
+            "description": "点名主控方案 id。"
+          },
+          "pr": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "已有 PR 编号（pr 任务类型）。"
+          },
+          "playbook": {
+            "type": "string",
+            "description": "可选：bug-fix / feature / refactoring / investigation / pr。"
+          },
+          "branch": {
+            "type": "string",
+            "description": "pr 类型要检出的已有分支。"
+          }
         },
-        "required": ["goal", "repo_dir", "lead"]
+        "required": [
+          "goal",
+          "repo_dir",
+          "lead"
+        ]
       }
     },
     {
@@ -137,21 +176,60 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "run_id": { "type": "string" },
-          "phase": { "type": "string", "enum": ["setup", "accepted", "reconcile", "recover", "final"] },
-          "dispatch_key": { "type": "string" },
-          "outcome": { "type": "object" },
-          "worker_id": { "type": "string" },
-          "worker_session_id": { "type": "string" },
-          "dispatch_outcome": { "type": "object" },
-          "queued_message_id": { "type": "string" },
-          "queries_result": { "type": "object" },
-          "action": { "type": "string" },
-          "action_result": { "type": "object" },
-          "inline_report": { "type": "object" },
-          "scope": { "type": "array", "items": { "type": "string" } }
+          "run_id": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "accepted",
+              "reconcile",
+              "recover",
+              "final"
+            ]
+          },
+          "dispatch_key": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "object"
+          },
+          "worker_id": {
+            "type": "string"
+          },
+          "worker_session_id": {
+            "type": "string"
+          },
+          "dispatch_outcome": {
+            "type": "object"
+          },
+          "queued_message_id": {
+            "type": "string"
+          },
+          "queries_result": {
+            "type": "object"
+          },
+          "action": {
+            "type": "string"
+          },
+          "action_result": {
+            "type": "object"
+          },
+          "inline_report": {
+            "type": "object"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["run_id", "phase"]
+        "required": [
+          "run_id",
+          "phase"
+        ]
       }
     },
     {
@@ -161,10 +239,17 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "run_id": { "type": "string" },
-          "max_minutes": { "type": "integer", "description": "≤15，缺省 15。" }
+          "run_id": {
+            "type": "string"
+          },
+          "max_minutes": {
+            "type": "integer",
+            "description": "≤15，缺省 15。"
+          }
         },
-        "required": ["run_id"]
+        "required": [
+          "run_id"
+        ]
       }
     },
     {
@@ -174,12 +259,24 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "run_id": { "type": "string" },
-          "gate_id": { "type": "string" },
-          "answer": { "type": "string" },
-          "reason": { "type": "string" }
+          "run_id": {
+            "type": "string"
+          },
+          "gate_id": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
         },
-        "required": ["run_id", "gate_id", "answer"]
+        "required": [
+          "run_id",
+          "gate_id",
+          "answer"
+        ]
       }
     },
     {
@@ -189,7 +286,9 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "run_id": { "type": "string" }
+          "run_id": {
+            "type": "string"
+          }
         }
       }
     },
@@ -206,7 +305,7 @@
           },
           "repo_dir": {
             "type": "string",
-            "description": "可选：目标仓库目录。"
+            "description": "目标仓库目录（必填）。"
           },
           "repo": {
             "type": "string",
@@ -222,7 +321,8 @@
           }
         },
         "required": [
-          "task"
+          "task",
+          "repo_dir"
         ]
       }
     },
@@ -825,7 +925,9 @@
   "fs": true,
   "card": true,
   "subscribe": {
-    "topics": ["turn"]
+    "topics": [
+      "turn"
+    ]
   },
   "agent": {
     "schedule": true,

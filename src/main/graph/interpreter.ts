@@ -178,8 +178,8 @@ function specOf(state: GraphRunState, opts?: AdvanceOpts): GraphSpec {
   return g;
 }
 
-function nodeById(spec: GraphSpec, id: string): GraphNode {
-  const n = spec.nodes.find((x) => x.id === id);
+function nodeById(spec: GraphSpec, id: string, extra?: GraphNode): GraphNode {
+  const n = spec.nodes.find((x) => x.id === id) ?? (extra?.id === id ? extra : undefined);
   if (!n) throw new KeelError("INVALID_INPUT", `图中没有节点 ${id}`);
   return n;
 }
@@ -650,7 +650,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     beginReconcile(state, node, key, now);
     return;
   }
-  const specNode = nodeById(spec, id);
+  const specNode = nodeById(spec, id, state.consult_node);
   if (specNode.kind === "plugin_task") {
     const task = node.task;
     if (!task) throw new KeelError("REPORT_INVALID", "plugin_task 缺少 task 记录");
@@ -853,7 +853,7 @@ async function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extrac
   if (action === "diagnose") {
     node.expected_recover_action = undefined;
     const still = result.status === "running" || result.running === true;
-    const specNode = nodeById(spec, id);
+    const specNode = nodeById(spec, id, state.consult_node);
     const classified = classifyRetry(node.error_mode ?? (still ? "too_long" : "unknown"), node.consecutive_failures ?? 0);
     const hooked = await Promise.resolve(gates?.retry?.({ node: id, error_mode: node.error_mode, consecutive_failures: node.consecutive_failures ?? 0, state }));
     const decision = hooked ?? classified.decision;
@@ -867,7 +867,7 @@ async function applyRecover(state: GraphRunState, spec: GraphSpec, event: Extrac
       return;
     }
     if (decision === "stop") {
-      const specNodeStop = nodeById(spec, id);
+      const specNodeStop = nodeById(spec, id, state.consult_node);
       if (hasLiveWriter(specNodeStop, node) && node.dispatch_key) {
         requestWriterStop(state, node, key, "stop", now);
         return;
@@ -1152,10 +1152,11 @@ async function enter(
 
   const id = state.cursor;
   if (id === ASTRA_CONSULT_ID) {
+    state.consult_node = ASTRA_CONSULT_NODE;
     if (!state.team?.ready && state.pending_astra_gate?.gate_id !== "G-route") return nextSetup(state);
     return planOrca(state, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
-  const specNode = nodeById(spec, id);
+  const specNode = nodeById(spec, id, state.consult_node);
   const node = ensureNode(state, id);
 
   if (spec.exits.includes(id as "done" | "stopped") || specNode.id === "done" || specNode.id === "stopped") {
@@ -1298,7 +1299,7 @@ async function computeNext(
   if (active && active.node.team_id && state.team?.team_id && active.node.team_id !== state.team.team_id && !active.node.writer_stopped) {
     return nextDecide(state, "human:team", "主控或团队已变，旧写入者状态未知，不能重派", ["stop"], true);
   }
-  if (active && !state.team?.ready && active.node.planned_params) return nextSetup(state);
+  if (active && !state.team?.ready && active.node.planned_params && active.id !== state.consult_node?.id) return nextSetup(state);
   if (active) {
     const { node } = active;
     if (node.task && node.dispatch_state === "planned") {

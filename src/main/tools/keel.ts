@@ -324,6 +324,7 @@ async function startEntryAstraConsult(
   await withRun(ctx.host, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
     s.pending_astra_gate = { gate_id: "G-route", options: astra.options, question: astra.question };
+    s.consult_node = { id: ASTRA_CONSULT_ID, kind: "dispatch", role: "architect", writes: false, playbook_steps: [], timebox_min: 40, max_attempts: 2 };
   });
   return step(ctx, runId, { type: "tick" });
 }

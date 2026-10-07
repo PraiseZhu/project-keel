@@ -1,5 +1,6 @@
 // graph-state.json: Appendix A fields plus a few interpreter-only bookkeeping keys.
 
+import type { GraphNode } from "../../shared/graph/spec.ts";
 import type { Harness, Route, TaskType } from "../../shared/manual/schema.ts";
 
 export const DISPATCH_STATES = ["planned", "accepted", "running", "reported", "terminal", "reconciling"] as const;
@@ -267,6 +268,8 @@ export interface GraphRunState {
   pending_astra_gate?: PendingAstraGate;
   /** Entry G-route Astra choice, used to materialize the real unit graph. */
   g_route_choice?: string;
+  /** Virtual consult node not in the unit spec; nodeById falls back here. */
+  consult_node?: GraphNode;
 }
 
 export interface InitRunOpts {

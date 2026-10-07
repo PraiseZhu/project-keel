@@ -199,6 +199,16 @@ export class NudgeController {
   }
 
   /**
+   * The clock calls this once per pass with every run it still drives. A waiter that is no
+   * longer driven (deleted, finished elsewhere) leaves the queue here, so it can never hold
+   * a fairness turn it will not use.
+   */
+  syncActive(runIds: Iterable<string>): void {
+    const live = new Set(runIds);
+    for (const id of [...this.bgPending.keys()]) if (!live.has(id)) this.bgPending.delete(id);
+  }
+
+  /**
    * Fairness only waits for runs that asked in the current send window. A run that stopped
    * asking (deleted, finished elsewhere) drops out by itself; repeated asks from one run
    * never push a live waiter out, because nothing is evicted.

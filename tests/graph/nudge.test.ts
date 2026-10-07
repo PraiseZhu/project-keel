@@ -419,6 +419,19 @@ describe("fairness waits only for runs asking in the current send window", () =>
     expect(calls).toEqual(["sess-hold", "sess-b"]);
   });
 
+  it("a waiter that asked this window and then stopped being driven is dropped by syncActive", async () => {
+    const { clock, c, a, b, calls } = setup(false);
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    clock.t += 1;
+    // B asks in the new window (interval), so it is the fairest waiter; then B is deleted.
+    expect((await c.maybeNudge(b)).reason).toBe("interval");
+    clock.t += NUDGE_INTERVAL_MS;
+    expect((await c.maybeNudge(a)).reason).toBe("fairness");
+    c.syncActive(["run-a"]);
+    expect((await c.maybeNudge(a)).action).toBe("continue");
+    expect(calls).toEqual(["sess-a", "sess-a"]);
+  });
+
   it("a paused waiter gives up its turn instead of blocking the window", async () => {
     const { clock, c, a, b, calls } = setup(false);
     expect((await c.maybeNudge(a)).action).toBe("continue");

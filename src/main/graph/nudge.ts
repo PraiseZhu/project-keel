@@ -174,8 +174,8 @@ export type CardActionResult =
 
 interface BackgroundPending {
   lastAttemptAt: number | null;
-  /** Value of the controller's call counter when this run last asked to continue. */
-  lastSeenSeq: number;
+  /** Send window (controller epoch) in which this run last asked to continue. */
+  lastSeenEpoch: number;
 }
 
 export class NudgeController {
@@ -186,8 +186,8 @@ export class NudgeController {
   private pluginLastSentAt: number | null = null;
   /** Runs waiting to background-continue; fairness uses oldest lastAttemptAt. */
   private readonly bgPending = new Map<string, BackgroundPending>();
-  /** Counts background-continue requests across all runs; staleness is measured in calls, not time. */
-  private seq = 0;
+  /** Increments on every background send attempt; a send window is the time between two attempts. */
+  private epoch = 0;
 
   constructor(
     private readonly ports: NudgePorts,
@@ -199,21 +199,15 @@ export class NudgeController {
   }
 
   /**
-   * Drop waiters that stopped asking. Every live run asks once per round, so a waiter missing
-   * for more than two full rounds of the other waiters has stopped ticking. Counting calls
-   * instead of time keeps a slow or uneven clock from evicting a live waiter.
+   * Fairness only waits for runs that asked in the current send window. A run that stopped
+   * asking (deleted, finished elsewhere) drops out by itself; repeated asks from one run
+   * never push a live waiter out, because nothing is evicted.
    */
-  private prunePending(): void {
-    const limit = 2 * this.bgPending.size + 2;
-    for (const [id, p] of this.bgPending) {
-      if (this.seq - p.lastSeenSeq > limit) this.bgPending.delete(id);
-    }
-  }
-
   private fairestPending(): string | undefined {
     let best: string | undefined;
     let bestT = Infinity;
     for (const [id, p] of this.bgPending) {
+      if (p.lastSeenEpoch !== this.epoch) continue;
       const t = p.lastAttemptAt ?? Number.NEGATIVE_INFINITY;
       if (t < bestT) {
         bestT = t;
@@ -276,8 +270,11 @@ export class NudgeController {
     }
 
     const state = this.byRun.get(run.run_id) ?? newNudgeState(Boolean(run.associated));
-    if (state.paused) return { action: "skip", reason: "paused" };
-    if (state.stalled) return { action: "skip", reason: "stalled" };
+    // A run that cannot send now must not hold the fairness turn of the current window.
+    if (state.paused || state.stalled) {
+      this.bgPending.delete(run.run_id);
+      return { action: "skip", reason: state.paused ? "paused" : "stalled" };
+    }
 
     if (state.versionAtLastNudge === run.version && state.consecutiveWithoutProgress >= maxStreak) {
       state.stalled = true;
@@ -293,6 +290,7 @@ export class NudgeController {
     this.byRun.set(run.run_id, state);
 
     if (useCard) {
+      this.bgPending.delete(run.run_id);
       // A card waits for the user's click: show it once per run version, not once per tick.
       if (state.cardShownVersion === run.version && state.cardShownAt !== null) {
         return { action: "skip", reason: "card_interval" };
@@ -305,11 +303,9 @@ export class NudgeController {
       return { action: "card", reason: this.config.cardOnly ? "card_only" : "unassociated", prompt, card };
     }
 
-    this.seq += 1;
-    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenSeq: this.seq };
-    pending.lastSeenSeq = this.seq;
+    const pending = this.bgPending.get(run.run_id) ?? { lastAttemptAt: null, lastSeenEpoch: this.epoch };
+    pending.lastSeenEpoch = this.epoch;
     this.bgPending.set(run.run_id, pending);
-    this.prunePending();
     if (this.pluginInFlight) return { action: "skip", reason: "busy" };
     if (this.pluginLastSentAt !== null && now - this.pluginLastSentAt < intervalMs) return { action: "skip", reason: "interval" };
     const turn = this.fairestPending();
@@ -317,6 +313,7 @@ export class NudgeController {
 
     this.pluginInFlight = true;
     this.pluginLastSentAt = now;
+    this.epoch += 1;
     pending.lastAttemptAt = now;
 
     try {

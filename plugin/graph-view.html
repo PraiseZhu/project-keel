@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="graph-view.css"></head>
+<body>
+<nav>
+  <button data-tab="graph" class="on">Graph</button>
+  <button data-tab="prs">PR</button>
+</nav>
+<section id="graph">
+  <div class="bar"><button type="button" id="graph-refresh">刷新</button></div>
+  <div id="runs" class="list">正在读取…</div>
+</section>
+<section id="prs" hidden>
+  <div class="bar"><button type="button" id="refresh">刷新看板</button><span id="at"></span></div>
+  <div id="board" class="list">点「刷新看板」读取你名下的 open PR。</div>
+</section>
+<p id="msg" role="status"></p>
+<script src="graph-view.js"></script>
+</body></html>

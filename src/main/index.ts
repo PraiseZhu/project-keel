@@ -2,6 +2,7 @@
 
 import { makeContext } from "./context.ts";
 import { runTool } from "./dispatch.ts";
+import { loadGraphStates } from "./graph-snapshot.ts";
 import type { Host } from "./host.ts";
 
 declare const cindy: any;
@@ -62,6 +63,11 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
       }
     }
     channel.postMessage({ type: "fanouts", reqId: m.reqId, fanouts: fanouts.reverse() });
+    const runs = await loadGraphStates(host);
+    channel.postMessage({ type: "graph", reqId: m.reqId, runs });
+  } else if (m.op === "graph") {
+    const runs = await loadGraphStates(host);
+    channel.postMessage({ type: "graph", reqId: m.reqId, runs });
   } else if (m.op === "schedule") {
     const r = await host.requestSchedule?.({ name: "Keel PR 巡检", prompt: "调用 Keel 插件的 pr_board 工具刷新我的 PR 看板，把可合并与阻塞的 PR 用一句话总结给我。不要合并任何 PR。", intervalMs: 60 * 60 * 1000 });
     channel.postMessage(r?.ok ? { type: "scheduled", reqId: m.reqId } : { type: "error", reqId: m.reqId, message: r?.message ?? "无法打开自动化创建面板" });

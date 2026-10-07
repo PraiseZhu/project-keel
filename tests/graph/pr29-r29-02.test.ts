@@ -29,7 +29,17 @@ describe("R29-02 Astra rematerialize", () => {
     const start = await call(h, "keel_run", { goal: "重构登录功能", repo_dir: "/repo", lead: "claude-code", scope: ["src/**"] });
     expect(start.ok).toBe(true);
     if (!start.ok) return;
-    const started = start.result as { run_id: string; next: { kind: string; dispatch_key?: string } };
+    let started = start.result as { run_id: string; next: { kind: string; dispatch_key?: string } };
+    if (started.next.kind === "setup") {
+      const setup0 = await call(h, "keel_report", {
+        run_id: started.run_id,
+        phase: "setup",
+        outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+      });
+      expect(setup0.ok).toBe(true);
+      if (!setup0.ok) return;
+      started = { run_id: started.run_id, next: (setup0.result as { next: { kind: string; dispatch_key?: string } }).next };
+    }
     await call(h, "keel_report", {
       run_id: started.run_id,
       phase: "accepted",

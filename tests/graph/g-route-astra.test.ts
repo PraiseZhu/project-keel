@@ -24,8 +24,19 @@ describe("G-route entry with direction_gate=astra", () => {
     expect(started.ok).toBe(true);
     if (!started.ok) return;
     const result = started.result as { run_id: string; next: { kind: string } };
+    expect(result.next.kind).not.toBe("decide");
+    const afterSetup = result.next.kind === "setup"
+      ? await runTool(makeContext(h, "c2", profile), "keel_report", {
+          run_id: result.run_id,
+          phase: "setup",
+          outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+        })
+      : started;
+    expect(afterSetup.ok).toBe(true);
+    if (!afterSetup.ok) return;
+    const next = (afterSetup.result as { next: { kind: string } }).next;
     const st = JSON.parse(h.files.get(graphStatePath(result.run_id))!);
     expect(st.astra_calls ?? 0).toBeGreaterThan(0);
-    expect(result.next.kind).not.toBe("decide");
+    expect(next.kind).toBe("dispatch");
   });
 });

@@ -1153,7 +1153,7 @@ async function enter(
   const id = state.cursor;
   if (id === ASTRA_CONSULT_ID) {
     state.consult_node = ASTRA_CONSULT_NODE;
-    if (!state.team?.ready && state.pending_astra_gate?.gate_id !== "G-route") return nextSetup(state);
+    if (!state.team?.ready) return nextSetup(state);
     return planOrca(state, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
   const specNode = nodeById(spec, id, state.consult_node);
@@ -1299,7 +1299,7 @@ async function computeNext(
   if (active && active.node.team_id && state.team?.team_id && active.node.team_id !== state.team.team_id && !active.node.writer_stopped) {
     return nextDecide(state, "human:team", "主控或团队已变，旧写入者状态未知，不能重派", ["stop"], true);
   }
-  if (active && !state.team?.ready && active.node.planned_params && active.id !== state.consult_node?.id) return nextSetup(state);
+  if (active && !state.team?.ready && active.node.planned_params) return nextSetup(state);
   if (active) {
     const { node } = active;
     if (node.task && node.dispatch_state === "planned") {

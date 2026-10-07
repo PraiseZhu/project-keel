@@ -179,6 +179,16 @@ export async function prune(repoDir: string, paths: readonly string[]) {
   return { removed, refused };
 }
 
+/** Fetch origin/<base_ref> if possible, then merge-base with HEAD. Fetch failure is not fatal. */
+export async function originBaseSha(p: { repo_dir?: string; base_ref?: string }): Promise<{ base_ref: string; base_sha?: string; fetched: boolean }> {
+  if (!p.repo_dir) throw new ToolError("INVALID_INPUT", "缺少 repo_dir。");
+  const baseRef = assertRef((p.base_ref || "main").replace(/^origin\//, ""));
+  const fetched = (await gitRaw(["fetch", "origin", baseRef, "--quiet"], { cwd: p.repo_dir, timeoutMs: 60_000 })).code === 0;
+  const mb = await gitRaw(["merge-base", `origin/${baseRef}`, "HEAD"], { cwd: p.repo_dir });
+  const sha = mb.code === 0 ? mb.stdout.trim() : "";
+  return { base_ref: baseRef, fetched, ...(sha ? { base_sha: sha } : {}) };
+}
+
 export async function gitState(repoDir: string) {
   const root = await repoRoot(repoDir);
   const branch = (await gitRaw(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repoDir })).stdout.trim();

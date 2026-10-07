@@ -320,6 +320,23 @@ function planPlugin(state: GraphRunState, specNode: GraphNode, node: ReturnType<
 }
 
 function nextWait(state: GraphRunState): Next {
+  if (state.cursor === "open-pr") {
+    const next: Next = {
+      kind: "wait",
+      call: {
+        tool: "pr_open",
+        args: {
+          repo_dir: state.worktree ?? state.repo ?? "",
+          ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
+          ...(state.pr_binding?.base_ref ? { base: state.pr_binding.base_ref } : {}),
+        },
+      },
+      note: "主控先调用 pr_open（authorization_source 由主控按用户授权填写），再调用 keel_wait。",
+      after: "keel_wait",
+    };
+    state.next = next;
+    return next;
+  }
   const next: Next = { kind: "wait", call: { tool: "keel_wait", args: { run_id: state.run_id, max_minutes: 15 } } };
   state.next = next;
   return next;

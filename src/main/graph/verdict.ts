@@ -14,7 +14,10 @@ export interface NodeReport {
   readonly verdict?: NodeVerdict;
   readonly ran?: readonly { readonly cmd: string; readonly exit_code: number }[];
   readonly findings?: readonly string[];
+  /** Self-reported surface. It can lower the level but never raise it above the evidence. */
   readonly surface?: EvidenceSurface;
+  /** Live-UI artifacts (screenshot paths, step logs). live-ui-verified needs at least one. */
+  readonly ui_evidence?: readonly string[];
 }
 
 export interface RouteIdentity {
@@ -49,11 +52,35 @@ export function levelMeets(actual: OrchLevel, required: OrchLevel = "unit-test-v
   return LEVEL_RANK[actual] > 0 && LEVEL_RANK[actual] >= LEVEL_RANK[required];
 }
 
-function inferSurface(ran: readonly { cmd: string; exit_code: number }[]): EvidenceSurface {
-  const passed = ran.filter((r) => r.exit_code === 0).map((r) => r.cmd.toLowerCase());
-  if (passed.some((c) => /playwright|cypress|selenium|\be2e\b|live-ui|ui-test/.test(c))) return "live-ui";
-  if (passed.some((c) => /vitest|pytest|jest|npm test|pnpm test|cargo test|go test|node --test/.test(c))) return "unit-test";
+type Ran = readonly { readonly cmd: string; readonly exit_code: number }[];
+
+const INFO_ONLY = /(^|\s)(--version|--help|--list|--listtests|--collect-only)(\s|$)/;
+const TEST_RUNNER = /\b(vitest|jest|pytest|mocha|playwright test|cypress run|cargo test|go test|node --test|(npm|pnpm|yarn|bun)( run)? test(:[\w-]+)?)\b/;
+const UI_RUNNER = /\b(playwright test|cypress run)\b/;
+
+function isRealTest(cmd: string): boolean {
+  const c = cmd.toLowerCase();
+  return TEST_RUNNER.test(c) && !INFO_ONLY.test(c) && !/\btsc\b/.test(c);
+}
+
+/** Highest surface the passing commands and artifacts actually prove. */
+function evidenceSurface(report: NodeReport): EvidenceSurface {
+  const ran: Ran = report.ran ?? [];
+  if (ran.some((r) => r.exit_code !== 0 && isRealTest(r.cmd))) return "type-check";
+  const tests = ran.filter((r) => r.exit_code === 0 && isRealTest(r.cmd)).map((r) => r.cmd.toLowerCase());
+  const ui = (report.ui_evidence ?? []).some((e) => e.trim().length > 0);
+  if (ui && (report.surface === "live-ui" || tests.some((c) => UI_RUNNER.test(c)))) return "live-ui";
+  if (tests.length) return "unit-test";
   return "type-check";
+}
+
+const SURFACE_RANK: Record<Exclude<EvidenceSurface, "blocked">, number> = { "live-ui": 3, "unit-test": 2, "type-check": 1 };
+
+function effectiveSurface(report: NodeReport): EvidenceSurface {
+  const proven = evidenceSurface(report);
+  const claimed = report.surface;
+  if (!claimed || claimed === "blocked" || proven === "blocked") return proven;
+  return SURFACE_RANK[claimed] < SURFACE_RANK[proven] ? claimed : proven;
 }
 
 function blocked(report: NodeReport): boolean {
@@ -61,11 +88,13 @@ function blocked(report: NodeReport): boolean {
   return (report.findings ?? []).some((f) => /无法验证|环境.*(不能|无法)|verifier-blocked|cannot verify/i.test(f));
 }
 
-/** PASS / PASS+NOTES / FAIL → orch level. The word PASS does not raise the level. */
+/** PASS / PASS+NOTES / FAIL → orch level. Neither the word PASS nor a self-reported surface raises the level. */
 export function mapOrchLevel(report: NodeReport): OrchLevel {
   if (report.verdict === "FAIL" || report.status === "failed") return "verifier-failed";
   if (blocked(report)) return "verifier-blocked";
-  const surface = report.surface ?? inferSurface(report.ran ?? []);
+  // A failing test run is a failure whatever the verdict word or self-reported surface says.
+  if ((report.ran ?? []).some((r) => r.exit_code !== 0 && isRealTest(r.cmd))) return "verifier-failed";
+  const surface = effectiveSurface(report);
   if (surface === "live-ui") return "live-ui-verified";
   if (surface === "unit-test") return "unit-test-verified";
   return "type-check-only";
@@ -83,7 +112,7 @@ export function buildVerdict(input: {
 }): GraphVerdict {
   const level = mapOrchLevel(input.report);
   const surface: GraphVerdict["surface"] =
-    level === "verifier-failed" ? "failed" : level === "verifier-blocked" ? "blocked" : (input.report.surface ?? inferSurface(input.report.ran ?? []));
+    level === "verifier-failed" ? "failed" : level === "verifier-blocked" ? "blocked" : effectiveSurface(input.report);
   return {
     repo: input.repo,
     pr: input.pr,

@@ -84,22 +84,6 @@ function pageCursor(data: unknown): string | undefined {
   return typeof c === "string" && c ? c : undefined;
 }
 
-function pageHasFinal(items: unknown[]): boolean {
-  for (const m of items) {
-    const row = rec(m);
-    const text = [row.text, row.content, row.body].find((x) => typeof x === "string" && x) as string | undefined;
-    if (!text) continue;
-    const fence = text.match(/```json\s*([\s\S]*?)```/);
-    const raw = fence?.[1] ?? (text.trim().startsWith("{") ? text : undefined);
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof (parsed as { status?: unknown }).status === "string") return true;
-    } catch { /* next */ }
-  }
-  return false;
-}
-
 export async function collectTaskMessages(api: CindyTasksApi, taskId: string): Promise<{ ok: true; data: { items: unknown[]; messages: unknown[] } } | { ok: false; errorCode: string; message: string }> {
   const items: unknown[] = [];
   let after: string | undefined;
@@ -108,12 +92,11 @@ export async function collectTaskMessages(api: CindyTasksApi, taskId: string): P
     if (!invoked.ok) return invoked;
     const page = pageItems(invoked.data);
     items.push(...page);
-    if (pageHasFinal(page)) break;
     const next = pageCursor(invoked.data);
-    if (!next || next === after) break;
+    if (!next || next === after) return { ok: true, data: { items, messages: items } };
     after = next;
   }
-  return { ok: true, data: { items, messages: items } };
+  return { ok: false, errorCode: "MESSAGES_INCOMPLETE", message: "readMessages 还有下一页，结果未确认。" };
 }
 
 export async function invokeCindyTasks(api: CindyTasksApi, input: PluginTaskInput): Promise<{ ok: true; data: unknown } | { ok: false; errorCode: string; message: string }> {

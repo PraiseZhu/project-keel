@@ -1244,7 +1244,8 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
           const msgs = inflightNode.task.task_id
             ? await collectTaskMessages(ctx.host.tasks, inflightNode.task.task_id)
             : { ok: false as const, errorCode: "NO_TASK", message: "no task_id" };
-          const inline = reportFromMessages(msgs.ok ? msgs.data : {}) ?? { status: status === "completed" ? "done" : "failed", summary: status };
+          if (!msgs.ok) return keepWait(msgs.message);
+          const inline = reportFromMessages(msgs.data) ?? { status: status === "completed" ? "done" : "failed", summary: status };
           if (status !== "completed") inline.status = "failed";
           const { next } = await step(ctx, runId, {
             type: "report",

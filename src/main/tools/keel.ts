@@ -491,7 +491,7 @@ export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDo
     if (wait) state.cursor = wait.id;
     return { kind: "wait", call: { tool: "keel_wait", args: { run_id: state.run_id, max_minutes: 15 } } };
   }
-  if (result.missing.some((m) => /pr_status 是 handoff/.test(m))) {
+  if (result.missing.length === 1 && /pr_status 是 handoff/.test(result.missing[0]!)) {
     return {
       kind: "wait",
       call: {

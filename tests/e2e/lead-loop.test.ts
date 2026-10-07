@@ -128,6 +128,32 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
     }
     expect(run.next.kind).not.toBe("done");
   });
+
+  it("setup 回执缺 team_id 时返回 human:setup，并且不会派工", async () => {
+    const world = makeWorld();
+    const host = makeE2eHost(world);
+    const started = await startRun(host, {
+      goal: "修登录报错",
+      repo_dir: world.repoDir,
+      lead: "codex",
+      sc: [...SC],
+      scope: ["src/**"],
+    });
+    const run = await leadLoop(host, started, world, {
+      bindPr: false,
+      setupTeamId: null,
+      stopWhen: (next) => next.kind === "decide" && next.gate_id === "human:setup",
+    });
+    expect(run.next.kind).toBe("decide");
+    if (run.next.kind === "decide") {
+      expect(run.next.gate_id).toBe("human:setup");
+      expect(run.next.question).toMatch(/team_id/);
+    }
+    expect(kinds(run)).not.toContain("dispatch");
+    expect(run.models).toEqual([]);
+    expect(run.state.team?.ready).not.toBe(true);
+    expect(Object.values(run.state.nodes).some((n) => n.dispatch_key)).toBe(false);
+  });
 });
 
 describe("假主控 e2e：investigation", () => {

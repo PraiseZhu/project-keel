@@ -20,6 +20,7 @@ import { fakeHost, typesafeAnswering, type FakeHost } from "../helpers/fakeHost.
 export const LOOP_LIMIT = 200;
 export const PR_NUMBER = 42;
 export const PR_REPO = "acme/app";
+export const TEAM_ID = "team-e2e";
 export const SC = [{ id: "SC-1", text: "登录不再报错", verify: "npx vitest run" }] as const;
 
 const GIT_FLAGS = ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "commit.gpgsign=false"];
@@ -39,10 +40,15 @@ export interface World {
   outOfScope: boolean;
   committedFix: boolean;
   workerSeq: number;
+  teamId: string;
 }
 
 export interface LeadOpts {
   bindPr?: boolean;
+  /** null = 回执不带 team_id；缺省用 world.teamId。 */
+  setupTeamId?: string | null;
+  /** 回执没有 team_id 时，用 get_workspace_info.workflow_id 补。 */
+  setupWorkflowId?: string;
   stopWhen?: (next: Next, state: GraphRunState, steps: Next[]) => boolean;
   beforeStep?: (next: Next, state: GraphRunState, host: FakeHost, runId: string) => void;
   gateAnswer?: (next: Extract<Next, { kind: "decide" }>) => string;
@@ -144,6 +150,7 @@ export function makeWorld(over: Partial<World> = {}): World {
     outOfScope: false,
     committedFix: false,
     workerSeq: 0,
+    teamId: TEAM_ID,
     ...over,
   };
 }
@@ -276,12 +283,22 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
     const c = ctxOf(host, `e2e-${++seq}`);
 
     if (next.kind === "setup") {
-      last = await call(c, "keel_report", {
+      const outcome: Record<string, unknown> = { worker_permission_mode: "bypassPermissions" };
+      if (opts.setupTeamId === null) {
+        // 回执故意不带 team_id
+      } else {
+        outcome.team_id = opts.setupTeamId ?? world.teamId;
+      }
+      const setupArgs: Record<string, unknown> = {
         run_id: runId,
         phase: "setup",
-        outcome: { worker_permission_mode: "bypassPermissions", team_id: "team-e2e" },
+        outcome,
         session_id: "sol-e2e",
-      });
+      };
+      if (!outcome.team_id && opts.setupWorkflowId) {
+        setupArgs.get_workspace_info = { workflow_id: opts.setupWorkflowId };
+      }
+      last = await call(c, "keel_report", setupArgs);
       next = nextOf(last);
       continue;
     }
@@ -335,15 +352,24 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
     }
 
     if (next.kind === "reconcile") {
+      const rec = next;
+      const teamId = state.team?.team_id ?? world.teamId;
+      const node = Object.values(state.nodes).find((n) => n.dispatch_key === rec.dispatch_key);
       last = await call(c, "keel_report", {
         run_id: runId,
         phase: "reconcile",
-        dispatch_key: next.dispatch_key,
+        dispatch_key: rec.dispatch_key,
         queries_result: {
           list_workers: {
             ok: true,
             complete: true,
-            workers: [{ label: "keel-e2e", worker_id: "w-live", status: "running" }],
+            team_id: teamId,
+            workers: [{
+              label: node?.worker_label ?? "keel-e2e",
+              worker_id: node?.worker_id ?? "w-live",
+              worker_session_id: node?.worker_session_id ?? "ws-live",
+              status: "running",
+            }],
           },
           get_worker_queue_status: { ok: true, pending: [], consuming: null },
           getRun: { ok: true, complete: true, status: "running" },
@@ -355,23 +381,30 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
     }
 
     if (next.kind === "recover") {
-      const stopped = { ok: true, complete: true, status: "idle" };
+      const rec = next;
+      const teamId = state.team?.team_id ?? world.teamId;
+      const list = { ok: true, complete: true, team_id: teamId, workers: [] as unknown[] };
       last = await call(c, "keel_report", {
         run_id: runId,
         phase: "recover",
-        dispatch_key: next.dispatch_key,
-        action: next.action,
-        action_result: next.action === "verify_stopped"
-          ? { ...stopped, worker_status: stopped }
-          : { ok: true, complete: true, list_workers: { ok: true, complete: true, workers: [] } },
+        dispatch_key: rec.dispatch_key,
+        action: rec.action,
+        action_result: rec.action === "verify_stopped"
+          ? { ok: true, complete: true, team_id: teamId, list_workers: list, worker_status: { ok: true, complete: true, status: "idle" } }
+          : { ok: true, complete: true, team_id: teamId, list_workers: list },
       });
       next = nextOf(last);
       continue;
     }
 
     if (next.kind === "decide") {
-      const answer = opts.gateAnswer?.(next) ?? next.options[0]!;
-      last = await call(c, "keel_gate", { run_id: runId, gate_id: next.gate_id, answer });
+      const rec = next;
+      // idle + 空队列：KEEL 开 human:reconcile，假主控不自动补投。
+      if (rec.gate_id === "human:reconcile" && /不自动补投|队列为空/.test(rec.question)) {
+        return { runId, worktree: started.worktree ?? world.worktree, next: rec, steps, models, last, state };
+      }
+      const answer = opts.gateAnswer?.(rec) ?? rec.options[0]!;
+      last = await call(c, "keel_gate", { run_id: runId, gate_id: rec.gate_id, answer });
       next = nextOf(last);
       continue;
     }

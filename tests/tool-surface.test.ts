@@ -4,6 +4,7 @@ import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
 import { GATES } from "../src/main/graph/gates.ts";
 import { advanceEvidenceForNode, mapCreateWorkerReceipt, normalizeListWorkers, resolveLeadSessionId, resolveTeamId, verdictReportFromNode } from "../src/main/tools/keel.ts";
+import { buildVerdict } from "../src/main/graph/verdict.ts";
 import { parseNodeReport } from "../src/main/graph/report.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 import { graphStatePath, withRun } from "../src/main/store/runs.ts";
@@ -285,6 +286,26 @@ describe("ui_evidence passthrough", () => {
     const mappedBare = verdictReportFromNode(bare);
     expect(mappedBare).not.toHaveProperty("ui_evidence");
     expect(mappedBare).not.toHaveProperty("surface");
+  });
+  it("carries tests_passed into buildVerdict: ≥1 is unit-test-verified, missing is type-check-only", () => {
+    const route = { agent: "pi" as const, model: "gpt-6-astra", provider_id: "art-cindy" };
+    const base = {
+      repo: "o/r", pr: 1, base_ref: "main", base_sha: "b".repeat(40), head_sha: "a".repeat(40), patch_id: "p1", route,
+    };
+    const withCount = parseNodeReport(JSON.stringify({
+      dispatch_key: "run:ver:1", status: "done", summary: "ok", files_changed: [],
+      ran: [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }],
+      verdict: "PASS",
+    }), "run:ver:1");
+    expect(verdictReportFromNode(withCount).ran).toEqual([{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }]);
+    expect(buildVerdict({ ...base, report: verdictReportFromNode(withCount) }).level).toBe("unit-test-verified");
+    const missing = parseNodeReport(JSON.stringify({
+      dispatch_key: "run:ver:1", status: "done", summary: "ok", files_changed: [],
+      ran: [{ cmd: "npx vitest run", exit_code: 0 }],
+      verdict: "PASS",
+    }), "run:ver:1");
+    expect(verdictReportFromNode(missing).ran).toEqual([{ cmd: "npx vitest run", exit_code: 0 }]);
+    expect(buildVerdict({ ...base, report: verdictReportFromNode(missing) }).level).toBe("type-check-only");
   });
 });
 

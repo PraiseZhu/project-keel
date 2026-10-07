@@ -203,4 +203,36 @@ describe("verifier verdict uses pr_binding.base_sha", () => {
     expect(st.verdict?.head).toBe(HEAD);
     expect(st.verdict?.patch_id).toBe("patch-xyz");
   });
+  it("verifier ran with tests_passed≥1 is unit-test-verified; without it stays type-check-only", async () => {
+    async function report(ran: unknown[]) {
+      const h = fakeHost({ node: bindNode });
+      const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+        goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"],
+      });
+      const runId = started.result.run_id as string;
+      const key = `${runId}:verify-same-surface:1`;
+      await withRun(h, runId, (raw) => {
+        const s = raw as unknown as GraphRunState;
+        s.pr = 12;
+        s.repo = "o/r";
+        s.worktree = "/repo/.worktrees/x";
+        s.pr_binding = { repo: "o/r", number: 12, base_ref: "main", base_sha: BASE, head_sha: HEAD };
+        s.nodes["verify-same-surface"] = {
+          status: "active", attempts: 1, dispatch_key: key, dispatch_state: "running",
+          planned_params: {
+            label: "keel-ver-1", role: "keel-verifier", agent: "pi", model: "gpt-6-astra",
+            provider_id: "art-cindy", initial_task: "v", writes: false, fallbacks: [], route_index: 0,
+          },
+          actual_route: { agent: "pi", model: "gpt-6-astra", provider_id: "art-cindy" },
+        };
+      });
+      await runTool(makeContext(h, "c2", profile), "keel_report", {
+        run_id: runId, phase: "final", dispatch_key: key,
+        inline_report: { status: "done", summary: "ok", ran, files_changed: [], verdict: "PASS" },
+      });
+      return JSON.parse(h.files.get(graphStatePath(runId))!).verdict?.level as string;
+    }
+    expect(await report([{ cmd: "npx vitest run", exit_code: 0, tests_passed: 5 }])).toBe("unit-test-verified");
+    expect(await report([{ cmd: "npx vitest run", exit_code: 0 }])).toBe("type-check-only");
+  });
 });

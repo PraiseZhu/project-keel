@@ -175,14 +175,28 @@ function completeStartState(s: GraphRunState["start_state"]): ContentFp | null {
   return { head: s.head, status_digest: s.status_digest, content_hash: s.content_hash };
 }
 
-/** Copy worker fields only. Do not invent surface or ui_evidence. */
+function ranWithTestsPassed(ran: unknown): NodeReport["ran"] {
+  if (!Array.isArray(ran)) return [];
+  return ran.flatMap((x) => {
+    if (!x || typeof x !== "object") return [];
+    const o = x as { cmd?: unknown; exit_code?: unknown; tests_passed?: unknown };
+    if (typeof o.cmd !== "string" || typeof o.exit_code !== "number") return [];
+    return [{
+      cmd: o.cmd,
+      exit_code: o.exit_code,
+      ...(Number.isInteger(o.tests_passed) && (o.tests_passed as number) >= 0 ? { tests_passed: o.tests_passed as number } : {}),
+    }];
+  });
+}
+
+/** Copy worker fields only. Do not invent surface or ui_evidence. tests_passed stays on ran[]. */
 export function verdictReportFromNode(report: NodeReport): VerdictReport {
   return {
     dispatch_key: report.dispatch_key,
     status: report.status,
     summary: report.summary,
     ...(report.verdict ? { verdict: report.verdict } : {}),
-    ran: report.ran,
+    ran: ranWithTestsPassed(report.ran),
     ...(report.findings ? { findings: report.findings } : {}),
     ...(report.surface ? { surface: report.surface } : {}),
     ...(report.ui_evidence ? { ui_evidence: report.ui_evidence } : {}),
@@ -730,7 +744,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         status: (typeof inline.status === "string" ? inline.status : "done") as NodeReport["status"],
         summary: typeof inline.summary === "string" ? inline.summary : "",
         files_changed: Array.isArray(inline.files_changed) ? inline.files_changed.filter((x): x is string => typeof x === "string") : [],
-        ran: Array.isArray(inline.ran) ? inline.ran as NodeReport["ran"] : [],
+        ran: ranWithTestsPassed(inline.ran),
         ...(typeof inline.citation === "string" ? { citation: inline.citation } : {}),
         ...(inline.sc_evidence && typeof inline.sc_evidence === "object" ? { sc_evidence: inline.sc_evidence as Record<string, boolean> } : {}),
         ...(typeof inline.head_sha === "string" ? { head_sha: inline.head_sha } : {}),

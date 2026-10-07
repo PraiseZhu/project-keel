@@ -42,7 +42,7 @@ export interface PlannedParams extends CreateWorkerParams {
 export interface NodeReportSnap {
   status?: string;
   summary?: string;
-  ran?: readonly { cmd: string; exit_code: number }[];
+  ran?: readonly { cmd: string; exit_code: number; tests_passed?: number }[];
   head_sha?: string;
   files_changed?: readonly string[];
   findings?: readonly string[];

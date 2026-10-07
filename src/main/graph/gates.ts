@@ -112,13 +112,16 @@ export const GATES: Record<GateId, GateDef> = {
     kind: "mechanical",
     deterministic(e) {
       const present = bool(e, "evidence_present", "present") === true;
-      const head = bool(e, "head_matches") === true;
+      const head = bool(e, "head_matches");
       const code = num(e, "exit_code");
-      return present && head && code === 0 ? "advance" : undefined;
+      // A known failure (head moved or a non-zero exit) is never left to Jev or a default.
+      if (head === false || (code !== undefined && code !== 0)) return "stay";
+      return present && head === true && code === 0 ? "advance" : undefined;
     },
     options: () => ["advance", "stay"],
     fallback(e) {
-      return bool(e, "prior_stay") === true || bool(e, "new_evidence") === true ? "advance" : "stay";
+      // "Stayed last round" is not evidence; only genuinely new evidence moves on.
+      return bool(e, "new_evidence") === true ? "advance" : "stay";
     },
     question(e) {
       return {

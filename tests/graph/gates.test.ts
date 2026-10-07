@@ -77,12 +77,28 @@ describe("G-advance", () => {
     expect(r).toMatchObject({ routed: "act", value: "stay" });
   });
   it("defaults to stay the first time, then advance when there is new evidence", async () => {
-    const first = await runGate(ctx(), "G-advance", { evidence_present: false, head_matches: false, exit_code: 1 }, { run_id: "r1", jev: jev("advance", 0.2) });
+    const first = await runGate(ctx(), "G-advance", { evidence_present: false, head_matches: true }, { run_id: "r1", jev: jev("advance", 0.2) });
     expect(first).toMatchObject({ routed: "default", value: "stay" });
-    const later = await runGate(ctx(), "G-advance", { evidence_present: false, head_matches: false, exit_code: 1, new_evidence: true }, { run_id: "r2", jev: jev("stay", 0.2) });
+    const later = await runGate(ctx(), "G-advance", { evidence_present: true, head_matches: true, new_evidence: true }, { run_id: "r2", jev: jev("stay", 0.2) });
     expect(later).toMatchObject({ routed: "default", value: "advance" });
-    const afterStay = await runGate(ctx(), "G-advance", { present: false, head_matches: false, exit_code: 1, prior_stay: true }, { run_id: "r3", jev: unavailable() });
-    expect(afterStay).toMatchObject({ routed: "default", value: "advance" });
+  });
+  it("a prior stay is not evidence: unchanged failing facts keep staying", async () => {
+    const failing = { evidence_present: false, head_matches: false, exit_code: 1 };
+    const first = await runGate(ctx(), "G-advance", failing, { run_id: "r1", jev: jev("advance", 0.1) });
+    expect(first.value).toBe("stay");
+    const again = await runGate(ctx(), "G-advance", { ...failing, prior_stay: true, new_evidence: false }, { run_id: "r1", jev: unavailable() });
+    expect(again.value).toBe("stay");
+    const priorOnly = await runGate(ctx(), "G-advance", { evidence_present: false, prior_stay: true }, { run_id: "r3", jev: unavailable() });
+    expect(priorOnly).toMatchObject({ routed: "default", value: "stay" });
+  });
+  it("a known failure stays deterministically, even with new evidence or a confident Jev", async () => {
+    for (const e of [
+      { evidence_present: true, head_matches: true, exit_code: 1, new_evidence: true },
+      { evidence_present: true, head_matches: false, exit_code: 0, new_evidence: true },
+    ]) {
+      const r = await runGate(ctx(), "G-advance", e, { run_id: "r1", jev: jev("advance", 0.99) });
+      expect(r).toMatchObject({ deterministic: "stay", routed: "act", value: "stay" });
+    }
   });
 });
 
@@ -138,7 +154,7 @@ describe("G-arena", () => {
 
 describe("Jev unavailable and investigation", () => {
   it("treats Jev failure as below threshold", async () => {
-    const r = await runGate(ctx(), "G-advance", { present: false, head_matches: false, exit_code: 1 }, { run_id: "r1", jev: unavailable() });
+    const r = await runGate(ctx(), "G-advance", { present: false, head_matches: true }, { run_id: "r1", jev: unavailable() });
     expect(r).toMatchObject({ routed: "default", value: "stay" });
     expect(r.jev).toBeUndefined();
   });

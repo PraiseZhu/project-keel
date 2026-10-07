@@ -3,6 +3,8 @@
 
 import { EMPTY_PROFILE, type KeelProfile } from "../shared/types.ts";
 import { ToolError, gh, resolveTool } from "./env.ts";
+import { contentFingerprint } from "./git/fingerprint.ts";
+import { patchId } from "./git/patch.ts";
 import { audit, createWorktree, gitState, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
@@ -40,6 +42,8 @@ const methods: Record<string, Method> = {
   "pr/reply": (p) => prReply(p as any),
   "pr/board": (p, profile) => prBoard(profile, p as any),
   "git/state": (p) => gitState(p.repo_dir),
+  "git/patch-id": (p) => patchId(p as any),
+  "git/content-fingerprint": (p) => contentFingerprint(p as any),
   "worktree/create": (p) => createWorktree(p as any),
   "worktree/audit": (p) => audit(p.repo_dir),
   "worktree/prune": (p) => prune(p.repo_dir, p.paths ?? []),

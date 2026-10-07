@@ -1,13 +1,14 @@
 // Wake the lead when a run is waiting on it. External continue / card / notify
 // go through NudgePorts so this module stays unwired from ghost.json and tools.
 
-import { handleCardAction, newTokenBook, renderNudgeCard, type NudgeCard, type TokenBook } from "./cards.ts";
+import { ENABLE_AUTOPILOT, PAUSE_RUN, renderNudgeCard, runIdFromCardAction, type CardActionEvent, type NudgeCard } from "./cards.ts";
 
 export const IDLE_MS = 3 * 60_000;
 export const NUDGE_INTERVAL_MS = 10_000;
 export const MAX_NUDGE_STREAK = 3;
 export const LEAD_NEXT = new Set(["setup", "dispatch", "reconcile", "recover", "decide"]);
 export const QUIET_STATUS = new Set(["paused", "stopped", "done", "waiting_human"]);
+export const ASSOCIATED_STATUSES = new Set(["created", "resumed", "active", "queued"]);
 
 export function nudgePrompt(runId: string): string {
   return `KEEL：run ${runId} 未完成，调用 keel_status 取下一步。`;
@@ -32,6 +33,7 @@ export interface NudgeRun {
   readonly next?: { readonly kind: string };
   readonly last_keel_call_at?: number;
   readonly associated?: boolean;
+  readonly session_id?: string;
   readonly nodes?: readonly NudgeNode[];
 }
 
@@ -79,8 +81,31 @@ export function shouldNudge(run: NudgeRun, now: number, opts: { idleMs?: number;
   return { nudge: true, pause: false, reason: "idle" };
 }
 
+export interface AssociateSessionReq {
+  readonly mode: "continue";
+  readonly userActionToken: string;
+  readonly promptTemplate: string;
+  readonly userMessage: string;
+  readonly event: "card-action";
+}
+
+export interface ContinueSessionReq {
+  readonly mode: "continue";
+  readonly trigger: "background";
+  readonly sessionId?: string;
+  readonly prompt: string;
+}
+
+export interface AgentRunResult {
+  readonly ok: boolean;
+  readonly status?: string;
+  readonly errorCode?: string;
+  readonly message?: string;
+}
+
 export interface NudgePorts {
-  continueSession(req: { prompt: string }): Promise<{ ok: boolean; status?: string; errorCode?: string; message?: string }>;
+  associateSession(req: AssociateSessionReq): Promise<AgentRunResult>;
+  continueSession(req: ContinueSessionReq): Promise<AgentRunResult>;
   presentCard(card: NudgeCard): Promise<void> | void;
   notifyUser(message: string): Promise<void> | void;
 }
@@ -101,15 +126,24 @@ export interface NudgeState {
   versionAtLastNudge: number | null;
   associated: boolean;
   stalled: boolean;
+  paused: boolean;
+  lastHostStatus?: string;
+  lastHostError?: string;
 }
 
 export function newNudgeState(associated = false): NudgeState {
-  return { lastSentAt: null, inFlight: false, consecutiveWithoutProgress: 0, versionAtLastNudge: null, associated, stalled: false };
+  return { lastSentAt: null, inFlight: false, consecutiveWithoutProgress: 0, versionAtLastNudge: null, associated, stalled: false, paused: false };
 }
 
 function isUnassociated(code?: string, message?: string): boolean {
   const t = `${code ?? ""} ${message ?? ""}`.toUpperCase();
   return /NOT_ASSOCIATED|UNASSOCIATED|NO_ASSOCIATION|未关联/.test(t);
+}
+
+function associatedFromHost(r: AgentRunResult): boolean {
+  if (!r.ok) return false;
+  if (!r.status) return true;
+  return ASSOCIATED_STATUSES.has(r.status);
 }
 
 export type NudgeAction = "continue" | "card" | "skip" | "stall" | "pause";
@@ -124,8 +158,12 @@ export interface NudgeOutcome {
   readonly stalled?: boolean;
 }
 
+export type CardActionResult =
+  | { ok: true; action: "associate"; run_id: string; status?: string }
+  | { ok: true; action: "pause"; run_id: string }
+  | { ok: false; error: string; run_id?: string };
+
 export class NudgeController {
-  readonly tokens: TokenBook = newTokenBook();
   private readonly byRun = new Map<string, NudgeState>();
 
   constructor(
@@ -137,23 +175,39 @@ export class NudgeController {
     return this.byRun.get(runId) ?? newNudgeState();
   }
 
-  handleCardAction(input: { action: string; token?: string; background?: boolean; run_id: string; now?: number }): ReturnType<typeof handleCardAction> {
-    const now = input.now ?? this.config.now();
-    const result = handleCardAction(this.tokens, { ...input, now });
-    if (result.ok && result.action === "associate") {
-      const s = this.stateOf(input.run_id);
-      s.associated = true;
+  async handleCardAction(ev: CardActionEvent): Promise<CardActionResult> {
+    const runId = runIdFromCardAction(ev);
+    if (!runId) return { ok: false, error: "缺少 run_id" };
+    if (ev.actionId === PAUSE_RUN) {
+      const s = this.stateOf(runId);
+      s.associated = false;
+      s.paused = true;
+      this.byRun.set(runId, s);
+      return { ok: true, action: "pause", run_id: runId };
+    }
+    if (ev.actionId !== ENABLE_AUTOPILOT) return { ok: false, error: `未知卡片动作 ${ev.actionId}`, run_id: runId };
+    if (!ev.userActionToken) return { ok: false, error: "缺少 userActionToken", run_id: runId };
+    const prompt = nudgePrompt(runId);
+    const r = await this.ports.associateSession({
+      mode: "continue",
+      userActionToken: ev.userActionToken,
+      promptTemplate: prompt,
+      userMessage: prompt,
+      event: "card-action",
+    });
+    const s = this.stateOf(runId);
+    s.lastHostStatus = r.status;
+    s.lastHostError = r.ok ? undefined : (r.errorCode ?? r.message);
+    s.associated = associatedFromHost(r);
+    if (s.associated) {
+      s.paused = false;
       s.stalled = false;
       s.consecutiveWithoutProgress = 0;
       s.versionAtLastNudge = null;
-      this.byRun.set(input.run_id, s);
     }
-    if (result.ok && result.action === "pause") {
-      const s = this.stateOf(input.run_id);
-      s.associated = false;
-      this.byRun.set(input.run_id, s);
-    }
-    return result;
+    this.byRun.set(runId, s);
+    if (!s.associated) return { ok: false, error: r.errorCode ?? r.message ?? "associate_failed", run_id: runId };
+    return { ok: true, action: "associate", run_id: runId, status: r.status };
   }
 
   async onTurnEnd(run: NudgeRun, turn: TurnEnd): Promise<NudgeOutcome> {
@@ -170,6 +224,7 @@ export class NudgeController {
     if (!judged.nudge) return { action: "skip", reason: judged.reason };
 
     const state = this.byRun.get(run.run_id) ?? newNudgeState(Boolean(run.associated));
+    if (state.paused) return { action: "skip", reason: "paused" };
     if (state.stalled) return { action: "skip", reason: "stalled" };
     if (state.inFlight) return { action: "skip", reason: "busy" };
     if (state.lastSentAt !== null && now - state.lastSentAt < intervalMs) return { action: "skip", reason: "interval" };
@@ -201,7 +256,12 @@ export class NudgeController {
     }
 
     try {
-      const r = await this.ports.continueSession({ prompt });
+      const r = await this.ports.continueSession({
+        mode: "continue",
+        trigger: "background",
+        ...(run.session_id ? { sessionId: run.session_id } : {}),
+        prompt,
+      });
       if (!r.ok && isUnassociated(r.errorCode, r.message)) {
         state.associated = false;
         const card = renderNudgeCard(run.run_id, "关联已丢失");

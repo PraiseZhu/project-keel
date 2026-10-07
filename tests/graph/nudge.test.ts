@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  ENABLE_AUTOPILOT,
-  PAUSE_RUN,
-  TOKEN_TTL_MS,
-  consumeUserActionToken,
-  handleCardAction,
-  issueUserActionToken,
-  newTokenBook,
-  renderNudgeCard,
-} from "../../src/main/graph/cards.ts";
+import { ENABLE_AUTOPILOT, PAUSE_RUN, renderNudgeCard, runIdFromCardAction } from "../../src/main/graph/cards.ts";
 import {
   IDLE_MS,
   NUDGE_INTERVAL_MS,
@@ -17,6 +8,9 @@ import {
   onlyHealthyRunning,
   pendingLeadAction,
   shouldNudge,
+  type AgentRunResult,
+  type AssociateSessionReq,
+  type ContinueSessionReq,
   type NudgePorts,
   type NudgeRun,
 } from "../../src/main/graph/nudge.ts";
@@ -31,6 +25,7 @@ function run(over: Partial<NudgeRun> = {}): NudgeRun {
     next: { kind: "dispatch" },
     last_keel_call_at: t0,
     associated: true,
+    session_id: "sess-1",
     nodes: [],
     ...over,
   };
@@ -72,27 +67,31 @@ describe("shouldNudge", () => {
 });
 
 function ports() {
-  const log: { continue: string[]; cards: string[]; notes: string[] } = { continue: [], cards: [], notes: [] };
-  let hang: ((v: { ok: boolean; errorCode?: string }) => void) | null = null;
-  const p: NudgePorts & { log: typeof log; release: (v: { ok: boolean; errorCode?: string }) => void } = {
+  const log: { associate: AssociateSessionReq[]; continue: ContinueSessionReq[]; cards: string[]; notes: string[] } = {
+    associate: [], continue: [], cards: [], notes: [],
+  };
+  let hang: ((v: AgentRunResult) => void) | null = null;
+  const hangWaiters: { useHang: boolean; next: AgentRunResult | null } = { useHang: false, next: null };
+  const p: NudgePorts & { log: typeof log; release: (v: AgentRunResult) => void } = {
     log,
+    async associateSession(req) {
+      log.associate.push(req);
+      return hangWaiters.next ?? { ok: true, status: "created" };
+    },
     async continueSession(req) {
-      log.continue.push(req.prompt);
-      if (hangWaiters.useHang) {
-        return new Promise((resolve) => { hang = resolve; });
-      }
+      log.continue.push(req);
+      if (hangWaiters.useHang) return new Promise((resolve) => { hang = resolve; });
       return hangWaiters.next ?? { ok: true, status: "resumed" };
     },
     presentCard(card) { log.cards.push(card.run_id + ":" + card.buttons.map((b) => b.label).join(",")); },
     notifyUser(message) { log.notes.push(message); },
     release(v) { hang?.(v); hang = null; },
   };
-  const hangWaiters: { useHang: boolean; next: { ok: boolean; errorCode?: string; message?: string } | null } = { useHang: false, next: null };
   return { p, hangWaiters };
 }
 
 describe("NudgeController queue and streak", () => {
-  it("sends the fixed prompt and enforces one-in-flight plus ≥10s gap", async () => {
+  it("sends the fixed prompt via background continue and enforces one-in-flight plus ≥10s gap", async () => {
     const clock = { t: t0 + IDLE_MS };
     const { p, hangWaiters } = ports();
     hangWaiters.useHang = true;
@@ -104,7 +103,8 @@ describe("NudgeController queue and streak", () => {
     expect(busy.reason).toBe("busy");
     p.release({ ok: true });
     expect((await first).action).toBe("continue");
-    expect(p.log.continue[0]).toBe(nudgePrompt("run-1"));
+    expect(p.log.continue[0]).toMatchObject({ mode: "continue", trigger: "background", sessionId: "sess-1", prompt: nudgePrompt("run-1") });
+    expect(p.log.continue[0]).not.toHaveProperty("userActionToken");
     clock.t += NUDGE_INTERVAL_MS - 1;
     expect((await c.maybeNudge(r)).reason).toBe("interval");
     clock.t += 1;
@@ -179,32 +179,59 @@ describe("association and P0-2 fallback", () => {
   });
 });
 
-describe("cards and userActionToken", () => {
+describe("cards and host-issued userActionToken", () => {
   it("renders the two required buttons", () => {
     const card = renderNudgeCard("run-1");
     expect(card.buttons.map((b) => b.label)).toEqual(["启用自动续跑", "暂停"]);
     expect(card.buttons.map((b) => b.id)).toEqual([ENABLE_AUTOPILOT, PAUSE_RUN]);
+    expect(runIdFromCardAction({ actionId: ENABLE_AUTOPILOT, cardId: "keel-nudge-run-9" })).toBe("run-9");
   });
-  it("accepts a token once within two minutes, and never from background", () => {
-    const book = newTokenBook();
-    const tok = issueUserActionToken(book, "run-1", t0, "tok-1");
-    expect(handleCardAction(book, { action: ENABLE_AUTOPILOT, token: tok.token, run_id: "run-1", now: t0 })).toMatchObject({ ok: true, action: "associate" });
-    expect(handleCardAction(book, { action: ENABLE_AUTOPILOT, token: tok.token, run_id: "run-1", now: t0 }).ok).toBe(false);
-    const tok2 = issueUserActionToken(book, "run-1", t0, "tok-2");
-    expect(consumeUserActionToken(book, tok2.token, t0, { run_id: "run-1", background: true }).ok).toBe(false);
-    const tok3 = issueUserActionToken(book, "run-1", t0, "tok-3");
-    expect(consumeUserActionToken(book, tok3.token, t0 + TOKEN_TTL_MS + 1, { run_id: "run-1" }).ok).toBe(false);
-    const tok4 = issueUserActionToken(book, "run-1", t0, "tok-4");
-    expect(handleCardAction(book, { action: PAUSE_RUN, token: tok4.token, run_id: "run-1", now: t0 })).toMatchObject({ ok: true, action: "pause" });
-  });
-  it("controller associates on enable and pauses on pause", () => {
+  it("forwards the host token as-is on enable and does not call ports without one", async () => {
     const { p } = ports();
     const c = new NudgeController(p, { now: () => t0 });
-    const enable = issueUserActionToken(c.tokens, "run-1", t0, "e");
-    expect(c.handleCardAction({ action: ENABLE_AUTOPILOT, token: enable.token, run_id: "run-1", now: t0 })).toMatchObject({ ok: true, action: "associate" });
+    const missing = await c.handleCardAction({ actionId: ENABLE_AUTOPILOT, run_id: "run-1", callId: "c1" });
+    expect(missing).toMatchObject({ ok: false, error: "缺少 userActionToken" });
+    expect(p.log.associate).toHaveLength(0);
+    const token = "host-issued-uat-abc";
+    const ok = await c.handleCardAction({ actionId: ENABLE_AUTOPILOT, userActionToken: token, run_id: "run-1", callId: "c2" });
+    expect(ok).toMatchObject({ ok: true, action: "associate", status: "created" });
+    expect(p.log.associate).toEqual([{
+      mode: "continue",
+      userActionToken: token,
+      promptTemplate: nudgePrompt("run-1"),
+      userMessage: nudgePrompt("run-1"),
+      event: "card-action",
+    }]);
     expect(c.stateOf("run-1").associated).toBe(true);
-    const pause = issueUserActionToken(c.tokens, "run-1", t0, "p");
-    expect(c.handleCardAction({ action: PAUSE_RUN, token: pause.token, run_id: "run-1", now: t0 })).toMatchObject({ ok: true, action: "pause" });
+  });
+  it("records the host error and does not associate when agent.run fails", async () => {
+    const { p, hangWaiters } = ports();
+    hangWaiters.next = { ok: false, errorCode: "TOKEN_EXPIRED", message: "userActionToken 已过期" };
+    const c = new NudgeController(p, { now: () => t0 });
+    const r = await c.handleCardAction({ actionId: ENABLE_AUTOPILOT, userActionToken: "stale", run_id: "run-1" });
+    expect(r).toMatchObject({ ok: false, error: "TOKEN_EXPIRED" });
     expect(c.stateOf("run-1").associated).toBe(false);
+    expect(c.stateOf("run-1").lastHostError).toBe("TOKEN_EXPIRED");
+  });
+  it("pauses without calling agent.run", async () => {
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => t0 });
+    const r = await c.handleCardAction({ actionId: PAUSE_RUN, run_id: "run-1" });
+    expect(r).toMatchObject({ ok: true, action: "pause" });
+    expect(p.log.associate).toHaveLength(0);
+    expect(p.log.continue).toHaveLength(0);
+    expect(c.stateOf("run-1").paused).toBe(true);
+    expect(c.stateOf("run-1").associated).toBe(false);
+  });
+  it("background nudge never reuses a card token", async () => {
+    const clock = { t: t0 + IDLE_MS };
+    const { p } = ports();
+    const c = new NudgeController(p, { now: () => clock.t });
+    await c.handleCardAction({ actionId: ENABLE_AUTOPILOT, userActionToken: "host-uat", run_id: "run-1" });
+    await c.maybeNudge(run({ associated: true }));
+    expect(p.log.continue).toHaveLength(1);
+    expect(p.log.continue[0]).toMatchObject({ trigger: "background" });
+    expect(p.log.continue[0]).not.toHaveProperty("userActionToken");
+    expect(p.log.associate[0]?.userActionToken).toBe("host-uat");
   });
 });

@@ -207,6 +207,13 @@ export type Next =
 export interface GraphFacts {
   crosses_function_boundary?: boolean;
   design_contested?: boolean;
+  skip_final_review?: boolean;
+}
+
+export interface PendingAstraGate {
+  gate_id: string;
+  options: readonly string[];
+  question: string;
 }
 
 export interface GraphRunState {
@@ -253,6 +260,7 @@ export interface GraphRunState {
   updated_at: number;
   facts?: GraphFacts;
   late_reports: Array<{ dispatch_key: string; at: number }>;
+  pending_astra_gate?: PendingAstraGate;
 }
 
 export interface InitRunOpts {

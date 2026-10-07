@@ -6,7 +6,8 @@ import { loadRuntimeConfig } from "../config.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
 import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult } from "../graph/done.ts";
-import { type Evidence, type GateId } from "../graph/gates.ts";
+import { GATES, type Evidence, type GateId } from "../graph/gates.ts";
+import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending } from "../graph/route-start.ts";
 import { classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { parseNodeReport, type NodeReport } from "../graph/report.ts";
@@ -20,11 +21,10 @@ import { newRunId } from "../ledger.ts";
 import { findProfile, resolveProfileForHarness } from "../manual/resolve.ts";
 import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
 import { withRun } from "../store/runs.ts";
-import { PSTACK_GRAPHS, TASK_TYPES, type GraphTaskType } from "../../shared/graph/pstack.ts";
+import { PSTACK_GRAPHS, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
 import { countWaitCiRuns, pollIntervalMs } from "../graph/poll.ts";
 import { invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
-import { keywordRoute } from "./pstack.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
 const CHANGE_TYPES = new Set(["bug-fix", "feature", "refactoring", "pr"]);
@@ -205,13 +205,68 @@ export function verdictReportFromNode(report: NodeReport): VerdictReport {
   };
 }
 
-function taskTypeOf(goal: string, playbook: string | undefined, pr: unknown): GraphTaskType {
-  if (pr !== undefined && pr !== null && pr !== "") return "pr";
-  if (playbook && (TASK_TYPES as readonly string[]).includes(playbook)) return playbook as GraphTaskType;
-  const kw = keywordRoute(goal);
-  if (kw === "bug-fix" || kw === "feature" || kw === "refactoring" || kw === "investigation") return kw;
-  if (kw === "opening-a-pr" || kw === "babysit" || kw === "shipping") return "pr";
-  return "bug-fix";
+async function materializeRun(
+  ctx: ToolContext,
+  runId: string,
+  profile: Profile,
+  pending: RoutePending,
+  taskType: GraphTaskType,
+): Promise<{ next: Next; state: GraphRunState }> {
+  const spec = PSTACK_GRAPHS[taskType];
+  const cfg = await loadRuntimeConfig(ctx.host);
+  let worktree: string | undefined;
+  let start_state: { head?: string; status_digest?: string; content_hash?: string } | undefined;
+  let repo_root: string | undefined;
+  let gh_repo: string | undefined;
+  try {
+    const st = await node<{ root?: string; branch?: string; head?: string; gh_repo?: string }>(ctx, "git/state", { repo_dir: pending.repo_dir });
+    repo_root = st.root;
+    if (isGhRepo(st.gh_repo)) gh_repo = st.gh_repo;
+    if (taskType === "investigation") {
+      const fp = await readContentFingerprint(ctx, pending.repo_dir);
+      if (!fp) throw new KeelError("FINGERPRINT_UNKNOWN", "起始指纹未知，调查未完成。");
+      start_state = fp;
+    } else if (taskType === "pr") {
+      const branch = pending.branch ?? st.branch;
+      if (!branch || branch === "HEAD") throw new KeelError("WORKTREE_FAILED", "pr 类型需要已有功能分支。");
+      const wt = await node<{ path?: string; occupied?: string; branch?: string }>(ctx, "worktree/create", {
+        repo_dir: pending.repo_dir, name: `keel-${runId}`, existing: true, branch,
+      });
+      if (wt.occupied) {
+        return { next: { kind: "stop", reason: `分支 ${wt.branch ?? branch} 已在 ${wt.occupied} 检出。`, needs_user: ["释放占用的工作树，或指定空闲 worktree"] }, state: { run_id: runId } as GraphRunState };
+      }
+      worktree = wt.path;
+    } else {
+      const wt = await node<{ path?: string }>(ctx, "worktree/create", { repo_dir: pending.repo_dir, name: `keel-${runId}` });
+      worktree = wt.path;
+    }
+  } catch (e) {
+    if (e instanceof KeelError) throw e;
+    throw new KeelError("WORKTREE_FAILED", e instanceof Error ? e.message : String(e));
+  }
+  await createRun(ctx.host, {
+    run_id: runId,
+    spec_id: spec.id,
+    profile_id: profile.id,
+    lead_harness: profile.harness,
+    task_type: taskType,
+    entry: spec.entry,
+    goal: pending.goal,
+    sc: pending.sc,
+    invocation_dir: pending.repo_dir,
+    repo_root,
+    gh_repo,
+    repo: gh_repo,
+    worktree,
+    pr: pending.pr,
+    ...(pending.pr !== undefined ? { pr_explicit: true } : {}),
+    start_state,
+    astra_budget: cfg.limits.astraBudget,
+    now: ctx.host.now(),
+    ...(pending.scope ? { scopeAllow: pending.scope } : {}),
+  });
+  await ctx.host.fs({ op: "delete", root: "data", path: routePendingPath(runId) });
+  return step(ctx, runId, { type: "tick" });
 }
 
 function pickProfile(manual: ModelManual, args: Record<string, unknown>): { profile?: Profile; decide?: Next } {
@@ -302,7 +357,16 @@ function makeGates(ctx: ToolContext, runId: string, graph: GraphKind, direction_
       graph,
       direction_gate,
     });
-    if (decision.routed === "lead" || decision.routed === "astra") return undefined;
+    if (decision.routed === "astra") {
+      const def = GATES[gateIdOf(nodeId)];
+      state.pending_astra_gate = {
+        gate_id: nodeId,
+        options: [...def.options(evidence)],
+        question: def.question(evidence).instructions,
+      };
+      return undefined;
+    }
+    if (decision.routed === "lead") return undefined;
     return decision.value;
   };
   return {
@@ -655,63 +719,51 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     return pack(runId, undefined, picked.decide!);
   }
   const pr = typeof args.pr === "number" || typeof args.pr === "string" ? args.pr : undefined;
-  const taskType = taskTypeOf(goal, str(args.playbook), pr);
-  const spec = PSTACK_GRAPHS[taskType];
-  let worktree: string | undefined;
-  let start_state: { head?: string; status_digest?: string; content_hash?: string } | undefined;
-  let repo_root: string | undefined;
-  let gh_repo: string | undefined;
-  try {
-    const st = await node<{ root?: string; branch?: string; head?: string; gh_repo?: string }>(ctx, "git/state", { repo_dir: repoDir });
-    repo_root = st.root;
-    if (isGhRepo(st.gh_repo)) gh_repo = st.gh_repo;
-    if (taskType === "investigation") {
-      const fp = await readContentFingerprint(ctx, repoDir);
-      if (!fp) throw new KeelError("FINGERPRINT_UNKNOWN", "起始指纹未知，调查未完成。");
-      start_state = fp;
-    } else if (taskType === "pr") {
-      const branch = str(args.branch) ?? st.branch;
-      if (!branch || branch === "HEAD") throw new KeelError("WORKTREE_FAILED", "pr 类型需要已有功能分支。");
-      const wt = await node<{ path?: string; occupied?: string; branch?: string }>(ctx, "worktree/create", {
-        repo_dir: repoDir, name: `keel-${runId}`, existing: true, branch,
-      });
-      if (wt.occupied) {
-        return pack(runId, picked.profile, { kind: "stop", reason: `分支 ${wt.branch ?? branch} 已在 ${wt.occupied} 检出。`, needs_user: ["释放占用的工作树，或指定空闲 worktree"] });
-      }
-      worktree = wt.path;
-    } else {
-      const wt = await node<{ path?: string }>(ctx, "worktree/create", { repo_dir: repoDir, name: `keel-${runId}` });
-      worktree = wt.path;
-    }
-  } catch (e) {
-    if (e instanceof KeelError) throw e;
-    throw new KeelError("WORKTREE_FAILED", e instanceof Error ? e.message : String(e));
-  }
   const sc = Array.isArray(args.sc) ? (args.sc as { id: string; text: string; verify?: string }[]) : [];
   const scopeAllow = Array.isArray(args.scope) && args.scope.every((x) => typeof x === "string") ? (args.scope as string[]) : undefined;
-  await createRun(ctx.host, {
-    run_id: runId,
-    spec_id: spec.id,
-    profile_id: picked.profile.id,
-    lead_harness: picked.profile.harness,
-    task_type: taskType,
-    entry: spec.entry,
+  const routed = await resolveGraphTask(ctx, {
     goal,
-    sc,
-    invocation_dir: repoDir,
-    repo_root,
-    gh_repo,
-    repo: gh_repo,
-    worktree,
-    pr,
-    ...(pr !== undefined ? { pr_explicit: true } : {}),
-    start_state,
-    astra_budget: cfg.limits.astraBudget,
-    now: ctx.host.now(),
-    ...(scopeAllow ? { scopeAllow } : {}),
+    playbook: str(args.playbook),
+    ...(pr !== undefined ? { pr } : {}),
+    run_id: runId,
+    profile: picked.profile,
   });
-  const { next, state } = await step(ctx, runId, { type: "tick" });
-  return pack(runId, picked.profile, next, { spec_id: spec.id, worktree: state.worktree });
+  if ("decide" in routed) {
+    const pending: RoutePending = {
+      goal,
+      repo_dir: repoDir,
+      profile_id: picked.profile.id,
+      sc,
+      ...(str(args.lead) ? { lead: str(args.lead) } : {}),
+      ...(scopeAllow ? { scope: scopeAllow } : {}),
+      ...(pr !== undefined ? { pr } : {}),
+      ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+    };
+    await ctx.host.fs({ op: "write", root: "data", path: routePendingPath(runId), content: JSON.stringify(pending) });
+    await ctx.host.fs({
+      op: "write",
+      root: "data",
+      path: `runs/${runId}/graph-state.json`,
+      content: JSON.stringify({
+        run_id: runId,
+        profile_id: picked.profile.id,
+        goal,
+        status: "await_sol",
+        next: routed.decide,
+      }),
+    });
+    return pack(runId, picked.profile, routed.decide);
+  }
+  const out = await materializeRun(ctx, runId, picked.profile, {
+    goal,
+    repo_dir: repoDir,
+    profile_id: picked.profile.id,
+    sc,
+    ...(scopeAllow ? { scope: scopeAllow } : {}),
+    ...(pr !== undefined ? { pr } : {}),
+    ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+  }, routed.taskType);
+  return pack(runId, picked.profile, out.next, { spec_id: PSTACK_GRAPHS[routed.taskType].id, worktree: out.state.worktree });
 }
 
 export async function keelReport(ctx: ToolContext, args: Record<string, unknown>) {
@@ -811,13 +863,19 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const nodeState = parsedKey ? st?.nodes?.[parsedKey.nodeId] : undefined;
     if (nodeState?.planned_params?.writes) {
       const allow = nodeState.planned_params.scopeAllow;
-      if (!allow?.length) throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
+      if (!allow?.length) {
+        await step(ctx, runId, { type: "scope_fail", dispatch_key: key });
+        throw new KeelError("SCOPE_VIOLATION", "该节点 planned_params 没有写域，拒绝落盘。");
+      }
       const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
         repo_dir: reportDir ?? st?.worktree ?? st?.invocation_dir ?? "",
         ...(nodeState.planned_params?.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
       });
       const scope = checkScope(changed.files ?? [], allow);
-      if (!scope.ok) throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
+      if (!scope.ok) {
+        await step(ctx, runId, { type: "scope_fail", dispatch_key: key });
+        throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
+      }
     }
     if (parsed) {
       const gh = st ? ghRepoOf(st) : undefined;
@@ -1096,6 +1154,17 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
   const gateId = requireString(args, "gate_id");
   const answer = requireString(args, "answer");
   const reason = typeof args.reason === "string" ? args.reason : undefined;
+  if (gateId === "G-route") {
+    const pendingFile = await ctx.host.fs({ op: "read", root: "data", path: routePendingPath(runId) });
+    if (pendingFile.ok && pendingFile.content) {
+      const pending = JSON.parse(pendingFile.content) as RoutePending;
+      if (!isGraphTaskType(answer)) throw new KeelError("INVALID_INPUT", `G-route 答案必须是单元图，收到 ${answer}。`);
+      const cfg = await loadRuntimeConfig(ctx.host);
+      const profile = findProfile(cfg.manual, pending.profile_id);
+      const out = await materializeRun(ctx, runId, profile, pending, answer);
+      return { run_id: runId, next: out.next, gate_id: gateId, answer };
+    }
+  }
   await withRun(ctx.host, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
     if (!Array.isArray(s.sol_decisions)) s.sol_decisions = [];

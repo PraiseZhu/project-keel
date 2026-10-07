@@ -35,6 +35,7 @@ await build({ ...common, entryPoints: [join(root, "src/node/worker.ts")], outfil
 for (const bin of ["orch", "check-plan"]) await build({ ...common, define: { ...define, "import.meta.main": "false" }, entryPoints: [join(root, `src/node/bin/${bin}.ts`)], outfile: join(root, `plugin/node/${bin}.mjs`), format: "esm", platform: "node", target: "node20", banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" } });
 await build({ ...common, entryPoints: [join(root, "src/panel/panel.ts")], outfile: join(root, "plugin/panel.js"), format: "iife", platform: "browser" });
 await build({ ...common, entryPoints: [join(root, "src/panel/settings.ts")], outfile: join(root, "plugin/settings.js"), format: "iife", platform: "browser" });
+await build({ ...common, entryPoints: [join(root, "src/panel/graph-view.ts")], outfile: join(root, "plugin/graph-view.js"), format: "iife", platform: "browser" });
 
 const graphValidateOut = join(root, "plugin/node/graph-validate.mjs");
 await build({ ...common, entryPoints: [join(root, "src/shared/graph/validate-cli.ts")], outfile: graphValidateOut, format: "esm", platform: "node", target: "node20" });

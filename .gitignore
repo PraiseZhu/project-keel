@@ -60,6 +60,7 @@ plugin/node/worker.cjs
 plugin/node/*.mjs
 plugin/panel.js
 plugin/settings.js
+plugin/graph-view.js
 *.cindy
 config/profile.local.json
 plugin/manual/keel/profile.md

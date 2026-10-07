@@ -733,6 +733,11 @@
     "title": "KEEL",
     "html": "panel.html"
   },
+  "mainView": {
+    "title": "KEEL",
+    "icon": "chart-column",
+    "html": "graph-view.html"
+  },
   "badge": true,
   "confirm": true,
   "fs": true,

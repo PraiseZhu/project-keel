@@ -69,3 +69,30 @@ export function withRun<T>(host: Host, runId: string, fn: (state: GraphState) =>
   );
   return run;
 }
+
+export function artifactPath(runId: string, rel: string): string {
+  graphStatePath(runId);
+  if (!/^[A-Za-z0-9._/-]{1,128}$/.test(rel) || rel.includes("..")) {
+    throw new KeelError("INVALID_INPUT", "artifact 路径不合法。");
+  }
+  return `runs/${runId}/artifacts/${rel}`;
+}
+
+/** Serialize artifact writes on the same host+runId chain as graph-state. */
+export function writeRunArtifact(host: Host, runId: string, rel: string, content: string): Promise<void> {
+  const path = artifactPath(runId, rel);
+  const chains = chainOf(host);
+  const prev = chains.get(runId) ?? Promise.resolve();
+  const run = prev.then(async () => {
+    const w = await host.fs({ op: "write", root: "data", path, content });
+    if (!w.ok) throw new KeelError("RUN_STATE_WRITE_FAILED", `写入 artifact 失败：${w.message ?? "未知原因"}`);
+  });
+  chains.set(
+    runId,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}

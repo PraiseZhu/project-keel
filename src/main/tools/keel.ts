@@ -20,7 +20,7 @@ import { runGate, type GateDecision, type GateStore, type GraphKind } from "../j
 import { newRunId } from "../ledger.ts";
 import { findProfile, resolveProfileForHarness } from "../manual/resolve.ts";
 import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
-import { withRun } from "../store/runs.ts";
+import { withRun, writeRunArtifact } from "../store/runs.ts";
 import { PSTACK_GRAPHS, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
 import { countWaitCiRuns, pollIntervalMs } from "../graph/poll.ts";
@@ -676,6 +676,13 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
   });
   await writeActiveIndex(host, toActiveIndex(entries.filter((e) => e.workdir && e.run_id)));
   host.broadcast({ type: "graph-delta", run_id: state.run_id, status: state.status, next: state.next, cursor: state.cursor, at: new Date(host.now()).toISOString() });
+  if (state.verdict) {
+    await writeRunArtifact(host, state.run_id, "verdict.json", JSON.stringify(state.verdict));
+  }
+  for (const [id, node] of Object.entries(state.nodes)) {
+    if (!node.last_report) continue;
+    await writeRunArtifact(host, state.run_id, `nodes/${id}.json`, JSON.stringify(node.last_report));
+  }
 }
 
 function rec(v: unknown): Record<string, unknown> {

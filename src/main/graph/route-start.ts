@@ -13,6 +13,7 @@ export interface RoutePending {
   readonly repo_dir: string;
   readonly profile_id: string;
   readonly lead?: string;
+  readonly playbook?: string;
   readonly sc: { id: string; text: string; verify?: string; min_level?: "live-ui-verified" | "unit-test-verified" | "type-check-only" }[];
   readonly scope?: string[];
   readonly pr?: number | string;

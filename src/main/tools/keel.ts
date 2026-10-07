@@ -755,12 +755,31 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
   const cfg = await loadRuntimeConfig(ctx.host);
   const picked = pickProfile(cfg.manual, args);
   const runId = newRunId(ctx.host.now());
-  if (!picked.profile) {
-    return pack(runId, undefined, picked.decide!);
-  }
   const pr = typeof args.pr === "number" || typeof args.pr === "string" ? args.pr : undefined;
   const sc = normalizeSc(args.sc);
   const scopeAllow = Array.isArray(args.scope) && args.scope.every((x) => typeof x === "string") ? (args.scope as string[]) : undefined;
+  const pendingBase = (): RoutePending => ({
+    goal,
+    repo_dir: repoDir,
+    profile_id: picked.profile?.id ?? "",
+    sc,
+    ...(str(args.lead) ? { lead: str(args.lead) } : {}),
+    ...(str(args.playbook) ? { playbook: str(args.playbook) } : {}),
+    ...(scopeAllow ? { scope: scopeAllow } : {}),
+    ...(pr !== undefined ? { pr } : {}),
+    ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+  });
+  if (!picked.profile) {
+    const pending = pendingBase();
+    await ctx.host.fs({ op: "write", root: "data", path: routePendingPath(runId), content: JSON.stringify(pending) });
+    await ctx.host.fs({
+      op: "write",
+      root: "data",
+      path: `runs/${runId}/graph-state.json`,
+      content: JSON.stringify({ run_id: runId, goal, status: "await_sol", next: picked.decide }),
+    });
+    return pack(runId, undefined, picked.decide!);
+  }
   const routed = await resolveGraphTask(ctx, {
     goal,
     playbook: str(args.playbook),
@@ -1199,14 +1218,37 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
   const gateId = requireString(args, "gate_id");
   const answer = requireString(args, "answer");
   const reason = typeof args.reason === "string" ? args.reason : undefined;
-  if (gateId === "G-route") {
+  if (gateId === "G-route" || gateId === "profile") {
     const pendingFile = await ctx.host.fs({ op: "read", root: "data", path: routePendingPath(runId) });
     if (pendingFile.ok && pendingFile.content) {
       const pending = JSON.parse(pendingFile.content) as RoutePending;
-      if (!isGraphTaskType(answer)) throw new KeelError("INVALID_INPUT", `G-route 答案必须是单元图，收到 ${answer}。`);
       const cfg = await loadRuntimeConfig(ctx.host);
-      const profile = findProfile(cfg.manual, pending.profile_id);
-      const out = await materializeRun(ctx, runId, profile, pending, answer);
+      if (gateId === "G-route") {
+        if (!isGraphTaskType(answer)) throw new KeelError("INVALID_INPUT", `G-route 答案必须是单元图，收到 ${answer}。`);
+        const profile = findProfile(cfg.manual, pending.profile_id);
+        const out = await materializeRun(ctx, runId, profile, pending, answer);
+        return { run_id: runId, next: out.next, gate_id: gateId, answer };
+      }
+      const profile = findProfile(cfg.manual, answer);
+      const filled: RoutePending = { ...pending, profile_id: profile.id };
+      const routed = await resolveGraphTask(ctx, {
+        goal: filled.goal,
+        playbook: filled.playbook,
+        ...(filled.pr !== undefined ? { pr: filled.pr } : {}),
+        run_id: runId,
+        profile,
+      });
+      if ("decide" in routed) {
+        await ctx.host.fs({ op: "write", root: "data", path: routePendingPath(runId), content: JSON.stringify(filled) });
+        await ctx.host.fs({
+          op: "write",
+          root: "data",
+          path: `runs/${runId}/graph-state.json`,
+          content: JSON.stringify({ run_id: runId, profile_id: profile.id, goal: filled.goal, status: "await_sol", next: routed.decide }),
+        });
+        return { run_id: runId, next: routed.decide, gate_id: gateId, answer };
+      }
+      const out = await materializeRun(ctx, runId, profile, filled, routed.taskType);
       return { run_id: runId, next: out.next, gate_id: gateId, answer };
     }
   }

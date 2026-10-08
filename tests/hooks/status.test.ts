@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { hasKeelStop, MARK, mergeKeelStop } from "../../scripts/hooks/install.mjs";
-import { readStopHookStatus, statusFromConfigText } from "../../src/node/hooks-status.ts";
+import { hasKeelStop as installHasKeelStop, MARK, mergeKeelStop } from "../../scripts/hooks/install.mjs";
+import { hasKeelStop, KEEL_STOP_MARK, readStopHookStatus, statusFromConfigText } from "../../src/node/hooks-status.ts";
 import { STOP_HOOK_LABELS, renderStopHookStatus } from "../../src/panel/hooks-status.ts";
 import { dispatch } from "../../src/node/rpc.ts";
 
@@ -21,9 +21,12 @@ async function tmp() {
 
 describe("Stop hook install status", () => {
   it("reuses hasKeelStop: installed / not_installed / unreadable", () => {
+    expect(KEEL_STOP_MARK).toBe(MARK);
     expect(hasKeelStop({ hooks: { Stop: [] } })).toBe(false);
+    expect(installHasKeelStop({ hooks: { Stop: [] } })).toBe(false);
     const installed = mergeKeelStop({}, "claude-code", "/data/runs/active.json");
     expect(JSON.stringify(installed)).toContain(MARK);
+    expect(hasKeelStop(installed)).toBe(installHasKeelStop(installed));
     expect(statusFromConfigText(JSON.stringify(installed))).toBe("installed");
     expect(statusFromConfigText(JSON.stringify({ hooks: { Stop: [] } }))).toBe("not_installed");
     expect(statusFromConfigText("not-json")).toBe("unreadable");

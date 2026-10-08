@@ -10,6 +10,7 @@ import { ClockWatchdog, type ClockStatus } from "./graph/clock-watchdog.ts";
 import { NudgeController } from "./graph/nudge.ts";
 import { CLOCK_PING_METHOD, CLOCK_STATUS_PATH } from "../shared/clock.ts";
 import type { AgentModel, Host } from "./host.ts";
+import { parseKvResponse } from "../shared/kv-response.ts";
 
 declare const cindy: any;
 
@@ -29,9 +30,8 @@ const host: Host = {
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   async kvGet() {
     const r = await fetch("/kv");
-    const data: unknown = await r.json();
-    if (!data || typeof data !== "object" || Array.isArray(data)) return {};
-    return data as Record<string, unknown>;
+    if (!r.ok) return parseKvResponse(r.status, false, null);
+    return parseKvResponse(r.status, true, await r.json());
   },
   async agentModels() {
     const r = await fetch("/agent-models");

@@ -31,6 +31,7 @@ import {
 import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, ROLES, TASK_TYPES, type DirectionGate, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
 import { renderClockStatus, renderStopHookStatus, type StopHookInstall } from "./hooks-status.ts";
 import { readReplyMode, REPLY_MODE_LABELS, saveReplyMode, type ReplyMode } from "./reply-setting.ts";
+import { parseKvResponse } from "../shared/kv-response.ts";
 const input = document.querySelector<HTMLInputElement>("#key")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 
@@ -145,8 +146,8 @@ const manualFile = document.querySelector<HTMLInputElement>("#manual-file");
 const io: SettingsIO = {
   async getKv() {
     const r = await fetch("/kv");
-    const data: unknown = await r.json();
-    return data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+    if (!r.ok) return parseKvResponse(r.status, false, null);
+    return parseKvResponse(r.status, true, await r.json());
   },
   async putKv(kv) {
     try {
@@ -271,7 +272,13 @@ function readPrefixRoute(prefix: string): Route | undefined {
 
 async function doSave(next = draft): Promise<void> {
   setManualStatus("info", "正在保存…");
-  const result = await saveManual(io, next, catalog.models);
+  let result: Awaited<ReturnType<typeof saveManual>>;
+  try {
+    result = await saveManual(io, next, catalog.models);
+  } catch (e) {
+    setManualStatus("error", `未写入：${e instanceof Error ? e.message : "读取 /kv 失败。"}`);
+    return;
+  }
   if (result.ok) {
     draft = next;
     if (!draft.profiles.some((p) => p.id === selectedId)) selectedId = draft.profiles[0]?.id ?? "";

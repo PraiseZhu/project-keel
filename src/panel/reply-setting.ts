@@ -17,7 +17,12 @@ export function readReplyMode(kv: Record<string, unknown>): { mode: ReplyMode; e
 }
 
 export async function saveReplyMode(io: SettingsIO, mode: ReplyMode): Promise<{ ok: true } | { ok: false; message: string }> {
-  const kv = await io.getKv();
+  let kv: Record<string, unknown>;
+  try {
+    kv = await io.getKv();
+  } catch (e) {
+    return { ok: false, message: `未写入：${e instanceof Error ? e.message : "读取 /kv 失败。"}` };
+  }
   const put = await io.putKv({ ...kv, replyConfirm: mode });
   if (!put.ok) return { ok: false, message: put.message ?? `写入 /kv 失败（HTTP ${put.status}）。` };
   return { ok: true };

@@ -3,6 +3,7 @@ import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
 import { writeHandoff } from "../src/main/handoff.ts";
 import { readReplyMode, saveReplyMode } from "../src/panel/reply-setting.ts";
+import { KvReadError, parseKvResponse } from "../src/shared/kv-response.ts";
 import type { KeelProfile } from "../src/shared/types.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 
@@ -44,6 +45,16 @@ describe("pr_reply replyConfirm", () => {
     expect(calls).not.toContain("pr/reply");
   });
 
+  it("does not post when /kv cannot be read", async () => {
+    const calls: string[] = [];
+    const h = fakeHost({ node: nodeFake(calls) as never, kv: { replyConfirm: "confirm" } });
+    h.kvGet = async () => { throw new KvReadError("读取 /kv 失败（HTTP 500）。"); };
+    const r = await runTool(makeContext(h, "c1", profile), "pr_reply", { repo: "acme/app", pr: 7, target_id: "issue", body: "hi" });
+    expect(r).toMatchObject({ ok: false, errorCode: "KV_READ_FAILED" });
+    expect(calls).not.toContain("pr/reply");
+    expect(h.confirms).toHaveLength(0);
+  });
+
   it("still refuses a handed-off PR in auto mode", async () => {
     const calls: string[] = [];
     const gated: KeelProfile = { ...profile, lanes: [{ repo: "acme/app", preset: "gated-handoff" }] };
@@ -60,6 +71,26 @@ describe("settings reply mode", () => {
     expect(readReplyMode({})).toEqual({ mode: "auto" });
     expect(readReplyMode({ replyConfirm: "confirm" })).toEqual({ mode: "confirm" });
     expect(readReplyMode({ replyConfirm: 3 }).error).toMatch(/非法/);
+  });
+
+  it("parseKvResponse fails closed on HTTP errors and bad shapes", () => {
+    expect(parseKvResponse(200, true, { a: 1 })).toEqual({ a: 1 });
+    expect(parseKvResponse(200, true, {})).toEqual({});
+    expect(() => parseKvResponse(500, false, { error: "x" })).toThrow(/HTTP 500/);
+    expect(() => parseKvResponse(200, true, null)).toThrow(KvReadError);
+    expect(() => parseKvResponse(200, true, [])).toThrow(KvReadError);
+  });
+
+  it("does not PUT when the GET before saving fails", async () => {
+    let puts = 0;
+    const io = {
+      getKv: async () => { throw new KvReadError("读取 /kv 失败（HTTP 500）。"); },
+      putKv: async () => { puts += 1; return { ok: true, status: 204 }; },
+    } as never;
+    const r = await saveReplyMode(io, "confirm");
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toMatch(/HTTP 500/);
+    expect(puts).toBe(0);
   });
 
   it("merges into existing kv and reports write failures", async () => {

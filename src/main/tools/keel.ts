@@ -865,6 +865,8 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
       ...program,
       ...(typeof args.lead === "string" ? { lead: args.lead } : {}),
       ...(typeof args.profile === "string" ? { profile: args.profile } : {}),
+      ...(typeof args.repo_dir === "string" ? { repo_dir: args.repo_dir } : {}),
+      ...(typeof args.goal === "string" ? { goal: args.goal } : {}),
     });
   }
   const goal = requireString(args, "goal");

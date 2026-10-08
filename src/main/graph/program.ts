@@ -27,6 +27,7 @@ export interface RunReport {
   readonly merged?: boolean;
   readonly human_gate?: { readonly id: string; readonly question: string; readonly options: string; readonly defaultAnswer: string };
   readonly error?: string;
+  readonly next?: unknown;
 }
 
 export interface WorkerLimit {
@@ -58,6 +59,7 @@ export interface TickResult {
   readonly human_gates: readonly OpenGate[];
   readonly frontier_advanced: boolean;
   readonly errors: readonly TickError[];
+  readonly runs: readonly { readonly unit_id: string; readonly run_id: string; readonly next?: unknown }[];
 }
 
 export function runIdFor(unitId: string): string {
@@ -149,6 +151,7 @@ export class Program {
     const stopped: string[] = [];
     const blocked: string[] = [];
     const errors: TickError[] = [];
+    const runs: { unit_id: string; run_id: string; next?: unknown }[] = [];
     let frontier_advanced = false;
 
     let inflight = units.filter((u) => asState(u.state) === "running").length;
@@ -165,9 +168,10 @@ export class Program {
         queued_workers.push(unit.id);
         continue;
       }
-      const run_id = runIdFor(unit.id);
+      const suggested = unit.branch || runIdFor(unit.id);
       try {
-        await this.startRun({ unit, run_id });
+        const startedRun = await this.startRun({ unit, run_id: suggested });
+        const run_id = startedRun.run_id || suggested;
         await this.orch.unitsSet({ id: unit.id, state: "running", branch: run_id, ...(unit.pr ? { pr: Number(unit.pr) } : {}) });
         inflight += 1;
         slots -= 1;
@@ -187,6 +191,7 @@ export class Program {
       try {
         const report = await this.advanceRun({ unit, run_id: unit.branch || runIdFor(unit.id) });
         advanced.push(unit.id);
+        runs.push({ unit_id: unit.id, run_id: report.run_id, ...(report.next ? { next: report.next } : {}) });
         const event = shouldAdvanceFrontier(report, unit.sha);
         if (event) {
           const pr = report.merged || report.head_sha ? Number(unit.pr || 0) : 0;
@@ -220,7 +225,7 @@ export class Program {
     }
 
     const human_gates = await this.orch.gatesList();
-    return { started, queued_window, queued_workers, advanced, stopped, blocked, human_gates, frontier_advanced, errors };
+    return { started, queued_window, queued_workers, advanced, stopped, blocked, human_gates, frontier_advanced, errors, runs };
   }
 
   /** Inbox is a wake hint only: never copy pointer.status onto the unit. */

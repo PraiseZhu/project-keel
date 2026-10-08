@@ -1,6 +1,6 @@
 // Worker initial_task text. Sections follow orchestrate.md; FORBIDDEN is fixed plus unit bans.
 
-export const BRIEF_FORBIDDEN = ["禁止合并", "禁止 force-push", "禁止 rebase", "禁止写域外文件"] as const;
+export const BRIEF_FORBIDDEN = ["禁止合并", "禁止 force-push", "禁止 rebase", "禁止写域外文件", "禁止调用 KEEL 的 keel_* 工具（由主控调用）"] as const;
 
 export interface BriefNode {
   readonly id: string;

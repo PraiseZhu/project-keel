@@ -929,8 +929,20 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
   return pack(runId, picked.profile, out.next, { spec_id: PSTACK_GRAPHS[routed.taskType].id, worktree: out.state.worktree });
 }
 
+/** Worker sessions of this run must not drive it (real run: an explorer worker called keel_report itself). */
+async function assertNotRunWorker(ctx: ToolContext, runId: string): Promise<void> {
+  if (!ctx.sessionId) return;
+  const states = await loadGraphStates(ctx.host);
+  const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+  const worker = Object.entries(st?.nodes ?? {}).find(([, n]) => n.worker_session_id === ctx.sessionId);
+  if (worker) {
+    throw new KeelError("NOT_LEAD", `这是节点 ${worker[0]} 的 worker 会话，不能推进 run ${runId}。worker 只写报告并回复主控；keel_report / keel_wait / keel_gate 由主控调用。`);
+  }
+}
+
 export async function keelReport(ctx: ToolContext, args: Record<string, unknown>) {
   const runId = requireString(args, "run_id");
+  await assertNotRunWorker(ctx, runId);
   const phase = requireString(args, "phase");
   if (!["setup", "accepted", "reconcile", "recover", "final"].includes(phase)) {
     throw new KeelError("INVALID_INPUT", "phase 须为 setup | accepted | reconcile | recover | final。");
@@ -1208,6 +1220,7 @@ async function bindPrFromWorktree(ctx: ToolContext, runId: string, worktree: str
 
 export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) {
   const runId = requireString(args, "run_id");
+  await assertNotRunWorker(ctx, runId);
   const maxMinutes = Math.min(15, Math.max(1, typeof args.max_minutes === "number" ? args.max_minutes : 15));
   const start = ctx.host.now();
   const deadline = start + maxMinutes * 60_000;
@@ -1360,6 +1373,7 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
 
 export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) {
   const runId = requireString(args, "run_id");
+  await assertNotRunWorker(ctx, runId);
   const gateId = requireString(args, "gate_id");
   const answer = requireString(args, "answer");
   const reason = typeof args.reason === "string" ? args.reason : undefined;

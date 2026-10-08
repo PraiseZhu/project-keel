@@ -471,3 +471,21 @@ describe("keel_wait hands back a pending non-wait next (real run: setup after re
     expect(r).toMatchObject({ ok: true, result: { next: setup } });
   });
 });
+
+describe("worker sessions cannot drive the run (real run: explorer called keel_report)", () => {
+  it("rejects keel_report / keel_wait / keel_gate from a recorded worker session", async () => {
+    const h = fakeHost({ node: () => ({ ok: false, message: "unused" }) });
+    const spec = PSTACK_GRAPHS["bug-fix"];
+    await createRun(h, { run_id: "run-wk", spec_id: spec.id, profile_id: "sol", lead_harness: "codex", task_type: "bug-fix", entry: "implement", goal: "g", worktree: "/repo/.worktrees/x", now: h.now() });
+    await withRun(h, "run-wk", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.nodes["explore"] = { status: "succeeded", attempts: 1, dispatch_key: "run-wk:explore:1", dispatch_state: "terminal", worker_id: "w1", worker_session_id: "sess-worker" } as never;
+    });
+    const asWorker = makeContext(h, "c", profile, undefined, "sess-worker");
+    expect(await runTool(asWorker, "keel_report", { run_id: "run-wk", phase: "final", dispatch_key: "run-wk:research:1", inline_report: { status: "done", summary: "x" } })).toMatchObject({ ok: false, errorCode: "NOT_LEAD" });
+    expect(await runTool(asWorker, "keel_wait", { run_id: "run-wk" })).toMatchObject({ ok: false, errorCode: "NOT_LEAD" });
+    expect(await runTool(asWorker, "keel_gate", { run_id: "run-wk", gate_id: "x", answer: "y" })).toMatchObject({ ok: false, errorCode: "NOT_LEAD" });
+    const asLead = makeContext(h, "c", profile, undefined, "sess-lead");
+    expect((await runTool(asLead, "keel_wait", { run_id: "run-wk" })).ok).toBe(true);
+  });
+});

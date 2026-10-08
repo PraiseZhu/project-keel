@@ -21,6 +21,13 @@ const ctx = {
 };
 
 describe("buildBrief", () => {
+  it("tells non-writing nodes they are read-only instead of listing writable files (real run ⑫)", () => {
+    const text = buildBrief({ ...node, id: "explore", writes: false }, run, ctx);
+    expect(text).toContain("只读：不得修改任何文件");
+    expect(text).not.toContain("可写：");
+    expect(buildBrief(node, run, ctx)).toContain("可写：src/login.ts");
+  });
+
   it("asks every report kind for sc_evidence so the done gate can see SC evidence (real run ⑩)", () => {
     const kinds = [
       buildBrief(node, run, ctx),

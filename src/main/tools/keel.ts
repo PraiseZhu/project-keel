@@ -1039,7 +1039,8 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         repo_dir: reportDir ?? st?.worktree ?? st?.invocation_dir ?? "",
         ...(nodeState.planned_params?.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
       });
-      const scope = checkScope(changed.files ?? [], allow);
+      // .keel/ holds KEEL's own node reports, not product changes.
+      const scope = checkScope((changed.files ?? []).filter((f) => !f.replace(/^\.\//, "").startsWith(".keel/")), allow);
       if (!scope.ok) {
         await step(ctx, runId, { type: "scope_fail", dispatch_key: key });
         throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });

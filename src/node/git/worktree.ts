@@ -2,12 +2,23 @@
 // removes rows the audit classifies as `safe` (clean + merged), with plain `worktree remove`
 // and `branch -d` — never --force, never rm -rf. Ported in spirit from pstack worktree-audit.sh.
 
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { WorktreeAuditRow } from "../../shared/types.ts";
 import { ToolError, ghRaw, git, gitRaw } from "../env.ts";
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/** Keep KEEL node reports (<worktree>/.keel/) out of `git status`, scope checks and commits. Local only (.git/info/exclude). */
+export async function excludeKeelReports(root: string): Promise<void> {
+  const common = (await git(["rev-parse", "--git-common-dir"], { cwd: root })).trim();
+  const infoDir = resolve(root, common, "info");
+  mkdirSync(infoDir, { recursive: true });
+  const file = join(infoDir, "exclude");
+  const current = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (current.split("\n").some((l) => l.trim() === ".keel/" || l.trim() === "/.keel/")) return;
+  appendFileSync(file, `${current && !current.endsWith("\n") ? "\n" : ""}.keel/\n`);
+}
 
 /** Refs reach git as argv; a leading "-" would be parsed as an option. */
 export function assertRef(ref: string): string {
@@ -72,12 +83,14 @@ export async function createWorktree(p: {
       }
       throw new ToolError("WORKTREE_FAILED", (add.stderr || add.stdout).trim().slice(0, 300) || "检出已有分支失败。");
     }
+    await excludeKeelReports(root);
     return { path, branch, existing: true };
   }
   const branch = p.branch ?? `keel/${p.name}`;
   const base = assertRef(p.base_ref ?? `origin/${await defaultBranch(root)}`);
   await gitRaw(["fetch", "origin", "--quiet"], { cwd: root, timeoutMs: 120_000 });
   await git(["worktree", "add", "-b", branch, path, base], { cwd: root, timeoutMs: 120_000 });
+  await excludeKeelReports(root);
   return { path, branch, base };
 }
 

@@ -44,6 +44,22 @@ describe("loadRuntimeConfig", () => {
     expect(h.nodeCalls).toEqual([]);
   });
 
+  it("keeps handoffHelperPath from kv.lanes so Vigil lanes do not fall back to local records", async () => {
+    const helper = "/abs/vigil-helper.mjs";
+    const h = fakeHost({
+      kv: {
+        lanes: [{ repo: "acme/app", preset: "draft-gated-handoff", handoffHelperPath: helper, verifyCheck: "agent-verify" }],
+      },
+    });
+    const cfg = await loadRuntimeConfig(h, built);
+    expect(cfg.lanes).toEqual([{
+      repo: "acme/app",
+      preset: "draft-gated-handoff",
+      handoffHelperPath: helper,
+      verifyCheck: "agent-verify",
+    }]);
+  });
+
   it("does not cache a load that was invalidated while kv was in flight", async () => {
     const h = fakeHost({ kv: { limits: { concurrentRuns: 1, inFlightNodesPerRun: 1, astraBudget: 4 } } });
     let release!: () => void;

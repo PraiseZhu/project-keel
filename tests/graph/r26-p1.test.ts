@@ -50,6 +50,7 @@ describe("R26-01 SC live-ui surface is required for done", () => {
   it("keel_run keeps min_level and infers it from a UI verify command", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: HEAD, gh_repo: "o/r" } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         return { ok: false, message: method };
@@ -114,6 +115,7 @@ describe("R26-02 late attempt must not write ledger or commit status", () => {
   it("attempt 2 failed: late attempt 1 PASS does not write ledger/status and keeps verifier-failed", async () => {
     const host = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { head: HEAD, root: "/repo", branch: "feat/x" } };
         if (method === "pr/snapshot") return prSnap();
         if (method === "pr/threads") return { ok: true, result: { threads: [] } };
@@ -202,6 +204,7 @@ describe("R26-R04 invalid SC is rejected, not dropped", () => {
   it("keel_run rejects missing text/id and illegal min_level with INVALID_SC", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: HEAD, gh_repo: "o/r" } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         return { ok: false, message: method };
@@ -265,6 +268,7 @@ describe("R26-R06 late final cannot overwrite hard gate after concurrent retry",
     let baseCalls = 0;
     const host = fakeHost({
       node: async (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { head: HEAD, root: "/repo", branch: "feat/x" } };
         if (method === "pr/snapshot") return prSnap();
         if (method === "pr/threads") return { ok: true, result: { threads: [] } };

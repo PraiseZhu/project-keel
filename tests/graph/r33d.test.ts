@@ -1,0 +1,93 @@
+// PR #33 delta review: R33D-01 pstack_start scope, R33D-02 investigation report delivery, R33D-03 read-only nodes changing files.
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { makeContext } from "../../src/main/context.ts";
+import { runTool } from "../../src/main/dispatch.ts";
+import { buildBrief } from "../../src/main/graph/brief.ts";
+import { createRun } from "../../src/main/graph/interpreter.ts";
+import type { GraphRunState } from "../../src/main/graph/state.ts";
+import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
+import { fakeHost } from "../helpers/fakeHost.ts";
+
+const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
+
+describe("R33D-01 pstack_start can pass scope", () => {
+  it("declares scope in the public schema and starts a writing run with it", async () => {
+    const manifest = JSON.parse(readFileSync("plugin/ghost.json", "utf8"));
+    const params = manifest.tools.find((t: { name: string }) => t.name === "pstack_start").parameters;
+    expect(params.properties.scope?.type).toBe("array");
+    const h = fakeHost({
+      node: (m: string) => {
+        if (m === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: "abc" } };
+        if (m === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        return { ok: false, message: m };
+      },
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile), "pstack_start", {
+      task: "修复报错", repo_dir: "/repo", playbook: "bug-fix", scope: ["src/**"],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result.next.kind).toBe("setup");
+  });
+});
+
+describe("R33D-02 investigation workers reply with the report; the lead hands it in", () => {
+  it("does not tell the worker to call keel_report", () => {
+    const text = buildBrief(
+      { id: "explore", role: "explorer", writes: false, inline_report: true },
+      { run_id: "r1", goal: "g", taskType: "investigation" },
+      { attempt: 1, dispatch_key: "r1:explore:1" },
+    );
+    expect(text).not.toMatch(/用 keel_report|keel_report\(/);
+    expect(text).toContain("最后一条回复必须只包含一个");
+    expect(text).toContain("r1:explore:1");
+    expect(text).toContain("不要调用 keel_*");
+  });
+});
+
+describe("R33D-03 read-only nodes must leave the worktree unchanged", () => {
+  async function setup(files: string[]) {
+    const h = fakeHost({
+      node: (m: string) => (m === "git/changed-files" ? { ok: true, result: { files } } : { ok: false, message: m }),
+    });
+    await createRun(h, {
+      run_id: "ro", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
+      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+    });
+    await withRun(h, "ro", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.cursor = "explore";
+      s.team = { ready: true, team_id: "t", lead_session_id: "lead" };
+      s.nodes.explore = {
+        status: "active", attempts: 1, dispatch_key: "ro:explore:1", dispatch_state: "running",
+        planned_params: {
+          label: "keel-explore-1", role: "keel-explorer", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy",
+          initial_task: "x", writes: false, fallbacks: [], route_index: 0, start_sha: "abc",
+        },
+      };
+    });
+    return h;
+  }
+  const report = { status: "done", summary: "explored", files_changed: [], ran: [] };
+
+  it("rejects an explorer that edited source, so its family cannot slip past the non-author check", async () => {
+    const h = await setup(["src/duration.js", ".keel/explore-1.md"]);
+    const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
+      run_id: "ro", phase: "final", dispatch_key: "ro:explore:1", inline_report: report,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe("SCOPE_VIOLATION");
+    expect(r.message).toContain("src/duration.js");
+    expect(h.nodeCalls.find((c) => c.method === "git/changed-files")?.params).toMatchObject({ base: "abc" });
+    const st = JSON.parse(h.files.get(graphStatePath("ro"))!) as GraphRunState;
+    expect(st.nodes.explore.status).not.toBe("succeeded");
+  });
+
+  it("accepts a read-only node that only wrote its .keel report", async () => {
+    const h = await setup([".keel/explore-1.md"]);
+    const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
+      run_id: "ro", phase: "final", dispatch_key: "ro:explore:1", inline_report: report,
+    });
+    expect(r.ok).toBe(true);
+  });
+});

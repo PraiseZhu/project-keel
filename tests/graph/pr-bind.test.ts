@@ -35,6 +35,7 @@ function prSnap(over: Record<string, unknown> = {}) {
 }
 
 function bindNode(method: string) {
+  if (method === "git/changed-files") return { ok: true, result: { files: [] } };
   if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: HEAD } };
   if (method === "pr/resolve") return { ok: true, result: { repo: "o/r", number: 12 } };
   if (method === "pr/snapshot") return prSnap();
@@ -156,6 +157,7 @@ describe("AUDIT-01 explicit PR is not overwritten by branch resolve", () => {
   it("keel_run pr:12 plus a branch that belongs to PR 13 stops without rebinding", async () => {
     const h = fakeHost({
       node: (method: string, params: Record<string, unknown>) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/other", head: HEAD, gh_repo: "fork/r" } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         if (method === "pr/resolve") return { ok: true, result: { repo: "o/r", number: 13 } };

@@ -290,9 +290,10 @@ async function planOrca(
   }
   const workingDir = state.worktree ?? state.invocation_dir;
   let start_sha: string | undefined;
-  if (specNode.writes) {
+  // Read-only nodes in a change worktree also record HEAD, so final can prove they changed nothing.
+  if (specNode.writes || state.worktree) {
     start_sha = await worktreeHead(host, workingDir ?? state.invocation_dir);
-    if (!start_sha) {
+    if (!start_sha && specNode.writes) {
       return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
     }
   }

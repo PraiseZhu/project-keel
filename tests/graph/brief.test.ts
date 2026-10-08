@@ -62,7 +62,7 @@ describe("buildBrief", () => {
       { ...ctx, attempt: 1, dispatch_key: "run-1:report:1" },
     );
     expect(text).toContain("只读");
-    expect(text).toContain("inline_report");
+    expect(text).toContain("最后一条回复必须只包含一个");
     expect(text).not.toMatch(/\.keel\/[a-z0-9]/);
     expect(text).toContain("不要写 .keel/");
     expect(text).toContain("禁止合并");

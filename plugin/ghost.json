@@ -359,6 +359,13 @@
           "context": {
             "type": "string",
             "description": "可选：补充上下文。"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "写域 glob，原样转交 keel_run。写代码任务必须传，缺则 SCOPE_REQUIRED。"
           }
         },
         "required": [

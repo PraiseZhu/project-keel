@@ -1062,6 +1062,20 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
       }
     }
+    // Real run ⑫: a read-only explorer edited source. Read-only nodes must leave the worktree unchanged,
+    // otherwise their family would escape the non-author check.
+    const otherWriterActive = Object.entries(st?.nodes ?? {}).some(([id, n]) => id !== parsedKey?.nodeId && n.status === "active" && n.planned_params?.writes);
+    if (nodeState?.planned_params && !nodeState.planned_params.writes && st?.worktree && !otherWriterActive) {
+      const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
+        repo_dir: st.worktree,
+        ...(nodeState.planned_params.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
+      });
+      const touched = (changed.files ?? []).filter((f) => !f.replace(/^\.\//, "").startsWith(".keel/"));
+      if (touched.length) {
+        await step(ctx, runId, { type: "scope_fail", dispatch_key: key });
+        throw new KeelError("SCOPE_VIOLATION", `只读节点改了文件：${touched.join("、")}`, { violations: touched });
+      }
+    }
     if (parsed) {
       const gh = st ? ghRepoOf(st) : undefined;
       let facts: PrFacts | undefined;

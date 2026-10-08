@@ -68,6 +68,7 @@ describe("F26-01 late report vs current PR head", () => {
   it("does not build a verdict when report head A is not current PR head B", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: HEAD_B } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         if (method === "pr/snapshot") return prSnap(HEAD_B);
@@ -94,6 +95,7 @@ describe("F26-01 late report vs current PR head", () => {
   it("retarget re-verify uses computed base_sha", async () => {
     const h = fakeHost({
       node: (method: string, params: Record<string, unknown>) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: HEAD_A } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         if (method === "pr/snapshot") return prSnap(HEAD_A, "develop");
@@ -126,6 +128,7 @@ describe("F26-02 investigation create_worker.working_dir", () => {
   it("falls back to invocation_dir when there is no worktree", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/other/root", branch: "main", head: HEAD_A, gh_repo: "o/r" } };
         if (method === "git/content-fingerprint") return { ok: true, result: { head: HEAD_A, status_digest: "d", content_hash: "h" } };
         return { ok: false, message: method };
@@ -148,6 +151,7 @@ describe("F26-04 retry_verify does not succeed the node", () => {
   it("human:verify-head + retry_verify re-dispatches instead of walking to report-ready", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: HEAD_A } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         return { ok: false, message: method };
@@ -181,6 +185,7 @@ describe("F26-05 keel_wait does not complete a running verifier", () => {
   it("verify-head still running stays active after keel_wait", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: HEAD_A } };
         if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
         return { ok: false, message: method };
@@ -217,6 +222,7 @@ describe("investigation final reads report from invocation_dir", () => {
     const reads: Record<string, unknown>[] = [];
     const h = fakeHost({
       node: (method: string, params: Record<string, unknown>) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/invoked", branch: "main", head: HEAD_A } };
         if (method === "git/content-fingerprint") return { ok: true, result: { head: HEAD_A, status_digest: "d", content_hash: "h" } };
         if (method === "report/read") {
@@ -270,6 +276,7 @@ describe("F26-06 open-pr next.call includes sections", () => {
   it("pr_open accepts next.call.args plus authorization_source", async () => {
     const h = fakeHost({
       node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: HEAD_A } };
         if (method === "pr/resolve") return { ok: true, result: null };
         if (method === "pr/open") return { ok: true, result: { url: "https://github.com/o/r/pull/1", number: 1, repo: "o/r", head_sha: HEAD_A } };

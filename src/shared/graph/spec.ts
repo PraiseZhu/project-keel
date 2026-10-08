@@ -244,10 +244,14 @@ export function validateGraph(spec: GraphSpec, expectedSteps: readonly string[] 
   }
 
   const mapped = new Set(spec.nodes.flatMap((n) => n.playbook_steps));
-  const adapted = new Set(spec.adaptations.map((a) => a.playbook_step));
   for (const step of expectedSteps) {
-    if (!mapped.has(step) && !adapted.has(step)) {
-      issues.push(issue(g, "unmapped_step", `${step} 既未映射到任何节点的 playbook_steps，也不在 adaptations`));
+    if (!mapped.has(step)) {
+      issues.push(issue(g, "unmapped_step", `${step} 未映射到任何节点的 playbook_steps；adaptation 只能说明已有节点如何改义，不能代替节点`));
+    }
+  }
+  for (const a of spec.adaptations) {
+    if (a.playbook_step.includes("#") && !mapped.has(a.playbook_step)) {
+      issues.push(issue(g, "adaptation_without_node", `adaptation ${a.playbook_step} 没有对应图节点`));
     }
   }
 

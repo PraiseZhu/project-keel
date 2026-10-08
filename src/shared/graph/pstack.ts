@@ -46,7 +46,7 @@ function edge(from: string, to: string, on: EdgeOn = "ok"): GraphEdge {
 }
 
 const TERMINALS: GraphNode[] = [
-  node("done", { kind: "tool", writes: false, timebox_min: 1, max_attempts: 1, playbook_steps: ["shipping#9", "babysit#9"] }),
+  node("done", { kind: "tool", writes: false, timebox_min: 1, max_attempts: 1, playbook_steps: ["shipping#7", "shipping#9", "babysit#9", "autonomous-run#1"] }),
   node("stopped", { kind: "tool", writes: false, timebox_min: 1, max_attempts: 1 }),
 ];
 
@@ -205,14 +205,14 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         writes: false,
         timebox_min: 25,
         max_attempts: 8,
-        playbook_steps: ["babysit#5", "babysit#6"],
+        playbook_steps: ["babysit#1", "babysit#2", "babysit#3", "babysit#5", "babysit#6", "autonomous-run#2", "autonomous-run#5"],
       }),
       node("conflict-human", {
         kind: "human",
         writes: false,
         timebox_min: 240,
         max_attempts: 3,
-        playbook_steps: ["babysit#5"],
+        playbook_steps: ["babysit#4", "babysit#5"],
       }),
       node("triage-threads", {
         kind: "dispatch",
@@ -235,7 +235,7 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         writes: true,
         timebox_min: 45,
         max_attempts: 3,
-        playbook_steps: ["babysit#7"],
+        playbook_steps: ["babysit#7", "autonomous-run#3"],
       }),
       node("astra-unstick", {
         kind: "dispatch",
@@ -273,14 +273,14 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         writes: false,
         timebox_min: 40,
         max_attempts: 3,
-        playbook_steps: ["shipping#1", "shipping#3"],
+        playbook_steps: ["shipping#1", "shipping#3", "shipping#4"],
       }),
       node("report-ready", {
         kind: "tool",
         writes: false,
         timebox_min: 15,
         max_attempts: 2,
-        playbook_steps: ["shipping#5", "babysit#9"],
+        playbook_steps: ["shipping#2", "shipping#5", "shipping#6", "shipping#8", "babysit#9"],
       }),
       ...retryFix.nodes,
       ...retryThreads.nodes,
@@ -384,7 +384,7 @@ function bugFixGraph(): GraphSpec {
         writes: true,
         timebox_min: 60,
         max_attempts: 3,
-        playbook_steps: ["bug-fix#3", "bug-fix#5"],
+        playbook_steps: ["bug-fix#3", "bug-fix#5", "autonomous-run#3"],
       }),
       node("verify-same-surface", {
         kind: "dispatch",
@@ -465,7 +465,7 @@ function featureGraph(): GraphSpec {
         writes: true,
         timebox_min: 60,
         max_attempts: 3,
-        playbook_steps: ["feature#4", "feature#6"],
+        playbook_steps: ["feature#4", "feature#6", "autonomous-run#3"],
       }),
       node("arena", {
         kind: "dispatch",
@@ -601,7 +601,7 @@ function refactoringGraph(): GraphSpec {
         writes: true,
         timebox_min: 60,
         max_attempts: 3,
-        playbook_steps: ["refactoring#4", "refactoring#5"],
+        playbook_steps: ["refactoring#4", "refactoring#5", "autonomous-run#3"],
       }),
       node("equivalence", {
         kind: "dispatch",
@@ -656,7 +656,7 @@ function investigationGraph(): GraphSpec {
         writes: false,
         timebox_min: 20,
         max_attempts: 3,
-        playbook_steps: ["investigation#1"],
+        playbook_steps: ["investigation#1", "investigation#2"],
       }),
       node("research", {
         kind: "plugin_task",

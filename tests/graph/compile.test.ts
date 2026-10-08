@@ -22,9 +22,8 @@ function stepsOf(id: string): string[] {
   return parseNumberedSteps(id, playbooks[id]!);
 }
 
-function mappedOrAdapted(spec: GraphSpec, step: string): boolean {
-  if (spec.nodes.some((n) => n.playbook_steps.includes(step))) return true;
-  return spec.adaptations.some((a) => a.playbook_step === step);
+function mappedToNode(spec: GraphSpec, step: string): boolean {
+  return spec.nodes.some((n) => n.playbook_steps.includes(step));
 }
 
 describe("pstack graph compile", () => {
@@ -32,7 +31,7 @@ describe("pstack graph compile", () => {
     for (const spec of allGraphs()) {
       const expected = expectedStepsFor(spec, playbooks);
       expect(expected.issues, spec.id).toEqual([]);
-      const missing = expected.steps.filter((step) => !mappedOrAdapted(spec, step));
+      const missing = expected.steps.filter((step) => !mappedToNode(spec, step));
       expect(missing, `${spec.id} unmapped`).toEqual([]);
       expect(validateGraph(spec, expected.steps)).toEqual([]);
     }
@@ -41,10 +40,21 @@ describe("pstack graph compile", () => {
       expect(coveredBy.length, `${id} has a graph`).toBeGreaterThan(0);
       const steps = stepsOf(id);
       for (const spec of coveredBy) {
-        const missing = steps.filter((step) => !mappedOrAdapted(spec, step));
+        const missing = steps.filter((step) => !mappedToNode(spec, step));
         expect(missing, `${spec.id} missing ${id}`).toEqual([]);
       }
     }
+  });
+
+  it("adaptation cannot replace a numbered step that has no node", () => {
+    const spec = graphForTask("bug-fix");
+    const ghost: GraphSpec = {
+      ...spec,
+      nodes: spec.nodes.map((n) => ({ ...n, playbook_steps: n.playbook_steps.filter((s) => s !== "babysit#5") })),
+      adaptations: [...spec.adaptations, { playbook_step: "babysit#5", kind: "equivalent_handoff", reason: "cannot substitute" }],
+    };
+    const issues = validateGraph(ghost, ["babysit#5"]);
+    expect(issues.some((i) => i.rule === "unmapped_step" && i.message.includes("babysit#5"))).toBe(true);
   });
 
   it("every loop has exit", () => {

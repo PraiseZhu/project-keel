@@ -2,11 +2,11 @@
 // only ranks inside that set. No tool here can merge: a ready PR is reported as
 // mergeable with its link, and the user merges on GitHub.
 
-import { allowedActions } from "../../shared/lanes.ts";
+import { allowedActions, resolveLane } from "../../shared/lanes.ts";
 import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
-import { assertNotHandedOff, readHandoff, writeHandoff } from "../handoff.ts";
+import { assertNotHandedOff, currentHandoff, writeHandoff } from "../handoff.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
 
@@ -32,7 +32,7 @@ function prArgs(args: Record<string, unknown>) {
 
 export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { mergeable: boolean; jev?: unknown; merge_hint?: string }> {
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
-  const handedOff = Boolean(await readHandoff(ctx.host, snap.pr.repo, snap.pr.number));
+  const handedOff = Boolean(await currentHandoff(ctx, snap.pr.repo, snap.pr.number, snap.pr));
   const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff, ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}) });
   let next: PrAction = allowed[0]!;
   let jev: unknown;
@@ -107,7 +107,7 @@ export async function prOpen(ctx: ToolContext, args: Record<string, unknown>) {
   const auth = requireAuth(args, "开 PR");
   // A branch whose PR was already handed off must not be pushed, even through pr_open.
   const existing = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: repoDir });
-  if (existing) await assertNotHandedOff(ctx.host, existing.repo, existing.number);
+  if (existing) await assertNotHandedOff(ctx, existing.repo, existing.number);
   const r = await node(ctx, "pr/open", { repo_dir: repoDir, title, sections: args.sections, ...(typeof args.base === "string" ? { base: args.base } : {}), ...(typeof args.draft === "boolean" ? { draft: args.draft } : {}), push: args.push === true });
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_open ${r.url}（授权：${auth}）`, evidence: r });
   return { ...r, authorization_source: auth };
@@ -135,8 +135,8 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const auth = dry ? null : requireAuth(args, "转 Ready ");
   const snapArgs = prArgs(args);
   const pre = await node<Snapshot>(ctx, "pr/snapshot", snapArgs);
-  if (!dry) await assertNotHandedOff(ctx.host, pre.pr.repo, pre.pr.number);
-  const handed = Boolean(await readHandoff(ctx.host, pre.pr.repo, pre.pr.number));
+  const handed = Boolean(await currentHandoff(ctx, pre.pr.repo, pre.pr.number, pre.pr));
+  if (!dry && handed) throw new KeelError("LANE_HANDED_OFF", "当前 PR 已交接；继续修改前先取回并转 Draft。");
   // Handing off also needs the review machine's entry condition (window, tool health), which no
   // GitHub check exposes before Ready. The agent supplies what it checked; Keel binds it to this
   // head and a fresh time, and refuses failed, stale or unbound evidence.
@@ -152,7 +152,10 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   }
   let handoff = null;
   if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {
-    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null } };
+    const integrated = resolveLane(ctx.profile, pre.pr.repo).match?.handoffHelperPath !== undefined;
+    if (integrated && (!r.watcher_handoff || r.watcher_handoff.head !== r.head_sha))
+      throw new KeelError("HANDOFF_HELPER_INVALID", "Ready 已执行，但缺少当前 HEAD 的 Vigil 交接回执，作者交接未完成。");
+    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null }, ...(r.watcher_handoff ? { watcher_receipt: r.watcher_handoff } : {}) };
     await writeHandoff(ctx.host, handoff);
   }
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_ready ${dry ? "dry-run" : "执行"} ${pre.pr.repo}#${pre.pr.number} → ready=${r.ready}`, evidence: r.gate });
@@ -190,7 +193,7 @@ export async function prReply(ctx: ToolContext, args: Record<string, unknown>) {
   const target = requireString(args, "target_id");
   const body = requireString(args, "body");
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
-  await assertNotHandedOff(ctx.host, snap.pr.repo, snap.pr.number);
+  await assertNotHandedOff(ctx, snap.pr.repo, snap.pr.number, snap.pr);
   const preview = body.length > 180 ? body.slice(0, 180) + "…" : body;
   const c = await ctx.host.confirm({ body: `在 ${snap.pr.repo}#${snap.pr.number} ${target === "issue" ? "主讨论区" : "评审线程"}发表回复${args.resolve ? "并标记已解决" : ""}：\n${preview}`, confirmText: "发表", cancelText: "先不发" });
   if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未发表。`);

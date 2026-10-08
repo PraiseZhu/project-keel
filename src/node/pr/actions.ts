@@ -10,6 +10,7 @@ import { ToolError, gh, ghJson, git, gitRaw } from "../env.ts";
 import { withCwd } from "../context.ts";
 import { originRepo, readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
 import { GhGitHubReader } from "./upstream/github.ts";
+import { inspectVigil, publishVigil } from "./vigil-handoff.ts";
 
 
 /** Write a JSON body to a private temp file and hand it to `gh api --input`; never via argv or a shell. */
@@ -93,12 +94,23 @@ export async function prReady(profile: KeelProfile, p: { repo_dir?: string; repo
   const { passed, missing } = readyVerdict(s);
   const base = { gate: { passed, missing, required: gate.required, sources: gate.sources }, pr: s.pr, preset: s.preset, head_sha: s.pr.headSha };
   if (!passed) return { ...base, ready: false, executed: false };
+  const vigilance = await inspectVigil(profile, s.pr.repo, s.pr.number);
+  if (vigilance && (vigilance.pr.headRefOid !== s.pr.headSha || vigilance.pr.isDraft !== s.pr.isDraft || vigilance.pr.state !== s.pr.state))
+    throw new ToolError("HEAD_MOVED", "检查交接归属时 PR 已变化，请按当前版本重取门禁。");
+  if (vigilance && (!vigilance.authorAuthorized || vigilance.status === "inactive"))
+    throw new ToolError("HANDOFF_AUTHOR_REQUIRED", "自动交接须由同仓 PR 的作者执行。");
+  if (!p.dry_run && vigilance?.status === "handed-off")
+    throw new ToolError("LANE_HANDED_OFF", "当前 Ready 代次已交给 watcher，作者应停止写入。");
   if (p.dry_run) return { ...base, ready: s.pr.isDraft ? false : true, executed: false, would_mark_ready: s.pr.isDraft };
   // Re-read head right before acting: if it moved, the gate result is stale.
   const fresh = await ghJson<{ headRefOid: string; isDraft: boolean }>(["pr", "view", String(s.pr.number), "--repo", s.pr.repo, "--json", "headRefOid,isDraft"]);
   if (fresh.headRefOid !== s.pr.headSha) throw new ToolError("HEAD_MOVED", "评估门禁后 PR head 有新提交，请重新调用 pr_ready。");
   if (fresh.isDraft) await gh(["pr", "ready", String(s.pr.number), "--repo", s.pr.repo]);
-  return { ...base, ready: true, executed: fresh.isDraft };
+  const watcherHandoff = vigilance && s.pr.headSha ? await publishVigil(profile, s.pr.repo, s.pr.number, s.pr.headSha) : null;
+  if (watcherHandoff && vigilance && (watcherHandoff.nodeId !== vigilance.pr.id
+    || watcherHandoff.author.toLowerCase() !== vigilance.pr.author.login.toLowerCase()))
+    throw new ToolError("HANDOFF_HELPER_INVALID", "Vigil 回执的 PR 或作者与 Ready 门禁不一致。");
+  return { ...base, ready: true, executed: fresh.isDraft, ...(watcherHandoff ? { watcher_handoff: watcherHandoff } : {}) };
 }
 
 export async function prThreads(profile: KeelProfile, p: { repo_dir?: string; repo?: string; pr?: number }) {

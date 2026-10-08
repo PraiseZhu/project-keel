@@ -74,7 +74,7 @@ const tools = [
   },
   {
     name: "pr_ready",
-    description: "评估并（非 dry_run 时）把 Draft PR 转为 Ready（会写 GitHub）。要求当前 head 全部检查通过、无进行中、无冲突与未解决线程；门禁车道另要求必需检查非空且全部通过，否则返回 GATE_NOT_MET 与缺项；交接车道还要 review_entry（绑定当前 head、30 分钟内、result=pass 的服务器审查机进场核对结果），否则不转 Ready、不交接，dry_run 也会把它列进缺项；交接车道转 Ready 后写交接记录，之后推送/回帖类调用返回 LANE_HANDED_OFF。dry_run:true 只评估门禁，绝不执行 gh pr ready。非 dry_run 需要 authorization_source。",
+    description: "评估并（非 dry_run 时）把 Draft PR 转为 Ready（会写 GitHub）。要求当前 head 全部检查通过、无进行中、无冲突与未解决线程；门禁车道另要求必需检查非空且全部通过，否则返回 GATE_NOT_MET 与缺项；交接车道还要 review_entry（绑定当前 head、30 分钟内、result=pass 的服务器审查机进场核对结果），否则不转 Ready、不交接，dry_run 也会把它列进缺项；交接车道转 Ready 后写交接记录；配置 handoffHelperPath 时必须先由本机 Node 调用 Vigil helper 发布绑定当前 HEAD 的作者回执，失败不算交接完成。之后推送/回帖类调用返回 LANE_HANDED_OFF，转 Draft 或新代次按外部归属重新核对。dry_run:true 只评估门禁，绝不执行 gh pr ready。非 dry_run 需要 authorization_source。",
     parameters: obj({ ...prRef, dry_run: bool("只评估门禁。"), authorization_source: str("用户授权原话与日期（非 dry_run 必填）。"), review_entry: { type: "object", additionalProperties: false, description: "交接车道必填：服务器审查机进场条件的核对结果。按目标仓规则（如审查工作流的业务时间窗与工具健康）核对当前 head 后填写；30 分钟内有效。", properties: { head_sha: { type: "string", description: "核对时的 PR head SHA，必须等于当前 head。" }, checked_at: { type: "string", description: "核对时间（ISO 8601）。" }, result: { type: "string", enum: ["pass", "fail"], description: "进场条件是否满足。" }, source: { type: "string", description: "核对依据：规则文件路径、健康检查或 run 链接。" } }, required: ["head_sha", "checked_at", "result", "source"] } }),
   },
   {

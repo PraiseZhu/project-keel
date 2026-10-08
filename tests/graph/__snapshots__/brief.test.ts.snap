@@ -8,7 +8,7 @@ ACCEPTANCE  SC-1: 复现用例转绿
 VERIFY      npx vitest run tests/login.test.ts
 TIMEBOX     45 分钟；到期交部分发现并停止，不要继续改
 FORBIDDEN   禁止合并；禁止 force-push；禁止 rebase；禁止写域外文件；禁止调用 KEEL 的 keel_* 工具（由主控调用）；禁止改配置
-REPORT      把完整报告写到 \`/repo/.worktrees/keel-run-1/.keel/implement-2.md\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status（只能是 done / partial / blocked / failed，做完且验收通过写 done）、summary、branch?、head_sha?、files_changed、functions_touched、changed_lines、ran、findings?、verdict?（只能是 PASS / PASS+NOTES / FAIL）、next_suggestions?），后面接正文。functions_touched 写实际改到的函数名（缺了编排会按已跨函数处理）；changed_lines 写新增+删除行数（缺了不能跳过最终复核）。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。
+REPORT      把完整报告写到 \`/repo/.worktrees/keel-run-1/.keel/implement-2.md\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status（只能是 done / partial / blocked / failed，做完且验收通过写 done）、summary、branch?、head_sha?、files_changed、functions_touched、changed_lines、ran、sc_evidence、findings?、verdict?（只能是 PASS / PASS+NOTES / FAIL）、next_suggestions?），后面接正文。sc_evidence 写 {SC id: true/false}，ACCEPTANCE 每条都要写，true 只给你本次实际跑过验证并通过的 SC（缺了编排判不了完成）。functions_touched 写实际改到的函数名（缺了编排会按已跨函数处理）；changed_lines 写新增+删除行数（缺了不能跳过最终复核）。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。
 STANDING    不合并。"
 `;
 
@@ -20,6 +20,6 @@ ACCEPTANCE  SC-1: 复现用例转绿
 VERIFY      npx vitest run tests/login.test.ts
 TIMEBOX     20 分钟；到期交部分发现并停止，不要继续改
 FORBIDDEN   禁止合并；禁止 force-push；禁止 rebase；禁止写域外文件；禁止调用 KEEL 的 keel_* 工具（由主控调用）；禁止改配置
-REPORT      用 keel_report({phase:"final", inline_report}) 内联交回完整报告。JSON 必须含本节点 dispatch_key、status（done|partial|blocked|failed）、summary。不要写 .keel/。给主控的回复不超过 20 行摘要。
+REPORT      用 keel_report({phase:"final", inline_report}) 内联交回完整报告。JSON 必须含本节点 dispatch_key、status（done|partial|blocked|failed）、summary、sc_evidence（{SC id: true/false}，ACCEPTANCE 每条都要写）。不要写 .keel/。给主控的回复不超过 20 行摘要。
 STANDING    不合并。"
 `;

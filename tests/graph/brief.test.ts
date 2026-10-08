@@ -21,6 +21,18 @@ const ctx = {
 };
 
 describe("buildBrief", () => {
+  it("asks every report kind for sc_evidence so the done gate can see SC evidence (real run ⑩)", () => {
+    const kinds = [
+      buildBrief(node, run, ctx),
+      buildBrief({ ...node, id: "explore", writes: false, inline_report: true }, run, ctx),
+      buildBrief({ ...node, id: "research", writes: false, plugin_task: true }, run, ctx),
+    ];
+    for (const text of kinds) {
+      expect(text).toContain("sc_evidence");
+      expect(text).toContain("ACCEPTANCE 每条都要写");
+    }
+  });
+
   it("emits orchestrate sections with the fixed FORBIDDEN list and .keel report path", () => {
     const text = buildBrief(node, run, ctx);
     for (const label of ["GOAL", "SCOPE", "CONTEXT", "ACCEPTANCE", "VERIFY", "TIMEBOX", "FORBIDDEN", "REPORT", "STANDING"]) {

@@ -24,6 +24,7 @@ import { withRun, writeRunArtifact } from "../store/runs.ts";
 import { PSTACK_GRAPHS, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
 import { addEstimatedPoints, applyGithubUsed, countWaitCiRuns, loadPollBudget, POINTS_PER_SNAPSHOT, pollIntervalMs, savePollBudget } from "../graph/poll.ts";
+import { keelProgram } from "./program.ts";
 import { collectTaskMessages, invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
@@ -858,6 +859,14 @@ function pack(runId: string, profile: Profile | undefined, next: Next, extra: Re
 }
 
 export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
+  if (args.program && typeof args.program === "object" && !Array.isArray(args.program)) {
+    const program = args.program as Record<string, unknown>;
+    return keelProgram(ctx, {
+      ...program,
+      ...(typeof args.lead === "string" ? { lead: args.lead } : {}),
+      ...(typeof args.profile === "string" ? { profile: args.profile } : {}),
+    });
+  }
   const goal = requireString(args, "goal");
   const repoDir = requireString(args, "repo_dir");
   const cfg = await loadRuntimeConfig(ctx.host);

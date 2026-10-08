@@ -113,7 +113,7 @@
     },
     {
       "name": "keel_run",
-      "description": "开一次 KEEL 图运行。主控方案顺序：profile 点名 → lead 对应 harness 的默认方案 → 没有默认则 next.kind=decide 让你选。变更类在 <仓>/.worktrees/keel-<run> 建 worktree；pr 类型检出已有分支（被占用则 next.stop）；investigation 不建 worktree，只记起始指纹。返回 {run_id, profile, next}。之后只照 next 做。永不合并。",
+      "description": "开一次 KEEL 图运行。主控方案顺序：profile 点名 → lead 对应 harness 的默认方案 → 没有默认则 next.kind=decide 让你选。变更类在 <仓>/.worktrees/keel-<run> 建 worktree；pr 类型检出已有分支（被占用则 next.stop）；investigation 不建 worktree，只记起始指纹。返回 {run_id, profile, next}。之后只照 next 做。永不合并。传入 program 时走多 PR 节目（init/add/tick/restore），不另开工具。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -191,6 +191,48 @@
               "type": "string"
             },
             "description": "写域 glob，写入 planned_params / brief。缺省则写节点没有写域。"
+          },
+          "program": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "多 PR 节目：rolling window、单 unit 失败隔离、重启 restore。",
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "init",
+                  "add",
+                  "tick",
+                  "restore"
+                ]
+              },
+              "store": {
+                "type": "string",
+                "description": "orch store 绝对路径。"
+              },
+              "id": {
+                "type": "string"
+              },
+              "track": {
+                "type": "string"
+              },
+              "brief": {
+                "type": "string"
+              },
+              "pr": {
+                "type": "integer"
+              },
+              "window": {
+                "type": "integer"
+              },
+              "remaining_slots": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op",
+              "store"
+            ]
           }
         },
         "required": [

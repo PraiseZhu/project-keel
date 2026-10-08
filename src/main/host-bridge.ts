@@ -6,7 +6,7 @@ import { loadGraphStates } from "./graph-snapshot.ts";
 import { NudgeController, drivenNudgeRuns, scanNudgeClock, type NudgeOutcome, type NudgeRun } from "./graph/nudge.ts";
 import type { Host } from "./host.ts";
 import { PSTACK_GRAPHS, type GraphTaskType } from "../shared/graph/pstack.ts";
-import { withRun, type GraphState } from "./store/runs.ts";
+import { withRun } from "./store/runs.ts";
 
 export const NUDGE_CARD_TOOLS = new Set(["keel_run", "keel_status", "keel_wait"]);
 
@@ -185,7 +185,7 @@ export async function scanDrivenRuns(nudge: NudgeController, host: Host): Promis
 }
 
 /** Main-view restore/open: return current runs after the same clock scan. */
-export async function handleMainViewOpen(nudge: NudgeController, host: Host): Promise<GraphState[]> {
+export async function handleMainViewOpen(nudge: NudgeController, host: Host) {
   const runs = await loadGraphStates(host);
   await scanDrivenRuns(nudge, host);
   return runs;

@@ -11,6 +11,7 @@ import { NudgeController } from "./graph/nudge.ts";
 import { CLOCK_PING_METHOD, CLOCK_STATUS_PATH } from "../shared/clock.ts";
 import type { AgentModel, Host } from "./host.ts";
 import { parseKvResponse } from "../shared/kv-response.ts";
+import { toChildEntries } from "./host-fs.ts";
 
 declare const cindy: any;
 
@@ -20,7 +21,10 @@ const host: Host = {
   fetch: (req) => cindy.fetch(req),
   node: (method, params, opts) =>
     cindy.node.request({ method, params, ...(opts?.callId ? { callId: opts.callId, cancelWithCall: true } : {}), timeoutMs: Math.min(120_000, Math.max(1000, opts?.timeoutMs ?? 120_000)) }),
-  fs: (req) => cindy.fs(req),
+  fs: async (req) => {
+    const r = await cindy.fs(req);
+    return req.op === "list" ? toChildEntries(req.path, r) : r;
+  },
   confirm: (req) => cindy.confirm(req),
   progress: (callId) => void cindy.send({ type: "tool-progress", callId }),
   badge: (unread, summary) => void cindy.send({ type: "badge", unread, ...(unread && summary ? { summary } : {}) }),

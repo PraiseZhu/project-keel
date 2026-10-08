@@ -533,3 +533,17 @@ describe("internal tool calls", () => {
     expect(used.filter((n) => !names.has(n))).toEqual([]);
   });
 });
+
+describe("manuals and their generators", () => {
+  it("do not tell the lead to call removed tools", async () => {
+    const { readFileSync, readdirSync, statSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const files: string[] = ["tools/substitutions.json", "tools/forks.json", "tools/sync.mjs", "scripts/build.mjs", "README.md"];
+    const walk = (d: string) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith(".md")) files.push(p); } };
+    walk("plugin/manual");
+    walk("overlays");
+    const removed = /\b(fanout_plan|fanout_ingest|pstack_ledger|pr_board)\b|`roles`/;
+    const hits = files.flatMap((f) => readFileSync(f, "utf8").split("\n").map((l, i) => [f, i + 1, l] as const)).filter(([, , l]) => removed.test(l));
+    expect(hits.map(([f, n]) => `${f}:${n}`)).toEqual([]);
+  });
+});

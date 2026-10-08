@@ -63,7 +63,7 @@ ${lanes}
 
 ## 路径
 
-- 派工路由（routing.json）：${profile.routingPath ? "`" + profile.routingPath + "`" : "未配置（roles / fanout_plan 会 fail-closed）"}
+- 派工路由（routing.json）：${profile.routingPath ? "`" + profile.routingPath + "`" : "未配置（fanout 的 roles / plan 会 fail-closed）"}
 - 计划落点：${profile.plansDir ? "`" + profile.plansDir + "`" : "目标仓 docs/"}
 - 看板默认仓：${(profile.boardRepos ?? []).map((r) => "`" + r + "`").join("、") || "未配置"}
 

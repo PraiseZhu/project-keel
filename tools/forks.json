@@ -67,7 +67,7 @@
     "kind": "port-feature",
     "mode": "prepend",
     "overlay": "overlays/fanout.md",
-    "why": "Reviewers run as Orca workers from routing.json via fanout_plan; findings use the unified P0–P3 scale."
+    "why": "Reviewers run as Orca workers from routing.json via fanout({op:\"plan\"}); findings use the unified P0–P3 scale."
   },
   {
     "path": "skills/arena/SKILL.md",
@@ -95,7 +95,7 @@
     "kind": "policy",
     "mode": "prepend",
     "overlay": "overlays/setup-pstack.md",
-    "why": "Roles come from routing.json via the roles tool; nothing is written to ~/.cursor."
+    "why": "Roles come from routing.json via the fanout tool (op roles); nothing is written to ~/.cursor."
   },
   {
     "path": "skills/reflect/SKILL.md",

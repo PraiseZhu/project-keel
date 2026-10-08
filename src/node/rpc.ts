@@ -11,6 +11,7 @@ import { readNodeReportFile } from "./git/report-file.ts";
 import { audit, createWorktree, gitState, originBaseSha, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
+import { bothStopHookStatuses } from "./hooks-status.ts";
 import { roles } from "./routes/routing.ts";
 
 declare const __KEEL_PROFILE__: KeelProfile | undefined;
@@ -57,6 +58,10 @@ const methods: Record<string, Method> = {
   "worktree/audit": (p) => audit(p.repo_dir),
   "worktree/prune": (p) => prune(p.repo_dir, p.paths ?? []),
   "routes/read": async (p, profile) => roles(profile.routingPath, p.lead_agent ?? null),
+  "hooks/status": (p) => bothStopHookStatuses({
+    ...(typeof p.claude_config === "string" ? { claude_config: p.claude_config } : {}),
+    ...(typeof p.codex_config === "string" ? { codex_config: p.codex_config } : {}),
+  }),
   "gh/commit-status": async (p) => {
     const repo = String(p.repo ?? "");
     const sha = String(p.sha ?? "");

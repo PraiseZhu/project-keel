@@ -29,6 +29,7 @@ import {
   type SettingsIO,
 } from "./manual-editor.ts";
 import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, ROLES, TASK_TYPES, type DirectionGate, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
+import { renderStopHookStatus, type StopHookInstall } from "./hooks-status.ts";
 const input = document.querySelector<HTMLInputElement>("#key")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 
@@ -103,6 +104,32 @@ if (rolesEl && rolesBtn && typeof BroadcastChannel !== "undefined") {
 refresh().catch(() => {
   statusEl.textContent = "无法读取配置状态，请重新打开插件详情。";
 });
+
+const hooksEl = document.querySelector<HTMLElement>("#hooks-status");
+if (hooksEl && typeof BroadcastChannel !== "undefined") {
+  const ch = new BroadcastChannel("keel");
+  ch.addEventListener("message", (ev) => {
+    const m = ev.data as { type?: string; message?: string; result?: { claude_code?: string; codex?: string } };
+    if (m?.type !== "hooks-status") return;
+    if (m.message) {
+      hooksEl.textContent = `无法读取：${m.message}`;
+      return;
+    }
+    const claude = m.result?.claude_code;
+    const codex = m.result?.codex;
+    const ok = (s: unknown): s is StopHookInstall => s === "installed" || s === "not_installed" || s === "unreadable";
+    hooksEl.textContent = ok(claude) && ok(codex) ? renderStopHookStatus({ claude_code: claude, codex }) : "无法读取";
+  });
+  void (async () => {
+    try { await fetch("cindy-ghost://keel/wake"); } catch { /* already awake */ }
+    const reqId = `hooks-${Date.now()}`;
+    for (let i = 0; i < 10; i++) {
+      ch.postMessage({ reqId, op: "hooks-status" });
+      await new Promise((r) => setTimeout(r, 400));
+      if (hooksEl.textContent !== "读取中…") break;
+    }
+  })();
+}
 
 const manualRoot = document.querySelector<HTMLElement>("#manual");
 const manualStatus = document.querySelector<HTMLElement>("#manual-status");

@@ -131,6 +131,9 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
     const agent = (m as { lead_agent?: string }).lead_agent ?? "claude-code";
     const r = await runTool(ctx, "roles", { lead_agent: agent });
     channel.postMessage({ type: "roles", reqId: m.reqId, lead_agent: agent, ...(r.ok ? { result: r.result } : { message: r.message }) });
+  } else if (m.op === "hooks-status") {
+    const r = await host.node("hooks/status", {});
+    channel.postMessage({ type: "hooks-status", reqId: m.reqId, ...(r.ok ? { result: r.result } : { message: r.message }) });
   } else if (m.op === "restore") {
     // Reopened panel: last board snapshot plus the most recent fanouts from the data dir.
     const board = await host.fs({ op: "read", root: "data", path: "board/latest.json" });

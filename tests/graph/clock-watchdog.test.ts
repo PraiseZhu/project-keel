@@ -3,6 +3,7 @@ import type { AgentRunResult, ContinueSessionReq, NudgePorts } from "../../src/m
 import { NudgeController } from "../../src/main/graph/nudge.ts";
 import { CLOCK_WATCHDOG_MS, CLOCK_PING_METHOD } from "../../src/shared/clock.ts";
 import { ClockWatchdog, isNodeCrashedStatus, isNodeClockNotification } from "../../src/main/graph/clock-watchdog.ts";
+import { renderClockStatus } from "../../src/panel/hooks-status.ts";
 
 const t0 = Date.UTC(2026, 9, 8, 12, 0, 0);
 
@@ -110,5 +111,82 @@ describe("clock watchdog", () => {
     await wd.handle(crashedMsg());
     expect(persisted.some((s) => s.state === "restart_failed")).toBe(true);
     expect(logs.some((l) => /HOST_NOT_READY|拉起失败|crashed/.test(l))).toBe(true);
+  });
+
+  it("one crash plus repeated start failures pings at most 3 times then stays restart_failed", async () => {
+    const now = { t: t0 };
+    const pings: number[] = [];
+    const persisted: { state: string; failCount?: number }[] = [];
+    const wd = new ClockWatchdog({
+      now: () => now.t,
+      scan: async () => {},
+      ping: async () => { pings.push(now.t); return { ok: false, message: "PROCESS_START_FAILED" }; },
+      persist: async (s) => { persisted.push(s); },
+    });
+    await wd.handle(crashedMsg());
+    for (let i = 0; i < 5; i++) {
+      now.t += 240_000;
+      await wd.handle(crashedMsg());
+    }
+    expect(pings.length).toBeLessThanOrEqual(3);
+    expect(pings).toHaveLength(3);
+    expect(persisted.at(-1)?.state).toBe("restart_failed");
+    expect((persisted.at(-1)?.failCount ?? 0) >= 3).toBe(true);
+    expect(renderClockStatus(persisted.at(-1))).toBe("常驻时钟：拉起失败，需要手动重新启用插件");
+  });
+
+  it("a healthy tick resets the failure count so a later crash can ping again", async () => {
+    const now = { t: t0 };
+    const pings: number[] = [];
+    const wd = new ClockWatchdog({
+      now: () => now.t,
+      scan: async () => {},
+      ping: async () => { pings.push(now.t); return { ok: false, message: "PROCESS_START_FAILED" }; },
+    });
+    await wd.handle(crashedMsg());
+    now.t += 15_000;
+    await wd.handle(crashedMsg());
+    now.t += 60_000;
+    await wd.handle(crashedMsg());
+    expect(pings).toHaveLength(3);
+    now.t += 1;
+    await wd.handle(tickMsg());
+    await wd.handle(crashedMsg());
+    expect(pings).toHaveLength(4);
+  });
+
+  it("does not stack pings while one is in flight", async () => {
+    const pings: number[] = [];
+    let release: ((r: { ok: boolean }) => void) | undefined;
+    const first = new Promise<{ ok: boolean }>((r) => { release = r; });
+    const wd = new ClockWatchdog({
+      now: () => t0,
+      scan: async () => {},
+      ping: async () => {
+        pings.push(pings.length + 1);
+        if (pings.length === 1) return first;
+        return { ok: true };
+      },
+    });
+    const a = wd.handle(crashedMsg());
+    const b = wd.handle(crashedMsg());
+    const c = wd.handle(crashedMsg());
+    await Promise.resolve();
+    expect(pings).toHaveLength(1);
+    release?.({ ok: false });
+    await Promise.all([a, b, c]);
+    expect(pings).toHaveLength(1);
+  });
+
+  it("restores failCount from clock-status.json so a restart does not retry from zero", async () => {
+    const pings: number[] = [];
+    const wd = new ClockWatchdog({
+      now: () => t0,
+      scan: async () => {},
+      ping: async () => { pings.push(1); return { ok: false }; },
+      initial: { state: "restart_failed", at: t0, failCount: 3, nextAllowedPingAt: t0 },
+    });
+    await wd.handle(crashedMsg());
+    expect(pings).toHaveLength(0);
   });
 });

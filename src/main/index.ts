@@ -6,7 +6,7 @@ import { DEFAULT_THRESHOLDS } from "../shared/types.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
 import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleMainViewOpen, handleTurnEndMessage, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
-import { ClockWatchdog } from "./graph/clock-watchdog.ts";
+import { ClockWatchdog, type ClockStatus } from "./graph/clock-watchdog.ts";
 import { NudgeController } from "./graph/nudge.ts";
 import { CLOCK_PING_METHOD, CLOCK_STATUS_PATH } from "../shared/clock.ts";
 import type { AgentModel, Host } from "./host.ts";
@@ -83,6 +83,17 @@ const clockWatchdog = new ClockWatchdog({
   log: (line) => console.warn(line),
   persist: async (status) => {
     await host.fs({ op: "write", root: "data", path: CLOCK_STATUS_PATH, content: JSON.stringify(status) });
+  },
+  load: async () => {
+    const file = await host.fs({ op: "read", root: "data", path: CLOCK_STATUS_PATH });
+    if (!file.ok || !file.content) return null;
+    try {
+      const parsed = JSON.parse(file.content) as { state?: string; at?: number; failCount?: number; nextAllowedPingAt?: number; error?: string };
+      if (!parsed || typeof parsed.at !== "number") return null;
+      return parsed as ClockStatus;
+    } catch {
+      return null;
+    }
   },
 });
 clockWatchdog.start();

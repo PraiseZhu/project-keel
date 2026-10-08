@@ -6,5 +6,7 @@ export const CLOCK_PING_METHOD = "clock/ping";
 export const CLOCK_WATCHDOG_MISSES = 3;
 export const CLOCK_WATCHDOG_MS = CLOCK_INTERVAL_MS * CLOCK_WATCHDOG_MISSES;
 export const CLOCK_STATUS_PATH = "clock-status.json";
+export const CLOCK_PING_MAX_FAILURES = 3;
+export const CLOCK_PING_BACKOFF_MS = [15_000, 60_000, 240_000] as const;
 
 export type ClockHealth = "unknown" | "running" | "crashed" | "restart_failed";

@@ -30,6 +30,7 @@ import {
 } from "./manual-editor.ts";
 import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, ROLES, TASK_TYPES, type DirectionGate, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
 import { renderClockStatus, renderStopHookStatus, type StopHookInstall } from "./hooks-status.ts";
+import { readReplyMode, REPLY_MODE_LABELS, saveReplyMode, type ReplyMode } from "./reply-setting.ts";
 const input = document.querySelector<HTMLInputElement>("#key")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 
@@ -372,6 +373,30 @@ manualFile?.addEventListener("change", async () => {
   selectedId = parsed.manual.profiles[0]?.id ?? selectedId;
   await doSave(parsed.manual);
 });
+
+const replySelect = document.querySelector<HTMLSelectElement>("#reply-confirm");
+const replyStatus = document.querySelector<HTMLElement>("#reply-status");
+
+void (async () => {
+  if (!replySelect || !replyStatus) return;
+  try {
+    const { mode, error } = readReplyMode(await io.getKv());
+    replySelect.value = mode;
+    replyStatus.textContent = error ?? `当前：${REPLY_MODE_LABELS[mode]}`;
+  } catch {
+    replyStatus.textContent = "读取 /kv 失败，无法显示当前设置。";
+  }
+  replySelect.addEventListener("change", async () => {
+    const mode = replySelect.value as ReplyMode;
+    replyStatus.textContent = "正在保存…";
+    try {
+      const r = await saveReplyMode(io, mode);
+      replyStatus.textContent = r.ok ? `已保存：${REPLY_MODE_LABELS[mode]}` : r.message;
+    } catch (e) {
+      replyStatus.textContent = e instanceof Error ? e.message : "保存失败。";
+    }
+  });
+})();
 
 void (async () => {
   if (!manualRoot) return;

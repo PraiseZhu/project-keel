@@ -6,6 +6,7 @@ import { allowedActions } from "../../shared/lanes.ts";
 import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
+import { loadReplyConfirm } from "../config.ts";
 import { assertNotHandedOff, isCompleteHandoff, readHandoff, reconcileHandoff, writeHandoff, type HandoffRecord } from "../handoff.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
@@ -206,10 +207,12 @@ export async function prReply(ctx: ToolContext, args: Record<string, unknown>) {
   const body = requireString(args, "body");
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
   await assertNotHandedOff(ctx.host, snap.pr.repo, snap.pr.number);
-  const preview = body.length > 180 ? body.slice(0, 180) + "…" : body;
-  const c = await ctx.host.confirm({ body: `在 ${snap.pr.repo}#${snap.pr.number} ${target === "issue" ? "主讨论区" : "评审线程"}发表回复${args.resolve ? "并标记已解决" : ""}：\n${preview}`, confirmText: "发表", cancelText: "先不发" });
-  if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未发表。`);
-  if (!c.confirmed) throw new KeelError("USER_DECLINED", "用户取消了这次回复，未发表。不要换个说法再弹一次。");
+  if ((await loadReplyConfirm(ctx.host)) === "confirm") {
+    const preview = body.length > 180 ? body.slice(0, 180) + "…" : body;
+    const c = await ctx.host.confirm({ body: `在 ${snap.pr.repo}#${snap.pr.number} ${target === "issue" ? "主讨论区" : "评审线程"}发表回复${args.resolve ? "并标记已解决" : ""}：\n${preview}`, confirmText: "发表", cancelText: "先不发" });
+    if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未发表。`);
+    if (!c.confirmed) throw new KeelError("USER_DECLINED", "用户取消了这次回复，未发表。不要换个说法再弹一次。");
+  }
   const r = await node(ctx, "pr/reply", { repo: snap.pr.repo, pr: snap.pr.number, target_id: target, body, resolve: args.resolve === true });
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_reply ${r.url}` });
   return r;

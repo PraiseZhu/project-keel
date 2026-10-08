@@ -19,6 +19,28 @@ export interface RuntimeConfig {
   readonly thresholds: JevThresholds;
 }
 
+/** pr_reply posting mode: "auto" posts directly, "confirm" asks the user per reply. */
+export type ReplyConfirm = "auto" | "confirm";
+export const DEFAULT_REPLY_CONFIRM: ReplyConfirm = "auto";
+
+export function parseReplyConfirm(raw: unknown): ReplyConfirm {
+  if (raw === undefined) return DEFAULT_REPLY_CONFIRM;
+  if (raw === "auto" || raw === "confirm") return raw;
+  throw new KeelError("REPLY_CONFIG_INVALID", `kv.replyConfirm 只能是 "auto" 或 "confirm"，收到 ${JSON.stringify(raw)}。`);
+}
+
+/** Read only kv.replyConfirm so a broken manual elsewhere in /kv cannot block replies. */
+export async function loadReplyConfirm(host: Host): Promise<ReplyConfirm> {
+  let kv: unknown;
+  try {
+    kv = await host.kvGet();
+  } catch (e) {
+    throw new KeelError("KV_READ_FAILED", `读取 /kv 失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+  const o = kv && typeof kv === "object" && !Array.isArray(kv) ? (kv as Record<string, unknown>) : {};
+  return parseReplyConfirm(o.replyConfirm);
+}
+
 export const DEFAULT_LIMITS: RuntimeLimits = {
   concurrentRuns: 4,
   inFlightNodesPerRun: 3,

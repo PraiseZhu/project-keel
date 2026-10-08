@@ -10,6 +10,10 @@
 <p id="hooks-status" role="status">读取中…</p>
 <p id="clock-status" role="status">常驻时钟：未知</p>
 <p class="hint">只读检测 Claude Code 与 Codex 配置里是否已有 KEEL stop-gate。正式安装需授权，本页不改配置。</p>
+<h3>评审回帖</h3>
+<div><select id="reply-confirm"><option value="auto">自动发送</option><option value="confirm">每条确认</option></select></div>
+<p id="reply-status" role="status"></p>
+<p class="hint">pr_reply 回复 PR 评审线程的方式。默认自动发送；选“每条确认”则每次发表前弹框。</p>
 <h3>车道与派工路由</h3>
 <div id="lanes"></div>
 <p class="hint">以上来自本机个人配置（构建时注入，改配置后重新构建安装）。</p>

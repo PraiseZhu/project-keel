@@ -85,7 +85,7 @@ const tools = [
   },
   {
     name: "pr_reply",
-    description: "在 PR 评审线程或主讨论区发表回复（会写 GitHub，对外可见）。每次都先弹确认框让用户亲自确认正文；用户取消返回 USER_DECLINED。交接后的 PR 返回 LANE_HANDED_OFF。",
+    description: "在 PR 评审线程或主讨论区发表回复（会写 GitHub，对外可见）。默认直接发表；设置页选“每条确认”时先弹确认框，用户取消返回 USER_DECLINED。交接后的 PR 返回 LANE_HANDED_OFF。",
     parameters: obj({ ...prRef, target_id: str("评审线程 id（PRRT_ 开头），或 \"issue\" 表示主讨论区。"), body: str("回复正文。"), resolve: bool("回复后标记线程已解决。") }, ["target_id", "body"]),
   },
   {

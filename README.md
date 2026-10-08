@@ -30,7 +30,7 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 | 工作流中的判断点 | `pstack_decide` | 按阈值返回 act / reask / minimal / stop，并写台账 |
 | 留痕与回看 | `pstack_ledger` | 读写运行台账（插件私有数据目录） |
 | 看 PR | `pr_status`、`pr_wait`、`pr_board` | 只读；用本机 `gh` / `git` |
-| 改 PR | `pr_open`、`pr_ready`、`pr_reply` | 写 GitHub；需要授权来源或弹确认框 |
+| 改 PR | `pr_open`、`pr_ready`、`pr_reply` | 写 GitHub；pr_open / pr_ready 需要授权来源，pr_reply 默认直接发表（可在设置页改为每条确认） |
 | 评审线程分诊 | `pr_threads` | 统一分级 P0–P3，并给机器人评论处理建议 |
 | worktree | `worktree` | create / audit / prune（只删干净且已合并的） |
 | 派工角色 | `roles` | 读取本机 Orca 路由配置 |

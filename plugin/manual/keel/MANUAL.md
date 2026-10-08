@@ -21,7 +21,7 @@
 | 工作流中的判断点 | `pstack_decide` | 模板 J1–J12，返回 act / reask / minimal / stop |
 | 留痕与回看 | `pstack_ledger` | decision / step / evidence / gap |
 | 看 PR | `pr_status`、`pr_wait`、`pr_board` | 只读；可合并时只给链接 |
-| 改 PR | `pr_open`、`pr_ready`、`pr_reply` | 写 GitHub；需授权来源或弹确认 |
+| 改 PR | `pr_open`、`pr_ready`、`pr_reply` | 写 GitHub；`pr_open` / `pr_ready` 需授权来源，`pr_reply` 默认直接发 |
 | 评审线程分诊 | `pr_threads` | J4 统一分级 + J5 机器人评论建议 |
 | worktree | `worktree` | create / audit / prune（只删干净且已合并） |
 | 派工角色 | `roles` | 现读 routing.json |
@@ -30,7 +30,7 @@
 ## 用户规则覆盖层（优先于 pstack 上游默认）
 
 1. **统一分级，只修 P0/P1。** P0 紧急严重事故；P1 严重缺陷（可信可达触发路径导致核心流程失效、严重数据错误或安全/隐私越界）；P2 一般缺陷记录不修；P3 改进建议不进修复清单。每个拟修 P0/P1 写清触发条件、错误行为、实际影响与证据；证据不足标“待核实”，不默认降级也不凭猜测升级。
-2. **外发须授权。** 推送、开 PR、转 Ready、回帖都需要用户当次授权：`pr_open` / `pr_ready` 要求 `authorization_source`，`pr_reply` 每次弹确认。
+2. **外发须授权。** 推送、开 PR、转 Ready 需要用户当次授权：`pr_open` / `pr_ready` 要求 `authorization_source`。`pr_reply` 默认直接发表（用户在设置页选“每条确认”时才弹框）；只回分级说明、反证或已修复说明。
 3. **永不合并。** Keel 没有任何合并能力；PR 可合并时报告链接，由用户在 GitHub 合并。
 4. **按车道走。** `personal`（默认）：非 Draft，到 READY 即停；`gated-handoff`：必需检查全绿才转 Ready，Ready 后交给自动化盯梢，作者停手；`draft-gated-handoff`：在前者基础上强制 Draft，并按 base 分支规则文件校验标题与必需检查。交接后推送/回帖/修复类调用返回 `LANE_HANDED_OFF`。
 5. **只改用户点名的仓。** 前序诊断、拆仓建议都不算授权。
@@ -74,7 +74,7 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 1. `pstack_start({ task: "<用户原话>", repo_dir })` → 得到 `run_id` 与 `pstack/skills/poteto-mode/playbooks/bug-fix.md`。
 2. 读 playbook，按步骤复现、写失败测试、修复、证明（J9 证据评分、J12 影响面）。
-3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖（弹确认）。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。
+3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。
 4. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。

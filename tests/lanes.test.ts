@@ -162,9 +162,9 @@ describe("pr_ready / pr_reply lane enforcement", () => {
     expect(r).toMatchObject({ ok: false, errorCode: "LANE_HANDED_OFF" });
     expect(calls).toEqual(["pr/resolve"]);
   });
-  it("pr_reply asks for confirmation and respects a decline", async () => {
+  it("pr_reply in confirm mode asks for confirmation and respects a decline", async () => {
     const calls: string[] = [];
-    const h = fakeHost({ node: nodeFake(true, calls), confirm: false });
+    const h = fakeHost({ node: nodeFake(true, calls), confirm: false, kv: { replyConfirm: "confirm" } });
     const r = await runTool(makeContext(h, "c1", profile), "pr_reply", { repo: "acme/gated-app", pr: 7, target_id: "issue", body: "hi" });
     expect(r).toMatchObject({ ok: false, errorCode: "USER_DECLINED" });
     expect(h.confirms).toHaveLength(1);

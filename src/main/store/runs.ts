@@ -26,7 +26,8 @@ async function load(host: Host, runId: string): Promise<GraphState> {
   const path = graphStatePath(runId);
   const r = await host.fs({ op: "read", root: "data", path });
   if (!r.ok) {
-    if (!r.message || /not found|ENOENT/i.test(r.message)) return {};
+    // Cindy reports a missing data file as "文件不存在:<path>" (no error code), older hosts as "not found".
+    if (!r.message || /not found|ENOENT|文件不存在/i.test(r.message)) return {};
     throw new KeelError("RUN_STATE_READ_FAILED", `读取 graph-state 失败：${r.message}`);
   }
   if (!r.content) return {};

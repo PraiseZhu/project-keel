@@ -54,7 +54,7 @@ export function fakeHost(opts: {
     },
     async fs(req) {
       if (req.op === "write") { files.set(req.path!, req.content ?? ""); return { ok: true }; }
-      if (req.op === "read") return files.has(req.path!) ? { ok: true, content: files.get(req.path!)! } : { ok: false, message: "not found" };
+      if (req.op === "read") return files.has(req.path!) ? { ok: true, content: files.get(req.path!)! } : { ok: false, message: `文件不存在:${req.path}` };
       if (req.op === "delete") { files.delete(req.path!); return { ok: true }; }
       const prefix = (req.path ? req.path + "/" : "");
       const names = new Set<string>();

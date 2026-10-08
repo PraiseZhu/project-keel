@@ -1224,6 +1224,13 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
     waited_seconds: waited(),
   });
 
+  // A pending non-wait action (setup after a restart, a dispatch, a gate) is the lead's next step;
+  // keel_wait must hand it back instead of inventing a "how do I wait" gate.
+  if (st?.next && st.next.kind !== "wait") {
+    const { next } = await step(ctx, runId, { type: "tick" });
+    return { run_id: runId, next, waited_seconds: waited() };
+  }
+
   const interval = pollIntervalMs(countWaitCiRuns(states as unknown as GraphRunState[]));
 
   if (cursor === "open-pr") {

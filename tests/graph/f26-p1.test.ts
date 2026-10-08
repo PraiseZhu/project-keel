@@ -454,3 +454,20 @@ describe("F26-07 / team_id from get_workspace_info at reconcile", () => {
     expect(r.result.next.kind).not.toBe("decide");
   });
 });
+
+describe("keel_wait hands back a pending non-wait next (real run: setup after reinstall)", () => {
+  it("returns the stored setup next instead of a 'how to wait' gate", async () => {
+    const h = fakeHost({ node: () => ({ ok: false, message: "unused" }) });
+    const spec = PSTACK_GRAPHS["bug-fix"];
+    await createRun(h, { run_id: "run-pend", spec_id: spec.id, profile_id: "sol", lead_harness: "codex", task_type: "bug-fix", entry: "implement", goal: "g", worktree: "/repo/.worktrees/x", now: h.now() });
+    const setup = { kind: "setup", call: { tool: "start_team", args: { worker_permission_mode: "bypassPermissions" } }, after: "keel_report phase=setup" };
+    await withRun(h, "run-pend", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.cursor = "implement";
+      s.status = "running";
+      (s as { next?: unknown }).next = setup;
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_wait", { run_id: "run-pend" });
+    expect(r).toMatchObject({ ok: true, result: { next: setup } });
+  });
+});

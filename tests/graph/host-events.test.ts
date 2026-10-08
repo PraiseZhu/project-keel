@@ -6,6 +6,7 @@ import {
   asNudgeRun,
   flushNudgeCardOnToolCall,
   handleCardActionMessage,
+  handleMainViewOpen,
   handleTurnEndMessage,
   isNodeClockNotification,
   presentNudgeCard,
@@ -140,6 +141,22 @@ describe("handbook host events and cards", () => {
     expect(isNodeClockNotification({ type: "event", name: "node-notification", method: "clock.tick" })).toBe(true);
     expect(isNodeClockNotification({ type: "nudge-clock" })).toBe(false);
     expect(isNodeClockNotification({ type: "event", name: "node-notification", method: "progress" })).toBe(false);
+  });
+
+  it("opening the main view scans active runs through the same nudge limits", async () => {
+    const { p } = ports();
+    const host = fakeHost();
+    host.clock.t = t0 + 10 * 60_000;
+    seedRun(host, "run-view", { updated_at: t0, sol_session_id: "s-view" });
+    const c = new NudgeController(p, { now: () => host.clock.t, intervalMs: 60_000 });
+    const runs = await handleMainViewOpen(c, host);
+    expect(runs.some((r) => r.run_id === "run-view")).toBe(true);
+    expect(JSON.parse(host.files.get("runs/run-view/graph-state.json")!).nudge_pending_card).toBe(true);
+    const continues = p.log.continue.length;
+    const cards = p.log.cards.length;
+    await handleMainViewOpen(c, host);
+    expect(p.log.continue.length).toBe(continues);
+    expect(p.log.cards.length).toBe(cards);
   });
 
   it("scanDrivenRuns uses the same nudge limits as the clock", async () => {

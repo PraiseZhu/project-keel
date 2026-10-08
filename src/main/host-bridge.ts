@@ -183,3 +183,10 @@ export async function scanDrivenRuns(nudge: NudgeController, host: Host): Promis
   const mapped = runs.map(asNudgeRun).filter((r): r is HostNudgeRun => r != null);
   return tickNudgeClockFor(nudge, host, mapped);
 }
+
+/** Main-view restore/open: return current runs after the same clock scan. */
+export async function handleMainViewOpen(nudge: NudgeController, host: Host): Promise<Record<string, unknown>[]> {
+  const runs = await loadGraphStates(host);
+  await scanDrivenRuns(nudge, host);
+  return runs;
+}

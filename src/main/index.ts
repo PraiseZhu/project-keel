@@ -5,7 +5,7 @@ import { BUILT_PROFILE, makeContext } from "./context.ts";
 import { DEFAULT_THRESHOLDS } from "../shared/types.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
-import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleTurnEndMessage, isNodeClockNotification, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
+import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleMainViewOpen, handleTurnEndMessage, isNodeClockNotification, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
 import { NudgeController } from "./graph/nudge.ts";
 import type { AgentModel, Host } from "./host.ts";
 
@@ -146,7 +146,7 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
       }
     }
     channel.postMessage({ type: "fanouts", reqId: m.reqId, fanouts: fanouts.reverse() });
-    const runs = await loadGraphStates(host);
+    const runs = await handleMainViewOpen(nudge, host);
     channel.postMessage({ type: "graph", reqId: m.reqId, runs });
   } else if (m.op === "graph") {
     const runs = await loadGraphStates(host);

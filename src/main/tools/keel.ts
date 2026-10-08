@@ -451,9 +451,12 @@ function makeGates(ctx: ToolContext, runId: string, graph: GraphKind, direction_
 }
 
 export function authorFamiliesFromRoutes(state: GraphRunState): string[] {
-  const out: string[] = [];
+  const out: string[] = [...(state.author_families ?? [])];
   for (const n of Object.values(state.nodes)) {
     if (n.planned_params?.writes !== true) continue;
+    for (const fam of n.attempt_families ?? []) {
+      if (fam && !out.includes(fam)) out.push(fam);
+    }
     const model = n.actual_route?.model;
     if (!model) continue;
     const fam = family(model);

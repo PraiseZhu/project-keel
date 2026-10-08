@@ -687,7 +687,11 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
   };
   if (node.actual_route && specNode.writes) {
     const fam = family(node.actual_route.model);
-    if (fam && !state.author_families.includes(fam)) state.author_families.push(fam);
+    if (fam) {
+      const prior = node.attempt_families ?? [];
+      if (!prior.includes(fam)) node.attempt_families = [...prior, fam];
+      if (!state.author_families.includes(fam)) state.author_families.push(fam);
+    }
   }
   node.worker_id = event.worker_id ?? node.worker_id;
   node.worker_session_id = event.worker_session_id ?? node.worker_session_id;

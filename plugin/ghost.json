@@ -190,7 +190,7 @@
             "items": {
               "type": "string"
             },
-            "description": "写域 glob，写入 planned_params / brief。缺省则写节点没有写域。"
+            "description": "写域 glob，写入 planned_params / brief。变更类与 pr 类有写代码节点，必须传，缺则 SCOPE_REQUIRED；investigation 可不传。"
           }
         },
         "required": [
@@ -335,7 +335,7 @@
     },
     {
       "name": "pstack_start",
-      "description": "迁移入口：task 映射为 keel_run 的 goal。必须传 repo_dir，缺则报错。请优先直接用 keel_run({goal, sc, repo_dir, lead})。",
+      "description": "迁移入口：task 映射为 keel_run 的 goal。必须传 repo_dir，缺则报错。请优先直接用 keel_run({goal, sc, repo_dir, lead, scope})。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,

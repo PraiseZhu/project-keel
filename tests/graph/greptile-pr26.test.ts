@@ -49,7 +49,7 @@ describe("Greptile PR26 threads on 93d19dc", () => {
       },
     });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "重构登录功能", repo_dir: "/repo", lead: "codex",
+      goal: "重构登录功能", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     expect(started.ok).toBe(true);
     expect(started.result.next.kind).toBe("decide");
@@ -83,7 +83,7 @@ describe("Greptile PR26 threads on 93d19dc", () => {
       },
     });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "调查登录超时的原理", repo_dir: "/repo", lead: "codex", playbook: "investigation",
+      goal: "调查登录超时的原理", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", playbook: "investigation",
       sc: [{ id: "SC-1", text: "给出根因引用" }],
     });
     expect(started.ok).toBe(true);
@@ -149,7 +149,7 @@ describe("Greptile PR26 threads on 93d19dc", () => {
       },
     });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "pi",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "pi",
     });
     expect(started.ok).toBe(true);
     expect(started.result.next.kind).toBe("decide");

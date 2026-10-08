@@ -178,7 +178,7 @@ describe("P1-3 keel_wait follows CI edges and times out as wait", () => {
       },
     });
     const started: any = await runTool(makeContext(hRed, "c1", profile), "keel_run", {
-      goal: "盯一下 PR", repo_dir: "/repo", lead: "codex", pr: 1, playbook: "pr",
+      goal: "盯一下 PR", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", pr: 1, playbook: "pr",
     });
     expect(started.ok).toBe(true);
     const path = [...hRed.files.keys()].find((k) => k.endsWith("graph-state.json"))!;
@@ -201,7 +201,7 @@ describe("P1-3 keel_wait follows CI edges and times out as wait", () => {
       },
     });
     const s2: any = await runTool(makeContext(hWait, "c1", profile), "keel_run", {
-      goal: "盯一下 PR", repo_dir: "/repo", lead: "codex", pr: 1, playbook: "pr",
+      goal: "盯一下 PR", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", pr: 1, playbook: "pr",
     });
     const p2 = [...hWait.files.keys()].find((k) => k.endsWith("graph-state.json"))!;
     const st2 = JSON.parse(hWait.files.get(p2)!) as GraphRunState;
@@ -227,7 +227,7 @@ describe("P1-4 investigation citation comes from the report", () => {
       },
     });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "调查超时原理", repo_dir: "/repo", lead: "codex", playbook: "investigation",
+      goal: "调查超时原理", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", playbook: "investigation",
     });
     expect(started.ok).toBe(true);
     const path = [...h.files.keys()].find((k) => k.endsWith("graph-state.json"))!;
@@ -265,7 +265,7 @@ describe("P1-5 write scope is not caller-supplied **", () => {
       },
     });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const st0 = JSON.parse(h.files.get([...h.files.keys()].find((k) => k.endsWith("graph-state.json"))!)!) as GraphRunState;
     const runId = st0.run_id;

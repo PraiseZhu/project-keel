@@ -225,6 +225,10 @@ async function materializeRun(
   taskType: GraphTaskType,
 ): Promise<{ next: Next; state: GraphRunState }> {
   const spec = PSTACK_GRAPHS[taskType];
+  // Real run ⑪: a writing run with no scope only failed later, at each writing node's report.
+  if (!pending.scope?.length && spec.nodes.some((n) => n.writes)) {
+    throw new KeelError("SCOPE_REQUIRED", `${taskType} 运行有写代码节点，keel_run 需要 scope（可写文件或 glob 列表，如 ["src/x.js","tests/**"]）。`, { field: "scope" });
+  }
   const cfg = await loadRuntimeConfig(ctx.host);
   let worktree: string | undefined;
   let start_state: { head?: string; status_digest?: string; content_hash?: string } | undefined;

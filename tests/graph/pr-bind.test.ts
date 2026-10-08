@@ -174,7 +174,7 @@ describe("AUDIT-01 explicit PR is not overwritten by branch resolve", () => {
       },
     });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "推进已有功能", repo_dir: "/repo", lead: "codex", playbook: "pr", pr: 12,
+      goal: "推进已有功能", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", playbook: "pr", pr: 12,
     });
     const runId = started.result.run_id as string;
     await withRun(h, runId, (raw) => {

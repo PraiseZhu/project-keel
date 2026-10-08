@@ -18,7 +18,7 @@ describe("G-route at keel_run", () => {
     const h = fakeHost({ fetch: typesafeAnswering(0.2), node: nodeOk });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "重构登录功能",
-      repo_dir: "/repo",
+      repo_dir: "/repo", scope: ["src/**", "tests/**"],
       lead: "codex",
     });
     expect(started.ok).toBe(true);
@@ -43,7 +43,7 @@ describe("G-route at keel_run", () => {
     const h = fakeHost({ fetch: typesafeAnswering(0.2), node: nodeOk });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "修登录报错",
-      repo_dir: "/repo",
+      repo_dir: "/repo", scope: ["src/**", "tests/**"],
       lead: "codex",
     });
     expect(r.ok).toBe(true);
@@ -55,7 +55,7 @@ describe("G-route at keel_run", () => {
     const h = fakeHost({ fetch: typesafeAnswering(0.99, () => "bug-fix"), node: nodeOk });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "重构登录功能",
-      repo_dir: "/repo",
+      repo_dir: "/repo", scope: ["src/**", "tests/**"],
       lead: "codex",
       playbook: "investigation",
     });

@@ -89,10 +89,20 @@ function nodeFake(kind: "change" | "pr" | "investigation" | "occupied") {
 }
 
 describe("keel_run graph types", () => {
-  it("change graphs create a keel-* worktree and start with setup", async () => {
+  it("refuses a writing run without scope before creating a worktree (real run ⑪)", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe("SCOPE_REQUIRED");
+    expect(h.nodeCalls.some((c) => c.method === "worktree/create")).toBe(false);
+  });
+
+  it("change graphs create a keel-* worktree and start with setup", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     expect(r.ok).toBe(true);
     expect(r.result.profile.id).toBe("sol");
@@ -105,7 +115,7 @@ describe("keel_run graph types", () => {
   it("investigation does not create a worktree and records the starting fingerprint", async () => {
     const h = fakeHost({ node: nodeFake("investigation") });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "调查登录超时的原理", repo_dir: "/repo", lead: "codex", playbook: "investigation",
+      goal: "调查登录超时的原理", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", playbook: "investigation",
     });
     expect(r.ok).toBe(true);
     expect(h.nodeCalls.some((c) => c.method === "worktree/create")).toBe(false);
@@ -114,13 +124,13 @@ describe("keel_run graph types", () => {
   it("pr type checks out the existing branch and stops when occupied", async () => {
     const okHost = fakeHost({ node: nodeFake("pr") });
     const ok: any = await runTool(makeContext(okHost, "c1", profile), "keel_run", {
-      goal: "推进已有 PR", repo_dir: "/repo", lead: "codex", pr: 12, playbook: "pr",
+      goal: "推进已有 PR", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", pr: 12, playbook: "pr",
     });
     expect(ok.ok).toBe(true);
     expect(okHost.nodeCalls.some((c) => c.method === "worktree/create" && (c.params as { existing?: boolean }).existing === true)).toBe(true);
     const blocked = fakeHost({ node: nodeFake("occupied") });
     const stop: any = await runTool(makeContext(blocked, "c1", profile), "keel_run", {
-      goal: "推进已有 PR", repo_dir: "/repo", lead: "codex", pr: 12, playbook: "pr",
+      goal: "推进已有 PR", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", pr: 12, playbook: "pr",
     });
     expect(stop.result.next.kind).toBe("stop");
     expect(stop.result.next.reason).toContain("检出");
@@ -131,7 +141,7 @@ describe("pstack_start migration", () => {
   it("maps task to keel_run when repo_dir is present", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const r: any = await runTool(makeContext(h, "c1", profile), "pstack_start", {
-      task: "修登录报错", repo_dir: "/repo", lead: "codex",
+      task: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     expect(r.ok).toBe(true);
     expect(r.result.next.kind).toBe("setup");
@@ -141,7 +151,7 @@ describe("pstack_start migration", () => {
 async function startChange() {
   const h = fakeHost({ node: nodeFake("change") });
   const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-    goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+    goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
   });
   return { h, started };
 }
@@ -182,7 +192,7 @@ describe("report / status / gate", () => {
   it("records investigation start_state in graph-state.json", async () => {
     const h = fakeHost({ node: nodeFake("investigation") });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "调查登录超时的原理", repo_dir: "/repo", lead: "codex", playbook: "investigation",
+      goal: "调查登录超时的原理", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", playbook: "investigation",
     });
     const path = [...h.files.keys()].find((k) => k.endsWith("graph-state.json"));
     expect(path).toBeTruthy();
@@ -200,7 +210,7 @@ describe("report / status / gate", () => {
       },
     });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "调查登录超时的原理", repo_dir: "/repo", lead: "codex", playbook: "investigation",
+      goal: "调查登录超时的原理", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex", playbook: "investigation",
     });
     expect(r).toMatchObject({ ok: false, errorCode: "FINGERPRINT_UNKNOWN" });
     expect([...h.files.keys()].some((k) => k.endsWith("graph-state.json"))).toBe(false);
@@ -320,7 +330,7 @@ describe("reconcile / recover / setup wiring", () => {
   it("keeps getRun and readMessages as-is on reconcile", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const runId = started.result.run_id as string;
     const key = `${runId}:research:1`;
@@ -350,7 +360,7 @@ describe("reconcile / recover / setup wiring", () => {
   });
   async function plantRecover(h: ReturnType<typeof fakeHost>, action: "verify_stopped" | "archive" = "verify_stopped") {
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const runId = started.result.run_id as string;
     const key = `${runId}:implement:1`;
@@ -408,7 +418,7 @@ describe("reconcile / recover / setup wiring", () => {
   it("setup records team_id and lead session", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const runId = started.result.run_id as string;
     const r: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
@@ -424,7 +434,7 @@ describe("reconcile / recover / setup wiring", () => {
   it("setup falls back to get_workspace_info workflow id and rejects a missing team_id", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const runId = started.result.run_id as string;
     const viaWorkflow: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
@@ -437,7 +447,7 @@ describe("reconcile / recover / setup wiring", () => {
     expect(JSON.parse(h.files.get(graphStatePath(runId))!).team.team_id).toBe("wf-7");
     const h2 = fakeHost({ node: nodeFake("change") });
     const s2: any = await runTool(makeContext(h2, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const missing: any = await runTool(makeContext(h2, "c2", profile), "keel_report", {
       run_id: s2.result.run_id,
@@ -450,7 +460,7 @@ describe("reconcile / recover / setup wiring", () => {
   it("setup reads nested get_workspace_info.workflow.workflow_id and treats workflow:null as no team", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const runId = started.result.run_id as string;
     const real = {
@@ -472,7 +482,7 @@ describe("reconcile / recover / setup wiring", () => {
     });
     const h2 = fakeHost({ node: nodeFake("change") });
     const s2: any = await runTool(makeContext(h2, "c1", profile), "keel_run", {
-      goal: "修登录报错", repo_dir: "/repo", lead: "codex",
+      goal: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     const workerSession: any = await runTool(makeContext(h2, "c2", profile), "keel_report", {
       run_id: s2.result.run_id,

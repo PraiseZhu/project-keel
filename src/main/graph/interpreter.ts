@@ -243,7 +243,7 @@ function pickRoute(
 
 function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
   return buildBrief(
-    { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation" },
+    { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation", plugin_task: node.kind === "plugin_task" },
     { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.gh_repo ?? state.repo, pr: state.pr, taskType: state.task_type },
     { attempt, dispatch_key: dispatchKeyValue, ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}) },
   );

@@ -8,6 +8,8 @@ export interface BriefNode {
   readonly writes?: boolean;
   readonly timebox_min?: number;
   readonly inline_report?: boolean;
+  /** Cindy plugin task (Researcher): KEEL reads its last assistant message, so it cannot write .keel/ or call keel_report. */
+  readonly plugin_task?: boolean;
 }
 
 export interface BriefRun {
@@ -53,7 +55,9 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
   const acceptance = (run.sc ?? []).map((s) => `${s.id}: ${s.text}`).join("\n             ") || "（无单独 SC，以 GOAL 为准）";
   const verify = [...(ctx.verify ?? []), ...(run.sc ?? []).map((s) => s.verify).filter((x): x is string => Boolean(x))].join("；") || "按 GOAL 自行给出可复现命令";
   const forbidden = [...BRIEF_FORBIDDEN, ...(ctx.extraForbidden ?? [])].join("；");
-  const report = investigation
+  const report = node.plugin_task
+    ? `完成后，你的最后一条回复必须只包含一个 \`\`\`json fence 的 NodeReport：dispatch_key（必须是 ${ctx.dispatch_key}）、status（只能是 done / partial / blocked / failed，做完且验收通过写 done）、summary、citation?、sc_evidence?（{SC id: true/false}）、ran?（[{cmd, exit_code, tests_passed}]）、files_changed?。这条回复之后不要再发任何消息。不要写 .keel/ 文件，也不要调用 keel_report。`
+    : investigation
     ? "用 keel_report({phase:\"final\", inline_report}) 内联交回完整报告。JSON 必须含本节点 dispatch_key、status（done|partial|blocked|failed）、summary。不要写 .keel/。给主控的回复不超过 20 行摘要。"
     : `把完整报告写到 \`${reportPath(node, run, ctx)}\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status（只能是 done / partial / blocked / failed，做完且验收通过写 done）、summary、branch?、head_sha?、files_changed、functions_touched、changed_lines、ran、findings?、verdict?（只能是 PASS / PASS+NOTES / FAIL）、next_suggestions?），后面接正文。functions_touched 写实际改到的函数名（缺了编排会按已跨函数处理）；changed_lines 写新增+删除行数（缺了不能跳过最终复核）。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。`;
   const standing = (run.standing ?? "").trim() || "（无）";

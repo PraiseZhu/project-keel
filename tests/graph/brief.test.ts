@@ -50,3 +50,16 @@ describe("buildBrief", () => {
     expect(text).toMatchSnapshot();
   });
 });
+
+describe("plugin task brief", () => {
+  it("asks for the NodeReport as the last reply, not a .keel/ file", () => {
+    const text = buildBrief(
+      { id: "research", role: "researcher", plugin_task: true },
+      { run_id: "run-1", goal: "g", worktree: "/repo/.worktrees/keel-run-1", taskType: "bug-fix" },
+      { attempt: 1, dispatch_key: "run-1:research:1" },
+    );
+    expect(text).toContain("最后一条回复必须只包含");
+    expect(text).toContain("dispatch_key（必须是 run-1:research:1）");
+    expect(text).not.toContain("/.keel/research-1.md");
+  });
+});

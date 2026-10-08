@@ -5,8 +5,10 @@ import { BUILT_PROFILE, makeContext } from "./context.ts";
 import { DEFAULT_THRESHOLDS } from "../shared/types.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
-import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleMainViewOpen, handleTurnEndMessage, isNodeClockNotification, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
+import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleMainViewOpen, handleTurnEndMessage, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
+import { ClockWatchdog } from "./graph/clock-watchdog.ts";
 import { NudgeController } from "./graph/nudge.ts";
+import { CLOCK_PING_METHOD, CLOCK_STATUS_PATH } from "../shared/clock.ts";
 import type { AgentModel, Host } from "./host.ts";
 
 declare const cindy: any;
@@ -74,6 +76,17 @@ const nudge = new NudgeController(
   { now: () => Date.now(), cardOnly: typeof cindy.agent?.run !== "function" },
 );
 
+const clockWatchdog = new ClockWatchdog({
+  now: () => host.now(),
+  scan: () => scanDrivenRuns(nudge, host),
+  ping: () => host.node(CLOCK_PING_METHOD, {}),
+  log: (line) => console.warn(line),
+  persist: async (status) => {
+    await host.fs({ op: "write", root: "data", path: CLOCK_STATUS_PATH, content: JSON.stringify(status) });
+  },
+});
+clockWatchdog.start();
+
 cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "tool-call") {
     const args = msg.args ?? {};
@@ -103,9 +116,9 @@ cindy.onHostMessage(async (msg: any) => {
   const mapped = (await loadGraphStates(host)).map(asNudgeRun).filter((r): r is HostNudgeRun => r != null);
   const turn = await handleTurnEndMessage(nudge, host, mapped, msg);
   if (turn.handled) return;
-  if (isNodeClockNotification(msg) || msg.type === "nudge-clock") {
-    await scanDrivenRuns(nudge, host);
-  }
+  const clock = await clockWatchdog.handle(msg);
+  if (clock.handled) return;
+  if (msg.type === "nudge-clock") await scanDrivenRuns(nudge, host);
 });
 
 channel?.addEventListener("message", (ev: MessageEvent) => {
@@ -134,6 +147,9 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
   } else if (m.op === "hooks-status") {
     const r = await host.node("hooks/status", {});
     channel.postMessage({ type: "hooks-status", reqId: m.reqId, ...(r.ok ? { result: r.result } : { message: r.message }) });
+  } else if (m.op === "clock-status") {
+    const file = await host.fs({ op: "read", root: "data", path: CLOCK_STATUS_PATH });
+    channel.postMessage({ type: "clock-status", reqId: m.reqId, ...(file.ok && file.content ? { result: JSON.parse(file.content) } : { result: { state: "unknown" } }) });
   } else if (m.op === "restore") {
     // Reopened panel: last board snapshot plus the most recent fanouts from the data dir.
     const board = await host.fs({ op: "read", root: "data", path: "board/latest.json" });

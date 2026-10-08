@@ -29,7 +29,7 @@ import {
   type SettingsIO,
 } from "./manual-editor.ts";
 import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, ROLES, TASK_TYPES, type DirectionGate, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
-import { renderStopHookStatus, type StopHookInstall } from "./hooks-status.ts";
+import { renderClockStatus, renderStopHookStatus, type StopHookInstall } from "./hooks-status.ts";
 const input = document.querySelector<HTMLInputElement>("#key")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 
@@ -106,10 +106,15 @@ refresh().catch(() => {
 });
 
 const hooksEl = document.querySelector<HTMLElement>("#hooks-status");
+const clockEl = document.querySelector<HTMLElement>("#clock-status");
 if (hooksEl && typeof BroadcastChannel !== "undefined") {
   const ch = new BroadcastChannel("keel");
   ch.addEventListener("message", (ev) => {
     const m = ev.data as { type?: string; message?: string; result?: { claude_code?: string; codex?: string } };
+    if (m?.type === "clock-status") {
+      if (clockEl) clockEl.textContent = renderClockStatus(m.result as { state?: string; error?: string } | undefined);
+      return;
+    }
     if (m?.type !== "hooks-status") return;
     if (m.message) {
       hooksEl.textContent = `无法读取：${m.message}`;
@@ -125,6 +130,7 @@ if (hooksEl && typeof BroadcastChannel !== "undefined") {
     const reqId = `hooks-${Date.now()}`;
     for (let i = 0; i < 10; i++) {
       ch.postMessage({ reqId, op: "hooks-status" });
+      ch.postMessage({ reqId: `clock-${reqId}`, op: "clock-status" });
       await new Promise((r) => setTimeout(r, 400));
       if (hooksEl.textContent !== "读取中…") break;
     }

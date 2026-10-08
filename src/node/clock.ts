@@ -1,8 +1,8 @@
 // Resident Node clock: JSON-RPC notifications the host forwards as node-notification.
 // Spike P0-5: 15s interval, no request id. Does not drive nudge itself.
 
-export const CLOCK_INTERVAL_MS = 15_000;
-export const CLOCK_METHOD = "clock.tick";
+import { CLOCK_INTERVAL_MS, CLOCK_METHOD } from "../shared/clock.ts";
+export { CLOCK_INTERVAL_MS, CLOCK_METHOD };
 
 export type ClockNotification = {
   jsonrpc: "2.0";

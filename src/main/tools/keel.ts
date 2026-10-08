@@ -831,6 +831,10 @@ async function drainPluginOps(ctx: ToolContext, runId: string, out: AdvanceResul
   return current;
 }
 
+export async function driveGraphEvent(ctx: ToolContext, runId: string, event: AdvanceEvent): Promise<{ next: Next; state: GraphRunState }> {
+  return step(ctx, runId, event);
+}
+
 async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promise<{ next: Next; state: GraphRunState }> {
   const cfg = await loadRuntimeConfig(ctx.host);
   const states = await loadGraphStates(ctx.host);

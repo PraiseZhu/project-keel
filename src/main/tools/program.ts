@@ -3,7 +3,8 @@
 
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
-import { createRun, advance } from "../graph/interpreter.ts";
+import { createRun } from "../graph/interpreter.ts";
+import { driveGraphEvent } from "./keel.ts";
 import { readPrFacts } from "../graph/pr-facts.ts";
 import { DEFAULT_CONCURRENT_RUNS, Program, type OrchClient, type RunReport } from "../graph/program.ts";
 import type { GraphRunState, Next } from "../graph/state.ts";
@@ -98,7 +99,7 @@ function makeProgram(ctx: ToolContext, args: Record<string, unknown>, store: str
         task_type: "pr",
         entry: "wait-ci",
         goal: unit.brief || goal || (pr ? `推进 PR ${pr}` : unit.id),
-        ...(repoDir ? { invocation_dir: repoDir } : {}),
+        ...(repoDir ? { invocation_dir: repoDir, worktree: repoDir } : {}),
         ...(git.root ? { repo_root: git.root } : {}),
         ...(git.gh_repo ? { gh_repo: git.gh_repo } : {}),
         ...(pr ? { pr, pr_explicit: true } : {}),
@@ -116,7 +117,7 @@ function makeProgram(ctx: ToolContext, args: Record<string, unknown>, store: str
       let state = st;
       const cursor = st.cursor ?? "";
       if (CI_WAIT_NODES.has(cursor)) {
-        const stepped = await advance(ctx.host, run_id, { type: "tick" });
+        const stepped = await driveGraphEvent(ctx, run_id, { type: "tick" });
         next = stepped.next;
         state = stepped.state;
         if (CI_WAIT_NODES.has(state.cursor ?? "") && state.pr != null) {
@@ -127,7 +128,7 @@ function makeProgram(ctx: ToolContext, args: Record<string, unknown>, store: str
           });
           const on = waitOnFromFacts(facts.nextAction);
           if (on !== "wait") {
-            const moved = await advance(ctx.host, run_id, { type: "wait_done", on });
+            const moved = await driveGraphEvent(ctx, run_id, { type: "wait_done", on });
             next = moved.next;
             state = moved.state;
           }
@@ -135,10 +136,10 @@ function makeProgram(ctx: ToolContext, args: Record<string, unknown>, store: str
         return reportOf(unit, run_id, next, state);
       }
       if (TOOL_PASS_NODES.has(cursor) || cursor === "done") {
-        const moved = await advance(ctx.host, run_id, cursor === "done" ? { type: "tick" } : { type: "wait_done", on: "ok" });
+        const moved = await driveGraphEvent(ctx, run_id, cursor === "done" ? { type: "tick" } : { type: "wait_done", on: "ok" });
         return reportOf(unit, run_id, moved.next, moved.state);
       }
-      const moved = await advance(ctx.host, run_id, { type: "tick" });
+      const moved = await driveGraphEvent(ctx, run_id, { type: "tick" });
       return reportOf(unit, run_id, moved.next, moved.state);
     },
   });

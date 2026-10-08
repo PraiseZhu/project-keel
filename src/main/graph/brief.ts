@@ -55,7 +55,7 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
   const forbidden = [...BRIEF_FORBIDDEN, ...(ctx.extraForbidden ?? [])].join("；");
   const report = investigation
     ? "用 keel_report({phase:\"final\", inline_report}) 内联交回完整报告。JSON 必须含本节点 dispatch_key、status（done|partial|blocked|failed）、summary。不要写 .keel/。给主控的回复不超过 20 行摘要。"
-    : `把完整报告写到 \`${reportPath(node, run, ctx)}\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status、summary、branch?、head_sha?、files_changed、ran、findings?、verdict?、next_suggestions?），后面接正文。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。`;
+    : `把完整报告写到 \`${reportPath(node, run, ctx)}\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status、summary、branch?、head_sha?、files_changed、functions_touched、changed_lines、ran、findings?、verdict?、next_suggestions?），后面接正文。functions_touched 写实际改到的函数名（缺了编排会按已跨函数处理）；changed_lines 写新增+删除行数（缺了不能跳过最终复核）。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。`;
   const standing = (run.standing ?? "").trim() || "（无）";
   const ctxLines = [
     `run ${run.run_id} / 节点 ${node.id} / attempt ${ctx.attempt} / dispatch_key ${ctx.dispatch_key}`,

@@ -46,6 +46,8 @@ export interface NodeReportSnap {
   ran?: readonly { cmd: string; exit_code: number; tests_passed?: number }[];
   head_sha?: string;
   files_changed?: readonly string[];
+  functions_touched?: readonly string[];
+  changed_lines?: number;
   findings?: readonly string[];
   citation?: string;
   sc_evidence?: Readonly<Record<string, boolean>>;

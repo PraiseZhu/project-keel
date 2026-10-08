@@ -7,7 +7,7 @@ import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief } from "./brief.ts";
-import { crossesFunctionBoundary, failureFingerprint, shouldSkipFinalReview } from "./astra-triggers.ts";
+import { crossesFunctionBoundaryOrUnknown, failureFingerprint, shouldSkipFinalReview } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
 import type { AgentModel, ModelManual, Role, Route } from "../../shared/manual/schema.ts";
 import {
@@ -950,12 +950,12 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   if (event.verdict) state.verdict = event.verdict;
   const status = event.inline_report?.status ?? event.report?.status ?? "done";
   const files = event.report?.files_changed ?? [];
-  if (files.length) {
-    if (!state.facts) state.facts = {};
-    if (crossesFunctionBoundary(files)) state.facts.crosses_function_boundary = true;
-    if (files.some((f) => !shouldSkipFinalReview([f]))) state.facts.skip_final_review = false;
-    else if (shouldSkipFinalReview(files)) state.facts.skip_final_review = true;
-  }
+  if (!state.facts) state.facts = {};
+  state.facts.crosses_function_boundary = crossesFunctionBoundaryOrUnknown({
+    functions_touched: event.report?.functions_touched,
+    files_changed: files,
+  });
+  state.facts.skip_final_review = shouldSkipFinalReview(files, event.report?.changed_lines);
   if (id === ASTRA_CONSULT_ID && state.pending_astra_gate && (status === "done" || status === "partial")) {
     const options = state.pending_astra_gate.options;
     const raw = `${event.report?.summary ?? ""} ${event.report?.findings?.join(" ") ?? ""}`;

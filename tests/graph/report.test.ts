@@ -32,6 +32,18 @@ describe("parseNodeReport", () => {
     expect(parseNodeReport(JSON.stringify(payload), "run:node:1").summary).toBe("ok");
   });
 
+  it("keeps functions_touched and changed_lines when present", () => {
+    const r = parseNodeReport(JSON.stringify({
+      ...payload,
+      functions_touched: ["login", "charge"],
+      changed_lines: 12,
+    }), "run:node:1");
+    expect(r.functions_touched).toEqual(["login", "charge"]);
+    expect(r.changed_lines).toBe(12);
+    expect(parseNodeReport(JSON.stringify(payload), "run:node:1").functions_touched).toBeUndefined();
+    expect(parseNodeReport(JSON.stringify(payload), "run:node:1").changed_lines).toBeUndefined();
+  });
+
   it("rejects a mismatched dispatch_key and malformed reports", () => {
     expect(() => parseNodeReport(JSON.stringify(payload), "other")).toThrow(expect.objectContaining({ code: "DISPATCH_KEY_UNKNOWN" }));
     expect(() => parseNodeReport("no json here", "run:node:1")).toThrow(expect.objectContaining({ code: "REPORT_INVALID" }));

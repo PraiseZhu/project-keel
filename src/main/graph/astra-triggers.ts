@@ -18,21 +18,35 @@ export function isTestOrDoc(file: string): boolean {
   return TEST_OR_DOC.test(f) || DOC_EXT.test(f) || TEST_FILE.test(f);
 }
 
-/** Two or more non-test/doc modules means the change crosses a function boundary. */
+/** Two or more distinct reported functions means the change crosses a function boundary. */
 export const CROSS_MODULE_THRESHOLD = 2;
 
-export function crossesFunctionBoundary(files: readonly string[]): boolean {
-  const mods = new Set(files.filter((f) => !isTestOrDoc(f)).map(moduleOf).filter(Boolean));
-  return mods.size >= CROSS_MODULE_THRESHOLD;
+export type BoundaryFact = boolean | "unknown";
+
+export function crossesFunctionBoundary(input: {
+  functions_touched?: readonly string[] | null;
+  files_changed?: readonly string[];
+}): BoundaryFact {
+  const names = (input.functions_touched ?? []).map((s) => s.trim()).filter(Boolean);
+  if (!names.length) return "unknown";
+  return new Set(names).size >= CROSS_MODULE_THRESHOLD;
 }
 
-/** ≤30 lines and only tests/docs: skip astra-final-review (plan Step 7). */
+/** Conservative: missing functions_touched is treated as crossing, so Astra still runs. */
+export function crossesFunctionBoundaryOrUnknown(input: {
+  functions_touched?: readonly string[] | null;
+  files_changed?: readonly string[];
+}): boolean {
+  return crossesFunctionBoundary(input) !== false;
+}
+
+/** ≤30 lines and only tests/docs: skip astra-final-review (plan Step 7). Unknown line count must not skip. */
 export const FINAL_REVIEW_LINE_SKIP = 30;
 
 export function shouldSkipFinalReview(files: readonly string[], changedLines?: number): boolean {
   if (!files.length) return false;
   if (!files.every(isTestOrDoc)) return false;
-  if (changedLines === undefined) return true;
+  if (changedLines === undefined || !Number.isFinite(changedLines)) return false;
   return changedLines <= FINAL_REVIEW_LINE_SKIP;
 }
 

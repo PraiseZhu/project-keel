@@ -30,6 +30,8 @@ describe("buildBrief", () => {
     expect(text).toContain("禁止改配置");
     expect(text).toContain("/repo/.worktrees/keel-run-1/.keel/implement-2.md");
     expect(text).toContain("≤20 行摘要");
+    expect(text).toContain("functions_touched");
+    expect(text).toContain("changed_lines");
     expect(text).toContain("dispatch_key run-1:implement:2");
     expect(text).toMatchSnapshot();
   });

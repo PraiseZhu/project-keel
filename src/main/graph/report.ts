@@ -13,6 +13,10 @@ export interface NodeReport {
   readonly branch?: string;
   readonly head_sha?: string;
   readonly files_changed: readonly string[];
+  /** Distinct functions the worker actually touched. Missing is unknown, not "did not cross". */
+  readonly functions_touched?: readonly string[];
+  /** Added+removed lines. Missing means final-review skip is not allowed. */
+  readonly changed_lines?: number;
   /** tests_passed: test cases the runner's own summary reports as run and passed (unit evidence needs ≥1). */
   readonly ran: readonly { readonly cmd: string; readonly exit_code: number; readonly tests_passed?: number }[];
   readonly findings?: readonly string[];
@@ -93,6 +97,8 @@ export function parseNodeReport(text: string, expectedDispatchKey: string): Node
     summary: o.summary,
     files_changed: o.files_changed as string[],
     ran,
+    ...(Array.isArray(o.functions_touched) ? { functions_touched: o.functions_touched.filter((x): x is string => typeof x === "string" && x.trim() !== "") } : {}),
+    ...(Number.isInteger(o.changed_lines) && (o.changed_lines as number) >= 0 ? { changed_lines: o.changed_lines as number } : {}),
     ...(str(o.branch) ? { branch: str(o.branch) } : {}),
     ...(str(o.head_sha) ? { head_sha: str(o.head_sha) } : {}),
     ...(Array.isArray(o.findings) ? { findings: o.findings.filter((x): x is string => typeof x === "string") } : {}),

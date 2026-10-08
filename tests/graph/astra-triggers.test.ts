@@ -2,22 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   CROSS_MODULE_THRESHOLD,
   crossesFunctionBoundary,
+  crossesFunctionBoundaryOrUnknown,
   failureFingerprint,
   moduleOf,
   shouldSkipFinalReview,
 } from "../../src/main/graph/astra-triggers.ts";
 
 describe("crossesFunctionBoundary", () => {
-  it("is false for a single module, even with several files", () => {
+  it("is true when two or more functions_touched are present", () => {
     expect(CROSS_MODULE_THRESHOLD).toBe(2);
-    expect(crossesFunctionBoundary(["src/auth/login.ts", "src/auth/session.ts"])).toBe(false);
+    expect(crossesFunctionBoundary({ functions_touched: ["login", "charge"] })).toBe(true);
     expect(moduleOf("src/auth/login.ts")).toBe("src/auth");
   });
-  it("is true when two non-test modules change", () => {
-    expect(crossesFunctionBoundary(["src/auth/login.ts", "src/billing/charge.ts"])).toBe(true);
+  it("is false for a single reported function", () => {
+    expect(crossesFunctionBoundary({ functions_touched: ["login"] })).toBe(false);
+    expect(crossesFunctionBoundary({ functions_touched: ["login", "login"] })).toBe(false);
   });
-  it("ignores tests and docs when counting modules", () => {
-    expect(crossesFunctionBoundary(["src/auth/login.ts", "tests/auth.test.ts", "docs/auth.md"])).toBe(false);
+  it("is unknown when functions_touched is missing, not false", () => {
+    expect(crossesFunctionBoundary({ files_changed: ["src/auth/login.ts", "src/billing/charge.ts"] })).toBe("unknown");
+    expect(crossesFunctionBoundary({})).toBe("unknown");
+    expect(crossesFunctionBoundary({ functions_touched: [] })).toBe("unknown");
+    expect(crossesFunctionBoundaryOrUnknown({})).toBe(true);
+    expect(crossesFunctionBoundaryOrUnknown({ functions_touched: ["login"] })).toBe(false);
   });
 });
 
@@ -32,9 +38,10 @@ describe("failureFingerprint", () => {
 });
 
 describe("shouldSkipFinalReview", () => {
-  it("skips when every file is test/docs and lines ≤30 or unknown", () => {
+  it("skips only when every file is test/docs and lines are known and ≤30", () => {
     expect(shouldSkipFinalReview(["tests/a.test.ts", "docs/n.md"], 12)).toBe(true);
-    expect(shouldSkipFinalReview(["tests/a.test.ts"])).toBe(true);
+    expect(shouldSkipFinalReview(["tests/a.test.ts"])).toBe(false);
+    expect(shouldSkipFinalReview(["tests/a.test.ts"], undefined)).toBe(false);
     expect(shouldSkipFinalReview(["src/a.ts"], 4)).toBe(false);
     expect(shouldSkipFinalReview(["tests/a.test.ts"], 80)).toBe(false);
   });

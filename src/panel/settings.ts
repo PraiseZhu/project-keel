@@ -79,7 +79,7 @@ const lanesEl = document.querySelector<HTMLElement>("#lanes");
 if (lanesEl) {
   const rows = (prof.lanes ?? []).map((l) => `<tr><td><code>${esc(l.repo)}</code></td><td>${esc(l.preset)}</td><td>${l.preflight ? "有" : "—"}</td><td>${l.verifyCheck ? `<code>${esc(l.verifyCheck)}</code>` : "—"}</td></tr>`).join("") || '<tr><td colspan="4">未配置，所有仓按 personal 车道处理</td></tr>';
   lanesEl.innerHTML = `<table><thead><tr><th>仓库</th><th>车道</th><th>推送前预检</th><th>验证状态</th></tr></thead><tbody>${rows}</tbody></table>
-<p>派工路由：${prof.routingPath ? "已配置 routing.json" : "未配置（roles / fanout_plan 会 fail-closed）"}；计划目录：${prof.plansDir ? "已配置" : "目标仓 docs/"}；看板默认仓：${(prof.boardRepos ?? []).length} 个。</p>`;
+<p>派工路由：${prof.routingPath ? "已配置 routing.json" : "未配置（fanout 的 roles / plan 会 fail-closed）"}；计划目录：${prof.plansDir ? "已配置" : "目标仓 docs/"}；看板默认仓：${(prof.boardRepos ?? []).length} 个。</p>`;
 }
 
 // Live roles: ask main.js (same BroadcastChannel as the panel) to re-read routing.json.

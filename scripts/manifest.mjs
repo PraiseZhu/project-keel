@@ -50,18 +50,13 @@ const tools = [
   {"name":"pstack_start","description":"迁移入口：task 映射为 keel_run 的 goal。必须传 repo_dir，缺则报错。请优先直接用 keel_run({goal, sc, repo_dir, lead})。","parameters":{"type":"object","additionalProperties":false,"properties":{"task":{"type":"string","description":"用户的任务原话。"},"repo_dir":{"type":"string","description":"目标仓库目录（必填）。"},"repo":{"type":"string","description":"可选：owner/name，用于判断车道。"},"playbook":{"type":"string","description":"用户点名的 playbook，跳过 J1。"},"context":{"type":"string","description":"可选：补充上下文。"}},"required":["task","repo_dir"]}},
   {
     name: "pstack_decide",
-    description: "在 pstack 固定判断点调用 Jev（模板 J1–J12），按阈值策略返回 act/reask/minimal/stop 并写台账。J7 用 0.8 执行线，其余 0.75。通用问答请用 jev。联网 api.typesafe.ai；写插件私有数据目录。",
-    parameters: obj({ template: { type: "string", enum: ["J1", "J2", "J3", "J4", "J5", "J6", "J7", "J8", "J9", "J10", "J11", "J12"] }, state: { type: ["object", "string"], description: "判断所需的事实（只给相关内容）。" }, options: { type: "array", items: { type: "string" }, description: "J3/J8 的候选或允许动作。" }, run_id: str("可选：台账 run_id。"), reasked: bool("已补充上下文重问过一次时传 true。") }, ["template", "state"]),
-  },
-  {
-    name: "pstack_ledger",
-    description: "读写 pstack 运行台账（插件私有数据目录）。log 追加一行 decision/step/evidence/gap；read 读取某次或最近的运行。不联网、不碰仓库。",
-    parameters: obj({ op: { type: "string", enum: ["log", "read"] }, run_id: str("run_id；read 时可省略取最近。"), kind: { type: "string", enum: ["decision", "step", "evidence", "gap"] }, summary: str("一句话摘要。"), evidence: { type: ["object", "string", "array"], description: "证据（命令、SHA、链接）。" }, limit: int("read 返回行数上限。") }, ["op"]),
+    description: "pstack 判断与台账。op=decide（缺省）：在固定判断点调用 Jev（模板 J1–J12），按阈值策略返回 act/reask/minimal/stop 并写台账，J7 用 0.8 执行线，其余 0.75，通用问答请用 jev，联网 api.typesafe.ai。op=log：追加一行 decision/step/evidence/gap；op=read：读取某次或最近的运行。写插件私有数据目录。",
+    parameters: obj({ op: { type: "string", enum: ["decide", "log", "read"], description: "缺省 decide。" }, template: { type: "string", enum: ["J1", "J2", "J3", "J4", "J5", "J6", "J7", "J8", "J9", "J10", "J11", "J12"], description: "decide 必填。" }, state: { type: ["object", "string"], description: "decide 必填：判断所需的事实（只给相关内容）。" }, options: { type: "array", items: { type: "string" }, description: "J3/J8 的候选或允许动作。" }, run_id: str("台账 run_id；read 时可省略取最近。"), reasked: bool("已补充上下文重问过一次时传 true。"), kind: { type: "string", enum: ["decision", "step", "evidence", "gap"], description: "log 必填。" }, summary: str("log：一句话摘要。"), evidence: { type: ["object", "string", "array"], description: "log：证据（命令、SHA、链接）。" }, limit: int("read 返回行数上限。") }),
   },
   {
     name: "pr_status",
-    description: "读取 PR 状态（只读，调用本机 gh/git 访问 GitHub）：车道、上游 watch-pr 判定（冲突→评审线程→CI→合并闸→等待→可合并）、Ready 门禁、允许动作与下一步（Jev J8/J6 只在允许动作内排序）。可合并时只返回链接，插件不提供合并。",
-    parameters: obj(prRef),
+    description: "读取 PR 状态（只读，调用本机 gh/git 访问 GitHub）：车道、上游 watch-pr 判定（冲突→评审线程→CI→合并闸→等待→可合并）、Ready 门禁、允许动作与下一步（Jev J8/J6 只在允许动作内排序）。可合并时只返回链接，插件不提供合并。board:true 时改为刷新“我名下 open PR”看板：每个 PR 的车道、判定、下一步，更新面板与未读角标。",
+    parameters: obj({ ...prRef, board: bool("刷新我名下 open PR 看板，而不是读单个 PR。"), repos: { type: "array", items: { type: "string" }, description: "board：限定 owner/name 列表；缺省用本机配置。" } }),
   },
   {
     name: "pr_wait",
@@ -89,29 +84,14 @@ const tools = [
     parameters: obj({ ...prRef, target_id: str("评审线程 id（PRRT_ 开头），或 \"issue\" 表示主讨论区。"), body: str("回复正文。"), resolve: bool("回复后标记线程已解决。") }, ["target_id", "body"]),
   },
   {
-    name: "pr_board",
-    description: "刷新“我名下 open PR”看板（只读，本机 gh）：每个 PR 的车道、判定、下一步；更新面板与未读角标，写插件私有数据目录。可合并的 PR 只显示“可合并”和链接。",
-    parameters: obj({ repos: { type: "array", items: { type: "string" }, description: "限定 owner/name 列表；缺省用本机配置。" } }),
-  },
-  {
     name: "worktree",
     description: "管理 <仓>/.worktrees/ 下的 git worktree（本机 git）。create 新建；audit 只读分类（hold-wip/hold-open-pr/review/safe）；prune 只删审计为 safe（干净且已合并）的行，删除前弹确认列出路径，不用 --force。",
     parameters: obj({ op: { type: "string", enum: ["create", "audit", "prune"] }, repo_dir: str("仓库目录。"), name: str("create：worktree 名。"), base_ref: str("create：起点，缺省 origin/默认分支。"), paths: { type: "array", items: { type: "string" }, description: "prune：要删的路径；缺省为全部 safe 行。" } }, ["op", "repo_dir"]),
   },
   {
-    name: "roles",
-    description: "现读本机 Orca routing.json，返回 developer/reviewer/tester/merger 对应的 {agent, model, effort, provider_id, fallbacks} 与来源档位。读不到或格式错返回 ROUTING_UNREADABLE（fail-closed，不自行换模型）。只读本地文件。",
-    parameters: obj({ op: { type: "string", enum: ["show", "refresh"] }, lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent（必填）。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。" } }, ["lead_agent"]),
-  },
-  {
-    name: "fanout_plan",
-    description: "规划多模型并行（arena/interrogate/swarm）：现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/。不派发 Worker——派发由主 Agent 执行：第一阶段 create_workers.workers 先派，裁判/验证车道在 after_stage1 里，等第一阶段全部回报后再派。只读审查车道就在传入的 repo_dir（可以是功能 worktree）里，审查范围固定为 base_sha...当前 HEAD。",
-    parameters: obj({ kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, run_id: str("台账 run_id。"), repo_dir: str("仓库目录。"), base_ref: str("写车道起点。"), task: str("任务描述。"), rubric: str("评审标准。"), lanes: int("车道数（arena/interrogate 缺省 3）。"), slices: { type: "array", items: { type: "string" }, description: "swarm 的切片。" }, lead_model: str("lead 会话模型 id（只用于让裁判席避开同家族）。"), lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "当前 lead 会话的 agent（必填）。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。" }, user_requested: bool("用户本轮明确点名要多模型审查时传 true；本地多模型审查默认关闭的车道不传就拒绝。") }, ["kind", "task", "lead_agent"]),
-  },
-  {
-    name: "fanout_ingest",
-    description: "汇收并行车道结果：arena 收各 worktree diff 并用 Jev J3 选基础；interrogate 解析审查 JSON、去重后 J4 分级，输出共识/单模型/分歧；swarm 输出 PASS/ISSUES/BLOCKED 与缺口。interrogate 车道缺回报或没有 JSON 块记为 gaps（不当作 0 发现）。cleanup:true 先弹确认，只清本次 fanout 中没有未提交改动、没有 open PR 的 worktree，未合并分支保留。",
-    parameters: obj({ fanout_id: str("fanout_plan 返回的 id。"), kind: { type: "string", enum: ["arena", "interrogate", "swarm"] }, repo_dir: str("仓库目录。"), lane_results: { type: "array", items: { type: "object" }, description: "每条车道的 {label, text?, verdict?}。" }, cleanup: bool("汇收后清理本次 worktree。"), run_id: str("台账 run_id。") }, ["fanout_id", "kind"]),
+    name: "fanout",
+    description: "多模型并行派工。op=plan：规划 arena/interrogate/swarm，现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/；不派发 Worker——第一阶段 create_workers.workers 先派，裁判/验证车道在 after_stage1 里，等第一阶段全部回报后再派；只读审查车道在传入的 repo_dir 里，范围固定为 base_sha...当前 HEAD。op=ingest：汇收车道结果（arena 用 J3 选基础；interrogate 去重后 J4 分级；swarm 输出 PASS/ISSUES/BLOCKED），缺回报记为 gaps；cleanup:true 先弹确认，只清没有未提交改动、没有 open PR 的 worktree。op=roles：现读 routing.json 返回 developer/reviewer/tester/merger 对应的 {agent, model, effort, provider_id, fallbacks}；读不到或格式错返回 ROUTING_UNREADABLE（fail-closed）。",
+    parameters: obj({ op: { type: "string", enum: ["plan", "ingest", "roles"] }, kind: { type: "string", enum: ["arena", "interrogate", "swarm"], description: "plan / ingest 必填。" }, run_id: str("台账 run_id。"), repo_dir: str("仓库目录。"), base_ref: str("plan：写车道起点。"), task: str("plan：任务描述（必填）。"), rubric: str("plan：评审标准。"), lanes: int("plan：车道数（arena/interrogate 缺省 3）。"), slices: { type: "array", items: { type: "string" }, description: "plan：swarm 的切片。" }, lead_model: str("plan：lead 会话模型 id（只用于让裁判席避开同家族）。"), lead_agent: { type: "string", enum: ["claude-code", "codex", "pi"], description: "plan / roles 必填：当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。" }, user_requested: bool("plan：用户本轮明确点名要多模型审查时传 true；本地多模型审查默认关闭的车道不传就拒绝。"), fanout_id: str("ingest：plan 返回的 id（必填）。"), lane_results: { type: "array", items: { type: "object" }, description: "ingest：每条车道的 {label, text?, verdict?}。" }, cleanup: bool("ingest：汇收后清理本次 worktree。"), refresh: bool("roles：强制重读 routing.json。") }, ["op"]),
   },
 ];
 
@@ -145,7 +125,7 @@ const manifest = {
   confirm: true,
   fs: true,
   sessionContext: true,
-  card: true,
+  card: {},
   subscribe: { topics: ["turn"] },
   agent: { schedule: true, background: true, tasks: true },
   manual: {

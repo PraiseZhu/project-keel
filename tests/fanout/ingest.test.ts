@@ -75,7 +75,7 @@ describe("fanout_ingest tool", () => {
   it("interrogate: batches J4 once and marks only P0/P1 as fix candidates", async () => {
     const h = fakeHost({ fetch: typesafeAnswering(0.9, (_id, q) => (q.criteria.P1 !== undefined ? "P1" : Object.keys(q.criteria)[0]!)) });
     await h.fs({ op: "write", root: "data", path: "fanout/fo-x.json", content: JSON.stringify({ fanout_id: "fo-x", kind: "interrogate", base_ref: null, repo_root: null, routing: {}, lanes: [], task: "t" }) });
-    const r: any = await runTool(makeContext(h, "c"), "fanout_ingest", { fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: r1 }, { label: "r2", text: r2 }] });
+    const r: any = await runTool(makeContext(h, "c"), "fanout", { op: "ingest", fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: r1 }, { label: "r2", text: r2 }] });
     expect(r.ok).toBe(true);
     expect(h.fetches).toHaveLength(1);
     expect(r.result.findings.every((f: any) => f.fix_candidate)).toBe(true);
@@ -84,10 +84,10 @@ describe("fanout_ingest tool", () => {
   it("swarm: reports missing lanes and gaps", async () => {
     const h = fakeHost();
     await h.fs({ op: "write", root: "data", path: "fanout/fo-y.json", content: JSON.stringify({ fanout_id: "fo-y", kind: "swarm", base_ref: null, repo_root: null, routing: {}, lanes: [{ label: "s1" }, { label: "verify" }], task: "t" }) });
-    const r: any = await runTool(makeContext(h, "c"), "fanout_ingest", { fanout_id: "fo-y", lane_results: [{ label: "s1", text: "VERDICT: PASS" }] });
+    const r: any = await runTool(makeContext(h, "c"), "fanout", { op: "ingest", fanout_id: "fo-y", lane_results: [{ label: "s1", text: "VERDICT: PASS" }] });
     expect(r.result).toMatchObject({ missing_lanes: ["verify"], all_pass: false });
   });
   it("unknown fanout id → FANOUT_NOT_FOUND", async () => {
-    expect(await runTool(makeContext(fakeHost(), "c"), "fanout_ingest", { fanout_id: "nope", kind: "swarm" })).toMatchObject({ ok: false, errorCode: "FANOUT_NOT_FOUND" });
+    expect(await runTool(makeContext(fakeHost(), "c"), "fanout", { op: "ingest", fanout_id: "nope", kind: "swarm" })).toMatchObject({ ok: false, errorCode: "FANOUT_NOT_FOUND" });
   });
 });

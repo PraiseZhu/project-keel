@@ -200,7 +200,7 @@ describe("final-review follow-ups at the tool level", () => {
     const h = fakeHost();
     const lanes = ["r1", "r2", "r3"].map((label) => ({ label, lane: "reviewer", write: false, working_dir: "/r", branch: null, route: {} }));
     await h.fs({ op: "write", root: "data", path: "fanout/fo-x.json", content: JSON.stringify({ fanout_id: "fo-x", kind: "interrogate", lanes, repo_root: null, task: "t" }) });
-    const r: any = await runTool(makeContext(h, "c1", profile), "fanout_ingest", { fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: "```json\n[]\n```" }, { label: "r2", text: "我看过了，没问题" }] });
+    const r: any = await runTool(makeContext(h, "c1", profile), "fanout", { op: "ingest", fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: "```json\n[]\n```" }, { label: "r2", text: "我看过了，没问题" }] });
     expect(r.ok).toBe(true);
     expect(r.result.complete).toBe(false);
     expect(r.result.gaps.map((g: any) => g.label).sort()).toEqual(["r2", "r3"]);
@@ -212,7 +212,7 @@ describe("final-review follow-ups at the tool level", () => {
     const h = fakeHost();
     const lanes = ["r1", "r2"].map((label) => ({ label, lane: "reviewer", write: false, working_dir: "/r", branch: null, route: {} }));
     await h.fs({ op: "write", root: "data", path: "fanout/fo-y.json", content: JSON.stringify({ fanout_id: "fo-y", kind: "interrogate", lanes, repo_root: null, task: "t" }) });
-    const r: any = await runTool(makeContext(h, "c1", profile), "fanout_ingest", { fanout_id: "fo-y", kind: "interrogate", lane_results: [{ label: "r1", text: '```json\n{"error":"review failed"}\n```' }, { label: "r2", text: '```json\n[{"severity_guess":"P1","impact":"core broken"}]\n```' }] });
+    const r: any = await runTool(makeContext(h, "c1", profile), "fanout", { op: "ingest", fanout_id: "fo-y", kind: "interrogate", lane_results: [{ label: "r1", text: '```json\n{"error":"review failed"}\n```' }, { label: "r2", text: '```json\n[{"severity_guess":"P1","impact":"core broken"}]\n```' }] });
     expect(r.result.complete).toBe(false);
     expect(r.result.gaps.map((g: any) => g.label).sort()).toEqual(["r1", "r2"]);
   });

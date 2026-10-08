@@ -1,4 +1,4 @@
-// pstack_start is a migration wrapper over keel_run. pstack_decide / pstack_ledger stay.
+// pstack_start is a migration wrapper over keel_run. pstack_decide stays (op log / read replaces pstack_ledger).
 
 import { KeelError } from "../host.ts";
 import { requireString, type ToolContext } from "../context.ts";
@@ -57,6 +57,14 @@ export async function pstackStart(ctx: ToolContext, args: Record<string, unknown
   }
   const { keelRun } = await import("./keel.ts");
   return keelRun(ctx, { ...args, goal: typeof args.goal === "string" ? args.goal : requireString(args, "task"), lead: typeof args.lead === "string" ? args.lead : "codex" });
+}
+
+/** pstack_decide tool: op "decide" (default) asks Jev; "log" / "read" are the former pstack_ledger. */
+export async function pstackDecideTool(ctx: ToolContext, args: Record<string, unknown>) {
+  const op = args.op === undefined ? "decide" : args.op;
+  if (op === "decide") return pstackDecide(ctx, args);
+  if (op === "log" || op === "read") return pstackLedger(ctx, { ...args, op });
+  throw new KeelError("INVALID_INPUT", `pstack_decide 的 op 只能是 decide / log / read，收到 ${JSON.stringify(op)}。`);
 }
 
 export async function pstackDecide(ctx: ToolContext, args: Record<string, unknown>) {

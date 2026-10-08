@@ -21,7 +21,7 @@ export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyL
 /** Next step when the lane's verify status is missing on the current head. The status-writing command stays with the verifier (keel/MANUAL.md rule 10), not in the author's hint. */
 export function verifyHint(check: string, pr: { headSha: string | null }): string {
   const sha = (pr.headSha ?? "").slice(0, 12) || "当前 head";
-  return `当前提交 ${sha} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（fanout_plan({ kind: "swarm" }) 或 roles 的 e2e 档）。由验证者在自己的会话里跑测试、操作改动的功能、专门找反例，并按 keel/MANUAL.md 第 10 条写状态；作者不要自己写这个状态。之后有新提交要重新验证。`;
+  return `当前提交 ${sha} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（fanout({ op: "plan", kind: "swarm" }) 或 fanout({ op: "roles" }) 的 e2e 档）。由验证者在自己的会话里跑测试、操作改动的功能、专门找反例，并按 keel/MANUAL.md 第 10 条写状态；作者不要自己写这个状态。之后有新提交要重新验证。`;
 }
 
 function prArgs(args: Record<string, unknown>) {
@@ -67,6 +67,7 @@ export async function status(ctx: ToolContext, args: Record<string, unknown>, op
 }
 
 export async function prStatus(ctx: ToolContext, args: Record<string, unknown>) {
+  if (args.board === true) return prBoard(ctx, args);
   try {
     return await status(ctx, args);
   } catch (e) {

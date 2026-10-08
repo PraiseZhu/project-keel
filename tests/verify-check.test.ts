@@ -77,7 +77,7 @@ describe("pr_status / pr_ready with a verify check", () => {
     const r: any = await runTool(makeContext(fakeHost({ node: nodeFake(missing) }), "c1", profile), "pr_status", { repo: "acme/solo", pr: 3 });
     expect(r.ok).toBe(true);
     expect(r.result).toMatchObject({ nextAction: "verify_current_head", allowedActions: ["verify_current_head"], mergeable: false });
-    expect(r.result.merge_hint).toContain("fanout_plan");
+    expect(r.result.merge_hint).toContain('fanout({ op: "plan"');
     // The author's hint must not carry a ready-made status write: that would let the author skip the verifier.
     expect(r.result.merge_hint).toContain("作者不要自己写这个状态");
     expect(r.result.merge_hint).not.toContain("gh api");

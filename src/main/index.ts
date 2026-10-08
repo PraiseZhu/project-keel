@@ -146,14 +146,14 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
   channel.postMessage({ type: "ack", reqId: m.reqId });
   const ctx = makeContext(host, "");
   if (m.op === "board") {
-    const r = await runTool(ctx, "pr_board", {});
+    const r = await runTool(ctx, "pr_status", { board: true });
     if (!r.ok) channel.postMessage({ type: "error", reqId: m.reqId, message: r.message });
   } else if (m.op === "ledger") {
-    const r = await runTool(ctx, "pstack_ledger", { op: "read", limit: 100 });
+    const r = await runTool(ctx, "pstack_decide", { op: "read", limit: 100 });
     channel.postMessage({ type: "ledger", reqId: m.reqId, ...(r.ok ? { rows: (r.result as any).rows } : { message: r.message }) });
   } else if (m.op === "roles") {
     const agent = (m as { lead_agent?: string }).lead_agent ?? "claude-code";
-    const r = await runTool(ctx, "roles", { lead_agent: agent });
+    const r = await runTool(ctx, "fanout", { op: "roles", lead_agent: agent });
     channel.postMessage({ type: "roles", reqId: m.reqId, lead_agent: agent, ...(r.ok ? { result: r.result } : { message: r.message }) });
   } else if (m.op === "hooks-status") {
     const r = await host.node("hooks/status", {});
@@ -182,7 +182,7 @@ channel?.addEventListener("message", async (ev: MessageEvent) => {
     const runs = await loadGraphStates(host);
     channel.postMessage({ type: "graph", reqId: m.reqId, runs });
   } else if (m.op === "schedule") {
-    const r = await host.requestSchedule?.({ name: "Keel PR 巡检", prompt: "调用 Keel 插件的 pr_board 工具刷新我的 PR 看板，把可合并与阻塞的 PR 用一句话总结给我。不要合并任何 PR。", intervalMs: 60 * 60 * 1000 });
+    const r = await host.requestSchedule?.({ name: "Keel PR 巡检", prompt: "调用 Keel 插件的 pr_status 工具（board:true）刷新我的 PR 看板，把可合并与阻塞的 PR 用一句话总结给我。不要合并任何 PR。", intervalMs: 60 * 60 * 1000 });
     channel.postMessage(r?.ok ? { type: "scheduled", reqId: m.reqId } : { type: "error", reqId: m.reqId, message: r?.message ?? "无法打开自动化创建面板" });
   }
 });

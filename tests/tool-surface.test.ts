@@ -33,11 +33,11 @@ describe("resolveTeamId reads the real get_workspace_info shape", () => {
 describe("tool surface SC-9", () => {
   it("registers keel_run / report / wait / gate / status next to the legacy tools", () => {
     const names = Object.keys(TOOLS);
-    for (const n of ["keel_run", "keel_report", "keel_wait", "keel_gate", "keel_status", "jev", "pstack_start", "pstack_decide", "pstack_ledger", "pr_status"]) {
+    for (const n of ["keel_run", "keel_report", "keel_wait", "keel_gate", "keel_status", "jev", "pstack_start", "pstack_decide", "pr_status", "fanout"]) {
       expect(names).toContain(n);
     }
-    expect(names).toContain("fanout_plan");
-    expect(names).toContain("fanout_ingest");
+    for (const gone of ["fanout_plan", "fanout_ingest", "roles", "pr_board", "pstack_ledger"]) expect(names).not.toContain(gone);
+    expect(names.length).toBeLessThanOrEqual(16);
     expect(manifest.tools.map((t: { name: string }) => t.name).sort()).toEqual([...names].sort());
     expect(manifest.subscribe.topics).toContain("turn");
     expect(manifest.agent.background).toBe(true);
@@ -498,5 +498,38 @@ describe("reconcile / recover / setup wiring", () => {
     });
     expect(r.ok).toBe(true);
     expect(r.result.next).toMatchObject({ kind: "decide", gate_id: "human:verify_stopped" });
+  });
+});
+
+describe("merged tools route by op", () => {
+  it("fanout / pstack_decide reject an unknown op, pr_status board:true reaches the board", async () => {
+    const { makeContext } = await import("../src/main/context.ts");
+    const { runTool } = await import("../src/main/dispatch.ts");
+    const { fakeHost } = await import("./helpers/fakeHost.ts");
+    const calls: string[] = [];
+    const h = fakeHost({ node: async (m: string) => { calls.push(m); return { ok: true, result: [] }; } });
+    expect(await runTool(makeContext(h, "c"), "fanout", { op: "nope" })).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(await runTool(makeContext(h, "c"), "pstack_decide", { op: "nope" })).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    const board = await runTool(makeContext(h, "c"), "pr_status", { board: true });
+    expect(board.ok).toBe(true);
+    expect(calls).toContain("pr/board");
+    // op=log reaches the former pstack_ledger handler (no such run yet → its own error, not a decide call).
+    expect(await runTool(makeContext(h, "c"), "pstack_decide", { op: "log", run_id: "r1", kind: "step", summary: "x" })).toMatchObject({ ok: false, errorCode: "RUN_NOT_FOUND" });
+    expect(await runTool(makeContext(h, "c"), "pstack_decide", { op: "read" })).toMatchObject({ ok: true });
+  });
+});
+
+describe("internal tool calls", () => {
+  it("every runTool(\"name\") literal in src names a registered tool", async () => {
+    const { readFileSync, readdirSync, statSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const files: string[] = [];
+    const walk = (d: string) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };
+    walk("src");
+    const names = new Set(Object.keys(TOOLS));
+    const used: string[] = [];
+    for (const f of files) for (const m of readFileSync(f, "utf8").matchAll(/runTool\([^,]+,\s*"([a-z_]+)"/g)) used.push(m[1]!);
+    expect(used.length).toBeGreaterThan(0);
+    expect(used.filter((n) => !names.has(n))).toEqual([]);
   });
 });

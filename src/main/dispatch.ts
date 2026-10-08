@@ -4,12 +4,12 @@
 import { loadRuntimeConfig } from "./config.ts";
 import { KeelError } from "./host.ts";
 import type { ToolContext } from "./context.ts";
-import { fanoutIngest, fanoutPlan } from "./fanout/tools.ts";
+import { fanoutTool } from "./fanout/tools.ts";
 import { jevTool } from "./tools/jev.ts";
 import { keelGate, keelReport, keelRun, keelStatus, keelWait } from "./tools/keel.ts";
-import { rolesTool, worktreeTool } from "./tools/misc.ts";
-import { prBoard, prOpen, prReady, prReply, prStatus, prThreads, prWait } from "./tools/pr.ts";
-import { pstackDecide, pstackLedger, pstackStart } from "./tools/pstack.ts";
+import { worktreeTool } from "./tools/misc.ts";
+import { prOpen, prReady, prReply, prStatus, prThreads, prWait } from "./tools/pr.ts";
+import { pstackDecideTool, pstackStart } from "./tools/pstack.ts";
 
 export type Handler = (ctx: ToolContext, args: Record<string, unknown>) => Promise<unknown>;
 
@@ -21,19 +21,15 @@ export const TOOLS: Readonly<Record<string, Handler>> = {
   keel_gate: keelGate,
   keel_status: keelStatus,
   pstack_start: pstackStart,
-  pstack_decide: pstackDecide,
-  pstack_ledger: pstackLedger,
+  pstack_decide: pstackDecideTool,
   pr_status: prStatus,
   pr_wait: prWait,
   pr_open: prOpen,
   pr_ready: prReady,
   pr_threads: prThreads,
   pr_reply: prReply,
-  pr_board: prBoard,
   worktree: worktreeTool,
-  roles: rolesTool,
-  fanout_plan: fanoutPlan,
-  fanout_ingest: fanoutIngest,
+  fanout: fanoutTool,
 };
 
 export async function runTool(ctx: ToolContext, tool: string, args: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false; errorCode: string; message: string; data?: unknown }> {

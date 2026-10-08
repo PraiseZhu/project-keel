@@ -28,13 +28,13 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 | 日常问 Jev | `jev` | 选项选择、评分、是非概率；只联网，不碰仓库 |
 | 开始一次工作流 | `pstack_start` | 选 playbook 和深度，返回 run_id、手册路径与步骤 |
 | 工作流中的判断点 | `pstack_decide` | 按阈值返回 act / reask / minimal / stop，并写台账 |
-| 留痕与回看 | `pstack_ledger` | 读写运行台账（插件私有数据目录） |
-| 看 PR | `pr_status`、`pr_wait`、`pr_board` | 只读；用本机 `gh` / `git` |
+| 留痕与回看 | `pstack_decide`（op=log / read） | 读写运行台账（插件私有数据目录） |
+| 看 PR | `pr_status`（board:true 出看板）、`pr_wait` | 只读；用本机 `gh` / `git` |
 | 改 PR | `pr_open`、`pr_ready`、`pr_reply` | 写 GitHub；pr_open / pr_ready 需要授权来源，pr_reply 默认直接发表（可在设置页改为每条确认） |
 | 评审线程分诊 | `pr_threads` | 统一分级 P0–P3，并给机器人评论处理建议 |
 | worktree | `worktree` | create / audit / prune（只删干净且已合并的） |
-| 派工角色 | `roles` | 读取本机 Orca 路由配置 |
-| 多模型并行 | `fanout_plan`、`fanout_ingest` | arena / interrogate / swarm 三种并行方式 |
+| 派工角色 | `fanout`（op=roles） | 读取本机 Orca 路由配置 |
+| 多模型并行 | `fanout`（op=plan / ingest） | arena / interrogate / swarm 三种并行方式 |
 
 工具的完整用法、工作流手册和规则覆盖层随插件安装，在 Cindy 里通过 `ghost_manual({ ghost_id: "keel", path: "keel/MANUAL.md" })` 查看，源文件在 [`plugin/manual/`](plugin/manual/)。
 
@@ -130,8 +130,8 @@ npm run check:privacy  # 公开隐私检查（只读）
   - `pstack_start`、`pstack_decide`：任务描述和判断点的上下文。
   - `pr_status`、`pr_wait`（返回前的最终判断）：PR 的摘要（标题、分支、检查结果）；检查失败时还包括失败项。
   - `pr_threads`：评审线程和机器人评论的正文。
-  - `fanout_ingest`：`arena` 模式下的任务描述，以及各候选的 diff、未跟踪文件路径和最多 3000 字符的报告正文；`interrogate` 模式下各审查者报告的发现。
-- 其余工具（`pr_board`、`pr_open`、`pr_ready`、`pr_reply`、`worktree`、`roles`、`fanout_plan`、`pstack_ledger`）不向该服务发送内容。
+  - `fanout`（op=ingest）：`arena` 模式下的任务描述，以及各候选的 diff、未跟踪文件路径和最多 3000 字符的报告正文；`interrogate` 模式下各审查者报告的发现。
+- 其余工具（`pr_status` 的看板模式、`pr_open`、`pr_ready`、`pr_reply`、`worktree`、`fanout` 的 plan / roles、`pstack_decide` 的 log / read）不向该服务发送内容。
 - PR 相关工具只调用本机 `gh` / `git` 访问 GitHub，写操作（开 PR、转 Ready、回帖）每次都需要你的授权。
 - 运行台账和判断留痕只写在插件私有数据目录，不上传。
 - KEEL 本身不含遥测或使用统计。

@@ -2,7 +2,7 @@
 
 exports[`buildBrief > emits orchestrate sections with the fixed FORBIDDEN list and .keel report path 1`] = `
 "GOAL        修好登录空指针
-SCOPE       可写：src/login.ts、tests/**。工作树：/repo/.worktrees/keel-run-1。只改 SCOPE 内文件。
+SCOPE       可写：src/login.ts、tests/**。工作树：/repo/.worktrees/keel-run-1。只改 SCOPE 内文件。改完后只 git add 你改过的 SCOPE 内文件并 commit（不要 add .keel/），没有改动就不提交；不要 push。报告里的 head_sha 写 commit 之后的 HEAD。
 CONTEXT     run run-1 / 节点 implement / attempt 2 / dispatch_key run-1:implement:2。PR acme/app#12。见 issue #4
 ACCEPTANCE  SC-1: 复现用例转绿
 VERIFY      npx vitest run tests/login.test.ts

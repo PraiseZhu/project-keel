@@ -51,7 +51,7 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
   const deny = (ctx.scopeDeny ?? []).length ? `；不得改：${ctx.scopeDeny!.join("、")}` : "";
   const scope = investigation
     ? `只读。不建 worktree、不写源码。可读 ${run.repo ?? "repo_dir"}。`
-    : `可写：${allow}${deny}。工作树：${run.worktree ?? "（无）"}。只改 SCOPE 内文件。`;
+    : `可写：${allow}${deny}。工作树：${run.worktree ?? "（无）"}。只改 SCOPE 内文件。${node.writes ? "改完后只 git add 你改过的 SCOPE 内文件并 commit（不要 add .keel/），没有改动就不提交；不要 push。报告里的 head_sha 写 commit 之后的 HEAD。" : ""}`;
   const acceptance = (run.sc ?? []).map((s) => `${s.id}: ${s.text}`).join("\n             ") || "（无单独 SC，以 GOAL 为准）";
   const verify = [...(ctx.verify ?? []), ...(run.sc ?? []).map((s) => s.verify).filter((x): x is string => Boolean(x))].join("；") || "按 GOAL 自行给出可复现命令";
   const forbidden = [...BRIEF_FORBIDDEN, ...(ctx.extraForbidden ?? [])].join("；");

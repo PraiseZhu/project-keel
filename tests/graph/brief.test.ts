@@ -63,3 +63,12 @@ describe("plugin task brief", () => {
     expect(text).not.toContain("/.keel/research-1.md");
   });
 });
+
+describe("writing node brief", () => {
+  it("tells the worker to commit its scoped changes without pushing (real run: PR had no commits)", () => {
+    const text = buildBrief({ id: "implement", role: "worker", writes: true }, { run_id: "run-1", goal: "g", worktree: "/repo/.worktrees/keel-run-1" }, { attempt: 1, dispatch_key: "run-1:implement:1", scopeAllow: ["src/**"] });
+    expect(text).toContain("commit");
+    expect(text).toContain("不要 push");
+    expect(buildBrief({ id: "explore", role: "explorer" }, { run_id: "run-1", goal: "g", worktree: "/w" }, { attempt: 1, dispatch_key: "run-1:explore:1" })).not.toContain("并 commit");
+  });
+});

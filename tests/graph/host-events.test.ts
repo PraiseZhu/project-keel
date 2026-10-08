@@ -7,8 +7,10 @@ import {
   flushNudgeCardOnToolCall,
   handleCardActionMessage,
   handleTurnEndMessage,
+  isNodeClockNotification,
   presentNudgeCard,
   rememberCardCallId,
+  scanDrivenRuns,
   tickNudgeClockFor,
 } from "../../src/main/host-bridge.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
@@ -132,6 +134,25 @@ describe("handbook host events and cards", () => {
     expect(turn).toEqual({ handled: true, paused: [] });
     expect(JSON.parse(host.files.get("runs/run-a/graph-state.json")!).status).toBe("running");
     expect(logs.some((l) => /missing sessionId/.test(l))).toBe(true);
+  });
+
+  it("a Node clock.tick notification is the resident clock event", () => {
+    expect(isNodeClockNotification({ type: "event", name: "node-notification", method: "clock.tick" })).toBe(true);
+    expect(isNodeClockNotification({ type: "nudge-clock" })).toBe(false);
+    expect(isNodeClockNotification({ type: "event", name: "node-notification", method: "progress" })).toBe(false);
+  });
+
+  it("scanDrivenRuns uses the same nudge limits as the clock", async () => {
+    const { p } = ports();
+    const host = fakeHost();
+    host.clock.t = t0 + 10 * 60_000;
+    seedRun(host, "run-1", { updated_at: t0, sol_session_id: "s1" });
+    const c = new NudgeController(p, { now: () => host.clock.t });
+    await scanDrivenRuns(c, host);
+    expect(JSON.parse(host.files.get("runs/run-1/graph-state.json")!).nudge_pending_card).toBe(true);
+    const first = p.log.continue.length;
+    await scanDrivenRuns(c, host);
+    expect(p.log.continue.length).toBe(first);
   });
 
   it("clock without a real card slot does not send card-update, only records pending", async () => {

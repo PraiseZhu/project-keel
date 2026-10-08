@@ -171,3 +171,15 @@ export async function tickNudgeClockFor(nudge: NudgeController, host: Host, runs
   }
   return outcomes;
 }
+
+/** Host-forwarded Node JSON-RPC notification (Cindy forge §4.12). */
+export function isNodeClockNotification(msg: { type?: string; name?: string; method?: string } | null | undefined): boolean {
+  return msg?.type === "event" && msg.name === "node-notification" && msg.method === "clock.tick";
+}
+
+/** Same scan the resident clock and main-view open both use. Goes through NudgeController limits. */
+export async function scanDrivenRuns(nudge: NudgeController, host: Host): Promise<NudgeOutcome[]> {
+  const runs = await loadGraphStates(host);
+  const mapped = runs.map(asNudgeRun).filter((r): r is HostNudgeRun => r != null);
+  return tickNudgeClockFor(nudge, host, mapped);
+}

@@ -129,7 +129,7 @@ const manifest = {
   command: "keel",
   launch: "on-demand",
   tools,
-  node: { entry: "node/worker.cjs", protocol: "json-rpc-stdio", lifecycle: "on-demand", idleTimeoutSeconds: 300 },
+  node: { entry: "node/worker.cjs", protocol: "json-rpc-stdio", lifecycle: "resident" },
   network: {
     hosts: ["api.typesafe.ai"],
     secrets: [{ key: "api_key", label: "Typesafe API Key", source: "user", url: "https://console.typesafe.ai/home", inject: { header: "Authorization", format: "Bearer {value}", hosts: ["api.typesafe.ai"] } }],

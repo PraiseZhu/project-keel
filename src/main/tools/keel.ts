@@ -1064,8 +1064,9 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     }
     // Real run ⑫: a read-only explorer edited source. Read-only nodes must leave the worktree unchanged,
     // otherwise their family would escape the non-author check.
-    const otherWriterActive = Object.entries(st?.nodes ?? {}).some(([id, n]) => id !== parsedKey?.nodeId && n.status === "active" && n.planned_params?.writes);
-    if (nodeState?.planned_params && !nodeState.planned_params.writes && st?.worktree && !otherWriterActive) {
+    // Only the live attempt is checked; a late final for a finished attempt is ignored by the interpreter.
+    const liveAttempt = nodeState?.dispatch_key === key && nodeState.dispatch_state !== "terminal";
+    if (nodeState?.planned_params && !nodeState.planned_params.writes && st?.worktree && liveAttempt) {
       const changed = await node<{ files: string[] }>(ctx, "git/changed-files", {
         repo_dir: st.worktree,
         ...(nodeState.planned_params.start_sha ? { base: nodeState.planned_params.start_sha } : {}),

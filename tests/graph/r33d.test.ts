@@ -91,3 +91,49 @@ describe("R33D-03 read-only nodes must leave the worktree unchanged", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("R33D-03 rereview: no unchecked read-only path", () => {
+  it("does not dispatch a read-only node in a worktree when its start HEAD is unknown", async () => {
+    const h = fakeHost({ node: (m: string) => ({ ok: false, message: m }) });
+    await createRun(h, {
+      run_id: "nohead", spec_id: "feature", profile_id: "sol", lead_harness: "codex", task_type: "feature",
+      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
+      run_id: "nohead", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t" },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result.next.kind).toBe("decide");
+    expect(r.result.next.question).toContain("读不到 worktree HEAD");
+  });
+
+  it("ignores a repeated final for a finished read-only attempt instead of rewinding or skipping the check", async () => {
+    const h = fakeHost({
+      node: (m: string) => (m === "git/changed-files" ? { ok: true, result: { files: [] } } : { ok: false, message: m }),
+    });
+    await createRun(h, {
+      run_id: "late", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
+      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+    });
+    await withRun(h, "late", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.cursor = "implement";
+      s.team = { ready: true, team_id: "t", lead_session_id: "lead" };
+      s.nodes.explore = {
+        status: "succeeded", attempts: 1, dispatch_key: "late:explore:1", dispatch_state: "terminal",
+        planned_params: {
+          label: "keel-explore-1", role: "keel-explorer", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy",
+          initial_task: "x", writes: false, fallbacks: [], route_index: 0, start_sha: "abc",
+        },
+      };
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
+      run_id: "late", phase: "final", dispatch_key: "late:explore:1", inline_report: { status: "done", summary: "again", files_changed: [], ran: [] },
+    });
+    expect(r.ok).toBe(true);
+    const st = JSON.parse(h.files.get(graphStatePath("late"))!) as GraphRunState;
+    expect(st.cursor).toBe("implement");
+    expect(st.nodes.explore.late_reports).toBe(1);
+  });
+});
+

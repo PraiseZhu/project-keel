@@ -293,7 +293,7 @@ async function planOrca(
   // Read-only nodes in a change worktree also record HEAD, so final can prove they changed nothing.
   if (specNode.writes || state.worktree) {
     start_sha = await worktreeHead(host, workingDir ?? state.invocation_dir);
-    if (!start_sha && specNode.writes) {
+    if (!start_sha) {
       return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
     }
   }
@@ -940,7 +940,8 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     throw new KeelError("DISPATCH_KEY_UNKNOWN", `未知 dispatch_key ${key}`);
   }
   const { id, node } = found;
-  if (!isCurrentAttempt(node, key)) {
+  // A repeated final for a finished attempt must not re-run succeed (it would rewind the cursor).
+  if (!isCurrentAttempt(node, key) || node.dispatch_state === "terminal") {
     node.late_reports = (node.late_reports ?? 0) + 1;
     state.late_reports.push({ dispatch_key: key, at: now });
     return;

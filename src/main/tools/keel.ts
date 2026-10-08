@@ -23,7 +23,7 @@ import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
 import { withRun, writeRunArtifact } from "../store/runs.ts";
 import { PSTACK_GRAPHS, type GraphTaskType } from "../../shared/graph/pstack.ts";
 import type { Harness, ModelManual, Profile } from "../../shared/manual/schema.ts";
-import { countWaitCiRuns, pollIntervalMs } from "../graph/poll.ts";
+import { addEstimatedPoints, applyGithubUsed, countWaitCiRuns, loadPollBudget, POINTS_PER_SNAPSHOT, pollIntervalMs, savePollBudget } from "../graph/poll.ts";
 import { collectTaskMessages, invokeCindyTasks, type PluginTaskInput } from "../host/tasks.ts";
 
 const LEADS = new Set<Harness>(["codex", "claude-code", "pi"]);
@@ -1222,7 +1222,9 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
     waited_seconds: waited(),
   });
 
-  const interval = pollIntervalMs(countWaitCiRuns(states as unknown as GraphRunState[]));
+  const waitCi = countWaitCiRuns(states as unknown as GraphRunState[]);
+  let budget = await loadPollBudget(ctx.host, ctx.host.now());
+  let interval = pollIntervalMs(waitCi, budget.points_used);
 
   if (cursor === "open-pr") {
     ctx.host.progress(ctx.callId);
@@ -1321,6 +1323,11 @@ export async function keelWait(ctx: ToolContext, args: Record<string, unknown>) 
       ctx.host.progress(ctx.callId);
       const gh = ghRepoOf(fresh);
       const facts = await readPrFacts(ctx, { ...(gh ? { repo: gh } : {}), pr: fresh.pr, repo_dir: fresh.worktree });
+      const rl = await node<{ used?: number }>(ctx, "gh/rate-limit").catch(() => undefined);
+      if (typeof rl?.used === "number") budget = applyGithubUsed(budget, ctx.host.now(), rl.used);
+      else budget = addEstimatedPoints(budget, ctx.host.now(), POINTS_PER_SNAPSHOT);
+      await savePollBudget(ctx.host, budget);
+      interval = pollIntervalMs(waitCi, budget.points_used);
       on = waitOnFromFacts(facts);
       if (on !== "wait") break;
       if (ctx.host.now() + interval > deadline) return keepWait();

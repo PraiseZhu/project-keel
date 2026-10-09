@@ -43,11 +43,44 @@ export function crossesFunctionBoundaryOrUnknown(input: {
 /** ≤30 lines and only tests/docs: skip astra-final-review (plan Step 7). Unknown line count must not skip. */
 export const FINAL_REVIEW_LINE_SKIP = 30;
 
+/** KEEL node reports under .keel/ are not product changes. */
+export function isKeelArtifact(file: string): boolean {
+  const f = file.replace(/\\/g, "/").replace(/^\.\//, "");
+  return f === ".keel" || f.startsWith(".keel/");
+}
+
+export function productFilesOf(files: readonly string[]): string[] {
+  return files.filter((f) => !isKeelArtifact(f));
+}
+
 export function shouldSkipFinalReview(files: readonly string[], changedLines?: number): boolean {
-  if (!files.length) return false;
-  if (!files.every(isTestOrDoc)) return false;
+  const product = productFilesOf(files);
+  if (!product.length) return false;
+  if (!product.every(isTestOrDoc)) return false;
   if (changedLines === undefined || !Number.isFinite(changedLines)) return false;
   return changedLines <= FINAL_REVIEW_LINE_SKIP;
+}
+
+/** Skip only when every write-node product file is docs/tests and total lines are known and ≤ threshold. Keel-only reports do not contribute. Unknown never skips. */
+export function skipFinalReviewFromWriteReports(
+  reports: readonly { files_changed?: readonly string[] | null; changed_lines?: number }[],
+): boolean {
+  const files: string[] = [];
+  let lines = 0;
+  let sawProduct = false;
+  let linesUnknown = false;
+  for (const r of reports) {
+    const product = productFilesOf(r.files_changed ?? []);
+    if (!product.length) continue;
+    sawProduct = true;
+    for (const f of product) {
+      if (!files.includes(f)) files.push(f);
+    }
+    if (r.changed_lines === undefined || !Number.isFinite(r.changed_lines)) linesUnknown = true;
+    else lines += r.changed_lines;
+  }
+  if (!sawProduct) return false;
+  return shouldSkipFinalReview(files, linesUnknown ? undefined : lines);
 }
 
 export function failureFingerprint(input: {

@@ -9,8 +9,9 @@ import { appendixCAgentModels } from "../manual/model-manual.test.ts";
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"' };
 function decode(s: string): string {
-  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+  return s.replace(/&(amp|lt|gt|quot);/g, (_, name: string) => ENTITIES[name]!);
 }
 
 function parseAttrs(raw: string): Record<string, string> {
@@ -378,6 +379,12 @@ async function boot(opts: { holdAfter?: number } = {}) {
     },
   };
 }
+
+describe("html entity decode", () => {
+  it("does not double-unescape amp-prefixed entities", () => {
+    expect(decode("&amp;lt;")).toBe("&lt;");
+  });
+});
 
 describe("settings catalog focus restore", () => {
   it("keeps focus on the same control when a late catalog response redraws after change", async () => {

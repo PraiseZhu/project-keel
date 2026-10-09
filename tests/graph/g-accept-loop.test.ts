@@ -648,4 +648,113 @@ describe("FAIL then small verify report still re-runs final review", () => {
     expect(readState(h, runId).cursor).toBe("astra-final-review");
     expect(readState(h, runId).nodes["astra-final-review"]?.attempts).toBe(2);
   });
+
+  it("pr graph from entry keeps open-pr history through CI repair then final FAIL and still re-reviews", async () => {
+    const spec = PSTACK_GRAPHS.pr;
+    const runId = "run-pr-entry-ci-then-final";
+    const h = fakeHost({
+      node: (method: string) => verifyNode(method, HEAD_B, HEAD_B),
+    });
+    await createRun(h, {
+      run_id: runId,
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "pr",
+      entry: spec.entry,
+      goal: "修登录报错",
+      worktree: WT,
+      now: h.now(),
+      scopeAllow: ["src/**"],
+    });
+    await withRun(h, runId, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
+      s.budget.astra_left = 3;
+    });
+    let result = await advance(h, runId, { type: "tick" }, { spec });
+    expect(readState(h, runId).cursor).toBe("open-pr");
+    expect(readState(h, runId).nodes["open-pr"]?.attempts).toBe(1);
+    expect(result.next.kind).toBe("wait");
+    if (result.next.kind !== "wait") throw new Error("wait");
+    expect(result.next.call.tool).toBe("pr_open");
+
+    result = await advance(h, runId, { type: "wait_done", on: "ok" }, { spec });
+    expect(readState(h, runId).cursor).toBe("wait-ci");
+    result = await advance(h, runId, { type: "wait_done", on: "ci_red" }, { spec });
+    expect(readState(h, runId).cursor).toBe("ci-rerun-once");
+    result = await advance(h, runId, { type: "wait_done", on: "fail" }, { spec });
+    expect(readState(h, runId).cursor).toBe("fix-ci");
+    expect(result.next.kind).toBe("dispatch");
+    if (result.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(result.next.dispatch_key).toBe(`${runId}:fix-ci:1`);
+
+    await withRun(h, runId, (raw) => {
+      const node = (raw as unknown as GraphRunState).nodes["fix-ci"];
+      if (node) node.dispatch_state = "running";
+    });
+    result = await advance(h, runId, {
+      type: "report",
+      phase: "final",
+      dispatch_key: result.next.dispatch_key,
+      report: { status: "done", summary: "修了 CI", head_sha: HEAD_B, files_changed: ["src/ci.ts"] },
+    }, { spec });
+    expect(readState(h, runId).cursor).toBe("open-pr");
+    expect(readState(h, runId).nodes["open-pr"]?.attempts).toBe(2);
+    expect(result.next.kind).toBe("wait");
+    if (result.next.kind !== "wait") throw new Error("wait");
+    if (result.next.call.tool !== "pr_open") throw new Error("pr_open");
+    expect(result.next.call.args.push).toBe(true);
+
+    result = await advance(h, runId, { type: "wait_done", on: "ok" }, { spec });
+    expect(readState(h, runId).cursor).toBe("wait-ci");
+    result = await advance(h, runId, { type: "wait_done", on: "ok" }, { spec });
+    expect(readState(h, runId).cursor).toBe("astra-final-review");
+    expect(result.next.kind).toBe("dispatch");
+    if (result.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(result.next.dispatch_key).toBe(`${runId}:astra-final-review:1`);
+
+    await withRun(h, runId, (raw) => {
+      const node = (raw as unknown as GraphRunState).nodes["astra-final-review"];
+      if (node) node.dispatch_state = "running";
+    });
+    result = await advance(h, runId, {
+      type: "report",
+      phase: "final",
+      dispatch_key: result.next.dispatch_key,
+      report: { status: "done", summary: "P1 found", verdict: "FAIL" },
+    }, { spec });
+    expect(readState(h, runId).cursor).toBe("fix-ci");
+    expect(result.next.kind).toBe("dispatch");
+    if (result.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(result.next.dispatch_key).toBe(`${runId}:fix-ci:2`);
+
+    await withRun(h, runId, (raw) => {
+      const node = (raw as unknown as GraphRunState).nodes["fix-ci"];
+      if (node) node.dispatch_state = "running";
+    });
+    result = await advance(h, runId, {
+      type: "report",
+      phase: "final",
+      dispatch_key: result.next.dispatch_key,
+      report: { status: "done", summary: "P1 repaired", head_sha: HEAD_B, files_changed: ["src/ci.ts"] },
+    }, { spec });
+    expect(readState(h, runId).cursor).toBe("open-pr");
+    expect(readState(h, runId).nodes["open-pr"]?.attempts).toBe(3);
+    expect(result.next.kind).toBe("wait");
+    if (result.next.kind !== "wait") throw new Error("wait");
+    if (result.next.call.tool !== "pr_open") throw new Error("pr_open");
+    expect(result.next.call.args.push).toBe(true);
+
+    const opened: any = await runTool(makeContext(h, "c-open-hist", profile), "keel_wait", { run_id: runId });
+    expect(opened.ok, opened.message).toBe(true);
+    expect(readState(h, runId).cursor).toBe("wait-ci");
+    expect(readState(h, runId).pr).toBe(34);
+    const waited: any = await runTool(makeContext(h, "c-wait-hist", profile), "keel_wait", { run_id: runId });
+    expect(waited.ok, waited.message).toBe(true);
+    expect(waited.result.next.kind).toBe("dispatch");
+    expect(waited.result.next.dispatch_key).toBe(`${runId}:astra-final-review:2`);
+    expect(readState(h, runId).cursor).toBe("astra-final-review");
+    expect(readState(h, runId).nodes["astra-final-review"]?.attempts).toBe(2);
+  });
 });

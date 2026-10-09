@@ -528,11 +528,11 @@ export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDo
 
 function rewindVerifier(state: GraphRunState): string {
   const spec = PSTACK_GRAPHS[state.spec_id as GraphTaskType];
-  const id = spec?.nodes.find((n) => n.role === "verifier")?.id
+  const id = spec?.nodes.find((n) => n.id === "verify-head" && n.role === "verifier")?.id
+    ?? spec?.nodes.find((n) => n.role === "verifier")?.id
     ?? Object.entries(state.nodes).find(([, n]) => n.planned_params?.role === "keel-verifier")?.[0]
     ?? "verify-same-surface";
   const node = ensureNode(state, id);
-  node.attempts += 1;
   node.status = "pending";
   node.dispatch_state = undefined;
   node.dispatch_key = undefined;

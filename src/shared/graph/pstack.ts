@@ -197,7 +197,7 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         kind: "tool",
         writes: false,
         timebox_min: 15,
-        max_attempts: 2,
+        max_attempts: 8,
         playbook_steps: ["opening-a-pr", "bug-fix#6", "feature#8", "refactoring#8"],
       }),
       node("wait-ci", {

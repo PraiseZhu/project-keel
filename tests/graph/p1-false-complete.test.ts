@@ -129,8 +129,9 @@ describe("done gate retries verify when the verdict level is too low", () => {
     });
     expect(r.ok, r.message).toBe(true);
     expect(r.result.next.kind).toBe("dispatch");
-    expect(r.result.next.dispatch_key).toMatch(/verify-head/);
+    expect(r.result.next.dispatch_key).toBe("run-level:verify-head:2");
     expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).cursor).toBe("verify-head");
+    expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).nodes["verify-head"]?.attempts).toBe(2);
   });
 });
 
@@ -430,5 +431,241 @@ describe("done uses the PR head, not an unpushed local head", () => {
     const h = hostWith(verdict.head_sha, verdict.head_sha);
     const r = await runDoneCheck(makeContext(h, "c1"), structuredClone(state));
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("retry_verify rewinds verify-head without burning attempts", () => {
+  const head = verdict.head_sha;
+  const base = verdict.base_sha;
+  const wt = "/repo/.worktrees/x";
+  const snapshot = {
+    preset: "personal" as const,
+    rule: LANE_PRESETS.personal,
+    pr: {
+      repo: "o/r", number: 35, url: "https://github.com/o/r/pull/35", title: "t", state: "OPEN" as const,
+      isDraft: false, headSha: head, headRef: "feat/x", baseRef: "main", mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN", reviewDecision: null, labels: [],
+    },
+    decision: { kind: "ready" as const },
+    checks: { failed: [], pending: [], passed: 1 },
+    unresolvedThreads: 0,
+    gate: { applies: false, required: [], passed: [], failing: [], pending: [], missing: [], ok: true, sources: [] },
+    verification: null,
+    mergeReadyLabel: false,
+  };
+
+  function node(method: string, params: any) {
+    if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head, gh_repo: "o/r" } };
+    if (method === "git/changed-files") return { ok: true, result: { files: [] } };
+    if (method === "pr/resolve") return { ok: true, result: { repo: "o/r", number: 35 } };
+    if (method === "pr/snapshot") return { ok: true, result: snapshot };
+    if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+    if (method === "git/base-sha") return { ok: true, result: { base_ref: "main", base_sha: base } };
+    if (method === "git/patch-id") return { ok: true, result: { ok: true, patch_id: "patch-1" } };
+    if (method === "orch/run") return { ok: true, result: params.op === "ledger.check" ? { sha: head } : {} };
+    return { ok: false, message: method };
+  }
+
+  function read(h: ReturnType<typeof fakeHost>, id: string) {
+    return JSON.parse(h.files.get(graphStatePath(id))!) as GraphRunState;
+  }
+
+  async function boot(
+    graph: "bug-fix" | "feature" | "refactoring" | "pr",
+    attempts: number,
+    afterRevision = false,
+    designContested = false,
+  ) {
+    const h = fakeHost({ node });
+    const id = `retry-${graph}-${attempts}-${afterRevision ? "rev" : "n"}-${designContested ? "c" : "u"}`;
+    const spec = PSTACK_GRAPHS[graph];
+    const ctx = makeContext(h, "c-retry", profile);
+    await createRun(h, {
+      run_id: id,
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: graph,
+      entry: "done",
+      goal: "retry verification",
+      worktree: wt,
+      now: h.now(),
+      author_families: ["grok"],
+      sc: [{ id: "SC-1", text: "tests pass" }],
+    });
+    await withRun(h, id, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.team = { ready: true, team_id: "t1" };
+      s.pr = 35;
+      s.repo = "o/r";
+      s.gh_repo = "o/r";
+      s.author_families = ["grok"];
+      s.pr_binding = { repo: "o/r", number: 35, base_ref: "main", base_sha: base, head_sha: head };
+      s.nodes.implement = {
+        status: "succeeded",
+        attempts: 1,
+        dispatch_state: "terminal",
+        planned_params: {
+          writes: true,
+          label: "impl",
+          role: "keel-worker",
+          agent: "pi",
+          model: "grok-4.6",
+          provider_id: "art-cindy",
+          initial_task: "x",
+          fallbacks: [],
+          route_index: 0,
+        },
+        actual_route: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy" },
+      };
+      for (const name of ["open-pr", "wait-ci", "report-ready", "astra-final-review"] as const) {
+        s.nodes[name] = { status: "succeeded", attempts: afterRevision ? 2 : 1, dispatch_state: "terminal" };
+      }
+      s.nodes["astra-final-review"]!.last_report = { status: "done", summary: "pass", verdict: "PASS" };
+      s.nodes["verify-head"] = {
+        status: "succeeded",
+        attempts,
+        dispatch_state: "terminal",
+        last_report: { status: "done", summary: "aggregate passed", verdict: "PASS", sc_evidence: { "SC-1": true } },
+      };
+      s.verdict = {
+        head,
+        base_ref: "main",
+        base_sha: base,
+        patch_id: "patch-1",
+        value: "type-check-only",
+        level: "type-check-only",
+        surface: "type-check",
+        by_family: "gpt",
+        by_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" },
+      };
+      s.facts = { design_contested: designContested, skip_final_review: false };
+      s.budget.astra_left = 3;
+    });
+    return { h, id, spec, ctx };
+  }
+
+  it.each(["bug-fix", "feature", "refactoring", "pr"] as const)(
+    "%s low-level rewind offers retry_verify on human:verify-head",
+    async (graph) => {
+      const { h, id, spec, ctx } = await boot(graph, 1);
+      const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+      expect(initial.next.kind).toBe("decide");
+      if (initial.next.kind !== "decide") throw new Error("decide");
+      expect(initial.next.gate_id).toBe("human:verify-head");
+      expect(initial.next.options).toEqual(["retry_verify", "stop"]);
+      expect(read(h, id).cursor).toBe("verify-head");
+      expect(read(h, id).nodes["verify-head"]?.attempts).toBe(1);
+    },
+  );
+
+  it("attempt 1 re-dispatches verify-head:2 and attempt 2 re-dispatches :3", async () => {
+    const first = await boot("bug-fix", 1);
+    const firstTick = await advance(first.h, first.id, { type: "tick" }, { spec: first.spec, doneCheck: (s) => runDoneCheck(first.ctx, s) });
+    expect(firstTick.next.kind).toBe("decide");
+    if (firstTick.next.kind !== "decide") throw new Error("decide");
+    const firstRetry: any = await runTool(first.ctx, "keel_gate", {
+      run_id: first.id, gate_id: firstTick.next.gate_id, answer: "retry_verify",
+    });
+    expect(firstRetry.ok, firstRetry.message).toBe(true);
+    expect(firstRetry.result.next.kind).toBe("dispatch");
+    expect(firstRetry.result.next.dispatch_key).toBe(`${first.id}:verify-head:2`);
+    expect(read(first.h, first.id).nodes["verify-head"]?.attempts).toBe(2);
+
+    const second = await boot("bug-fix", 2);
+    const secondTick = await advance(second.h, second.id, { type: "tick" }, { spec: second.spec, doneCheck: (s) => runDoneCheck(second.ctx, s) });
+    expect(secondTick.next.kind).toBe("decide");
+    if (secondTick.next.kind !== "decide") throw new Error("decide");
+    const secondRetry: any = await runTool(second.ctx, "keel_gate", {
+      run_id: second.id, gate_id: secondTick.next.gate_id, answer: "retry_verify",
+    });
+    expect(secondRetry.ok, secondRetry.message).toBe(true);
+    expect(secondRetry.result.next.kind).toBe("dispatch");
+    expect(secondRetry.result.next.dispatch_key).toBe(`${second.id}:verify-head:3`);
+    expect(read(second.h, second.id).nodes["verify-head"]?.attempts).toBe(3);
+  });
+
+  it("attempt 3 stays stopped instead of dispatching a fourth verify", async () => {
+    const { h, id, spec, ctx } = await boot("bug-fix", 3);
+    const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+    expect(initial.next.kind).toBe("decide");
+    if (initial.next.kind !== "decide") throw new Error("decide");
+    const retry: any = await runTool(ctx, "keel_gate", {
+      run_id: id, gate_id: initial.next.gate_id, answer: "retry_verify",
+    });
+    expect(retry.ok, retry.message).toBe(true);
+    expect(retry.result.next.kind).toBe("decide");
+    expect(retry.result.next.options).toEqual(["stop"]);
+    expect(retry.result.next.question).toMatch(/verify-head/);
+    expect(read(h, id).nodes["verify-head"]?.attempts).toBe(3);
+  });
+
+  it.each([false, true] as const)(
+    "feature retry_verify does not consume open-pr after two final reviews when design_contested=%s",
+    async (designContested) => {
+      const { h, id, spec, ctx } = await boot("feature", 1, true, designContested);
+      const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+      expect(initial.next.kind).toBe("decide");
+      if (initial.next.kind !== "decide") throw new Error("decide");
+      expect(initial.next.gate_id).toBe("human:verify-head");
+      const retry: any = await runTool(ctx, "keel_gate", {
+        run_id: id, gate_id: initial.next.gate_id, answer: "retry_verify",
+      });
+      expect(retry.ok, retry.message).toBe(true);
+      expect(retry.result.next.kind).toBe("dispatch");
+      expect(retry.result.next.dispatch_key).toBe(`${id}:verify-head:2`);
+      const st = read(h, id);
+      expect(st.cursor).toBe("verify-head");
+      expect(st.nodes["verify-head"]?.attempts).toBe(2);
+      expect(st.nodes["open-pr"]?.attempts).toBe(2);
+      expect(st.nodes["wait-ci"]?.attempts).toBe(2);
+      expect(st.nodes["astra-final-review"]?.attempts).toBe(2);
+      expect(st.nodes.interrogate?.status).not.toBe("active");
+    },
+  );
+
+  it("a passing npm test re-verify reaches done", async () => {
+    const { h, id, spec, ctx } = await boot("bug-fix", 1);
+    const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+    expect(initial.next.kind).toBe("decide");
+    if (initial.next.kind !== "decide") throw new Error("decide");
+    const retry: any = await runTool(ctx, "keel_gate", {
+      run_id: id, gate_id: initial.next.gate_id, answer: "retry_verify",
+    });
+    expect(retry.ok, retry.message).toBe(true);
+    expect(retry.result.next.kind).toBe("dispatch");
+    const key = retry.result.next.dispatch_key as string;
+    expect(key).toBe(`${id}:verify-head:2`);
+    const accepted: any = await runTool(ctx, "keel_report", {
+      run_id: id,
+      phase: "accepted",
+      dispatch_key: key,
+      worker_id: "audit-verifier",
+      worker_session_id: "audit-session",
+      dispatch_outcome: { dispatched: true },
+    });
+    expect(accepted.ok, accepted.message).toBe(true);
+    const report: any = await runTool(ctx, "keel_report", {
+      run_id: id,
+      phase: "final",
+      dispatch_key: key,
+      inline_report: {
+        status: "done",
+        summary: "tests pass",
+        head_sha: head,
+        files_changed: [],
+        functions_touched: [],
+        changed_lines: 0,
+        ran: [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }],
+        sc_evidence: { "SC-1": true },
+        verdict: "PASS",
+      },
+    });
+    expect(report.ok, report.message).toBe(true);
+    expect(read(h, id).verdict?.level).toBe("unit-test-verified");
+    expect(read(h, id).cursor).toBe("report-ready");
+    const done: any = await runTool(ctx, "keel_wait", { run_id: id });
+    expect(done.ok, done.message).toBe(true);
+    expect(done.result.next.kind).toBe("done");
   });
 });

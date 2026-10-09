@@ -84,6 +84,10 @@ describe("pstack graph compile", () => {
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "wait-ci" && e.on === "ok"), id).toBe(false);
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "g-retry-fix-ci" && e.on === "fail"), id).toBe(true);
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "astra-unstick" && e.on === "fingerprint_repeat"), id).toBe(true);
+      const open = spec.nodes.find((n) => n.id === "open-pr");
+      const wait = spec.nodes.find((n) => n.id === "wait-ci");
+      expect(open?.max_attempts, id).toBe(wait?.max_attempts);
+      expect(open?.max_attempts, id).toBe(8);
     }
   });
 

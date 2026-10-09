@@ -42,12 +42,22 @@ export function matchWorkdir(cwd, index) {
   return best;
 }
 
+function under(cwd, dir) {
+  const c = norm(cwd);
+  const w = norm(dir);
+  return Boolean(c && w && (c === w || c.startsWith(`${w}/`) || c.startsWith(`${w}\\`)));
+}
+
 export function evaluate(event, index) {
   const active = event?.stop_hook_active;
   if (active === true || active === "true") return { action: "allow", why: "stop_hook_active" };
   if (index === null || index === undefined) return { action: "allow", why: "no_index" };
   if (typeof index !== "object" || Array.isArray(index)) return { action: "allow", why: "no_index" };
   const cwd = typeof event?.cwd === "string" ? event.cwd : "";
+  // Sessions inside a run's worktree are KEEL workers; only the lead is gated.
+  if (Object.values(index).some((row) => row && typeof row === "object" && under(cwd, row.worktree))) {
+    return { action: "allow", why: "worker_worktree" };
+  }
   const hit = matchWorkdir(cwd, index);
   if (!hit) return { action: "allow", why: "cwd_mismatch" };
   if (ALLOW_STATUS.has(String(hit.status ?? ""))) return { action: "allow", why: "terminal_status" };
@@ -56,7 +66,7 @@ export function evaluate(event, index) {
 
 export function formatOutput(harness, result) {
   if (result.action !== "block") return {};
-  const reason = `KEEL：run ${result.run_id} 未完成（${result.current_node}）。先调用 keel_status 取下一步，照 next 执行。`;
+  const reason = `KEEL：run ${result.run_id} 未完成（${result.current_node}）。如果你是 KEEL 派出的 worker（任务说明里有 dispatch_key），交完报告直接结束，不要调用 keel_*；如果你是主控，先调用 keel_status 取下一步，照 next 执行。`;
   if (harness === "codex") return { decision: "block", reason, continue: true };
   return { decision: "block", reason };
 }

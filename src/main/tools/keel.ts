@@ -675,7 +675,9 @@ async function persistSideEffects(host: Host, state: GraphRunState): Promise<voi
   const entries = runs.map((r) => {
     const s = r as unknown as GraphRunState;
     return {
-      workdir: String(s.worktree || s.invocation_dir || s.repo_root || ""),
+      // Real run: keyed by worktree, the hook blocked workers and missed the lead. Key by the lead's dir.
+      workdir: String(s.invocation_dir || s.repo_root || s.worktree || ""),
+      ...(s.worktree && s.worktree !== s.invocation_dir ? { worktree: String(s.worktree) } : {}),
       run_id: String(s.run_id || ""),
       status: String(s.status || ""),
       current_node: String(s.cursor || ""),

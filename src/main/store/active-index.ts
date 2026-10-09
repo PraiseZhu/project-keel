@@ -6,6 +6,8 @@ export const ACTIVE_INDEX_PATH = "runs/active.json";
 
 export interface ActiveRunEntry {
   readonly workdir: string;
+  /** The run's own worktree: its sessions are workers, never the lead. */
+  readonly worktree?: string;
   readonly run_id: string;
   readonly status: string;
   readonly current_node: string;
@@ -13,6 +15,7 @@ export interface ActiveRunEntry {
 }
 
 export interface ActiveIndexRow {
+  readonly worktree?: string;
   readonly run_id: string;
   readonly status: string;
   readonly current_node: string;
@@ -26,7 +29,7 @@ export function toActiveIndex(entries: readonly ActiveRunEntry[]): ActiveIndex {
   const out: ActiveIndex = {};
   for (const e of entries) {
     if (!e?.workdir) continue;
-    const row: ActiveIndexRow = { run_id: e.run_id, status: e.status, current_node: e.current_node, updated_at: e.updated_at };
+    const row: ActiveIndexRow = { ...(e.worktree ? { worktree: e.worktree } : {}), run_id: e.run_id, status: e.status, current_node: e.current_node, updated_at: e.updated_at };
     const prev = out[e.workdir];
     if (!prev || prev.updated_at <= e.updated_at) out[e.workdir] = row;
   }

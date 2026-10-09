@@ -54,6 +54,13 @@ describe("evaluate branches", () => {
     expect(hit).toMatchObject({ action: "block", run_id: "run-1", current_node: "wait-ci" });
     expect(evaluate(event({ cwd: workdir }), active).action).toBe("block");
   });
+  it("lets KEEL workers inside the run worktree end; still gates the lead in the repo dir (real run ⑭)", () => {
+    const wt = `${workdir}/.worktrees/keel-run-1`;
+    const index = { [workdir]: { worktree: wt, run_id: "run-1", status: "running", current_node: "implement", updated_at: "t" } };
+    expect(evaluate(event({ cwd: wt }), index)).toMatchObject({ action: "allow", why: "worker_worktree" });
+    expect(evaluate(event({ cwd: `${wt}/src` }), index).action).toBe("allow");
+    expect(evaluate(event({ cwd: workdir }), index)).toMatchObject({ action: "block", run_id: "run-1" });
+  });
   it("prefers the longest matching workdir prefix", () => {
     const index = {
       [workdir]: { run_id: "parent", status: "running", current_node: "a", updated_at: "t" },
@@ -64,7 +71,7 @@ describe("evaluate branches", () => {
 });
 
 describe("harness output", () => {
-  const reason = "KEEL：run run-1 未完成（wait-ci）。先调用 keel_status 取下一步，照 next 执行。";
+  const reason = "KEEL：run run-1 未完成（wait-ci）。如果你是 KEEL 派出的 worker（任务说明里有 dispatch_key），交完报告直接结束，不要调用 keel_*；如果你是主控，先调用 keel_status 取下一步，照 next 执行。";
   const blocked = { action: "block" as const, run_id: "run-1", current_node: "wait-ci" };
   it("emits Claude Code {decision, reason} and Codex {decision, reason, continue}", () => {
     expect(formatOutput("claude-code", blocked)).toEqual({ decision: "block", reason });

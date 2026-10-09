@@ -219,3 +219,20 @@ describe("accepted receipt shapes (real run: receipt nested under outcome lost w
     expect(r.errorCode).toBe("INVALID_INPUT");
   });
 });
+
+describe("active index keys the lead's dir, not the worker worktree (real run ⑭)", () => {
+  it("writes runs/active.json keyed by invocation_dir with the run worktree alongside", async () => {
+    const h = fakeHost({
+      node: (m: string) => {
+        if (m === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "abc" } };
+        if (m === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/keel-x" } };
+        return { ok: false, message: m };
+      },
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", { goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"] });
+    expect(r.ok).toBe(true);
+    const index = JSON.parse(h.files.get("runs/active.json")!);
+    expect(index["/repo"]).toMatchObject({ worktree: "/repo/.worktrees/keel-x", status: "running" });
+    expect(index["/repo/.worktrees/keel-x"]).toBeUndefined();
+  });
+});

@@ -74,6 +74,7 @@ function host(ci: Record<number, "green" | "red" | "waiting">, extra?: { patch?:
         return { ok: true, result: snapshot(pr, kinds[pr] ?? "waiting") };
       }
       if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+      if (method === "git/changed-files") return { ok: true, result: { files: [] } };
       return { ok: false, message: "UNEXPECTED " + method };
     },
   });

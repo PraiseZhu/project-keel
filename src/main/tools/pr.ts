@@ -159,7 +159,9 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
     gate: pre.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null },
     was_draft: pre.pr.isDraft,
   });
-  if (!dry && entryNeeded) await writeHandoff(ctx.host, { ...handoffBase(), status: "pending" });
+  // Vigil lanes keep ownership in the external receipt; only local-record lanes need the pending-first record.
+  const integrated = resolveLane(ctx.profile, pre.pr.repo).match?.handoffHelperPath !== undefined;
+  if (!dry && entryNeeded && !integrated) await writeHandoff(ctx.host, { ...handoffBase(), status: "pending" });
   const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
   if (!r.gate.passed) {
     const v = pre.verification;
@@ -168,7 +170,6 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   }
   let handoff: HandoffRecord | null = null;
   if (!dry && r.ready && entryNeeded) {
-    const integrated = resolveLane(ctx.profile, pre.pr.repo).match?.handoffHelperPath !== undefined;
     if (integrated && (!r.watcher_handoff || r.watcher_handoff.head !== r.head_sha))
       throw new KeelError("HANDOFF_HELPER_INVALID", "Ready 已执行，但缺少当前 HEAD 的 Vigil 交接回执，作者交接未完成。");
     handoff = { ...handoffBase(), status: "complete", head_sha: r.head_sha, gate: r.gate, ...(r.watcher_handoff ? { watcher_receipt: r.watcher_handoff } : {}) };

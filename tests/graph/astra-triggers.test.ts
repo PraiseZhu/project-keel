@@ -4,11 +4,7 @@ import {
   crossesFunctionBoundary,
   crossesFunctionBoundaryOrUnknown,
   failureFingerprint,
-  isKeelArtifact,
   moduleOf,
-  productFilesOf,
-  shouldSkipFinalReview,
-  skipFinalReviewFromWriteReports,
 } from "../../src/main/graph/astra-triggers.ts";
 
 describe("crossesFunctionBoundary", () => {
@@ -37,43 +33,5 @@ describe("failureFingerprint", () => {
   });
   it("is undefined when nothing failed", () => {
     expect(failureFingerprint({ ran: [{ cmd: "npm test", exit_code: 0 }], summary: "" })).toBeUndefined();
-  });
-});
-
-describe("shouldSkipFinalReview", () => {
-  it("skips only when every file is test/docs and lines are known and ≤30", () => {
-    expect(shouldSkipFinalReview(["tests/a.test.ts", "docs/n.md"], 12)).toBe(true);
-    expect(shouldSkipFinalReview(["tests/a.test.ts"])).toBe(false);
-    expect(shouldSkipFinalReview(["tests/a.test.ts"], undefined)).toBe(false);
-    expect(shouldSkipFinalReview(["src/a.ts"], 4)).toBe(false);
-    expect(shouldSkipFinalReview(["tests/a.test.ts"], 80)).toBe(false);
-  });
-  it("does not treat .keel reports as product docs", () => {
-    expect(isKeelArtifact(".keel/verify-same-surface-1.md")).toBe(true);
-    expect(productFilesOf([".keel/verify-1.md", "docs/n.md"])).toEqual(["docs/n.md"]);
-    expect(shouldSkipFinalReview([".keel/verify-1.md"], 12)).toBe(false);
-    expect(shouldSkipFinalReview([".keel/verify-1.md", "docs/n.md"], 12)).toBe(true);
-    expect(shouldSkipFinalReview(["src/a.ts", ".keel/verify-1.md"], 4)).toBe(false);
-  });
-});
-
-describe("skipFinalReviewFromWriteReports", () => {
-  it("keeps source changes when a later report only wrote .keel", () => {
-    expect(skipFinalReviewFromWriteReports([
-      { files_changed: ["src/login.ts"], changed_lines: 508 },
-      { files_changed: [".keel/verify-same-surface-1.md"], changed_lines: 20 },
-    ])).toBe(false);
-  });
-  it("still skips when every write-node product file is docs/tests under the line cap", () => {
-    expect(skipFinalReviewFromWriteReports([
-      { files_changed: ["docs/readme.md", "tests/a.test.ts"], changed_lines: 12 },
-      { files_changed: [".keel/verify-same-surface-1.md"], changed_lines: 20 },
-    ])).toBe(true);
-  });
-  it("does not skip when product line count is unknown", () => {
-    expect(skipFinalReviewFromWriteReports([
-      { files_changed: ["docs/readme.md"] },
-    ])).toBe(false);
-    expect(skipFinalReviewFromWriteReports([])).toBe(false);
   });
 });

@@ -541,7 +541,7 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
         by_family: "gpt",
         by_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" },
       };
-      s.facts = { design_contested: designContested, skip_final_review: false };
+      s.facts = { design_contested: designContested };
       s.budget.astra_left = 3;
     });
     return { h, id, spec, ctx };

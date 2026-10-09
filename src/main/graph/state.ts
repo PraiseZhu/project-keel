@@ -215,7 +215,6 @@ export type Next =
 export interface GraphFacts {
   crosses_function_boundary?: boolean;
   design_contested?: boolean;
-  skip_final_review?: boolean;
   waived_sc?: Array<{ id: string; authorization_source: string }>;
   done_revise?: { missing_sc: string[]; verify_report?: string };
 }

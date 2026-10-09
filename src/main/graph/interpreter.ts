@@ -9,7 +9,7 @@ import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief } from "./brief.ts";
 import { scIdsFromMissing } from "./done.ts";
 import { GATES } from "./gates.ts";
-import { crossesFunctionBoundaryOrUnknown, failureFingerprint, skipFinalReviewFromWriteReports } from "./astra-triggers.ts";
+import { crossesFunctionBoundaryOrUnknown, failureFingerprint } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
 import type { AgentModel, ModelManual, Role, Route } from "../../shared/manual/schema.ts";
 import {
@@ -190,22 +190,7 @@ function edgeOn(spec: GraphSpec, from: string, on: EdgeOn): string | undefined {
   return spec.edges.find((e) => e.from === from && e.on === on)?.to;
 }
 
-function writeNodeReports(state: GraphRunState, spec: GraphSpec): Array<{ files_changed?: readonly string[]; changed_lines?: number }> {
-  const ids = spec.nodes.filter((n) => n.writes).map((n) => n.id);
-  if (state.consult_node?.writes && !ids.includes(state.consult_node.id)) ids.push(state.consult_node.id);
-  const out: Array<{ files_changed?: readonly string[]; changed_lines?: number }> = [];
-  for (const id of ids) {
-    const snap = state.nodes[id]?.last_report;
-    if (snap) out.push(snap);
-  }
-  return out;
-}
-
 function whenOk(node: GraphNode, state: GraphRunState): boolean {
-  if (node.id === "astra-final-review" && state.facts?.skip_final_review) {
-    // A prior FAIL is not evidence for the new HEAD; force another final review.
-    if (state.nodes["astra-final-review"]?.last_report?.verdict !== "FAIL") return false;
-  }
   const w = node.when;
   if (!w || w.kind === "always") return true;
   if (w.kind === "crosses_function_boundary") return state.facts?.crosses_function_boundary === true;
@@ -1057,7 +1042,6 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     functions_touched: event.report?.functions_touched,
     files_changed: files,
   });
-  state.facts.skip_final_review = skipFinalReviewFromWriteReports(writeNodeReports(state, spec));
   const reviewFail = id === "astra-final-review" && event.report?.verdict === "FAIL";
   if (id === ASTRA_CONSULT_ID && state.pending_astra_gate && (status === "done" || status === "partial")) {
     const options = state.pending_astra_gate.options;

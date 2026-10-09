@@ -346,7 +346,7 @@ describe("final FAIL with failed/blocked status still revises", () => {
 });
 
 describe("prior FAIL cannot skip the next astra-final-review", () => {
-  it("wait-ci ok dispatches astra-final-review:2 when last verdict is FAIL even if skip_final_review", async () => {
+  it("wait-ci ok dispatches astra-final-review:2 when last verdict is FAIL", async () => {
     const spec = PSTACK_GRAPHS["bug-fix"];
     const h = fakeHost({
       node: (method: string) => {
@@ -370,7 +370,6 @@ describe("prior FAIL cannot skip the next astra-final-review", () => {
       const s = raw as unknown as GraphRunState;
       s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
       s.cursor = "wait-ci";
-      s.facts = { skip_final_review: true };
       s.budget.astra_left = 3;
       s.nodes["wait-ci"] = { status: "active", attempts: 1 };
       s.nodes["astra-final-review"] = {
@@ -387,41 +386,9 @@ describe("prior FAIL cannot skip the next astra-final-review", () => {
     expect(r.next.dispatch_key).toBe("run-re-review:astra-final-review:2");
     expect(readState(h, "run-re-review").cursor).toBe("astra-final-review");
   });
-
-  it("first-time skip_final_review still skips when there is no prior FAIL", async () => {
-    const spec = PSTACK_GRAPHS["bug-fix"];
-    const h = fakeHost({
-      node: (method: string) => {
-        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: HEAD } };
-        return { ok: false, message: method };
-      },
-    });
-    await createRun(h, {
-      run_id: "run-skip-ok",
-      spec_id: spec.id,
-      profile_id: "sol",
-      lead_harness: "codex",
-      task_type: "bug-fix",
-      entry: "wait-ci",
-      goal: "修登录报错",
-      worktree: WT,
-      now: h.now(),
-    });
-    await withRun(h, "run-skip-ok", (raw) => {
-      const s = raw as unknown as GraphRunState;
-      s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
-      s.cursor = "wait-ci";
-      s.facts = { skip_final_review: true };
-      s.nodes["wait-ci"] = { status: "active", attempts: 1 };
-    });
-    const r = await advance(h, "run-skip-ok", { type: "wait_done", on: "ok" }, { spec });
-    expect(readState(h, "run-skip-ok").cursor).toBe("g-accept");
-    expect(readState(h, "run-skip-ok").nodes["astra-final-review"]?.status).toBe("skipped");
-    expect(r.next.kind).toBe("decide");
-  });
 });
 
-describe("skip_final_review uses run product changes not the last report", () => {
+describe("astra-final-review always dispatches after wait-ci ok", () => {
   async function plantVerifyFinal(runId: string, implementFiles: string[], implementLines: number) {
     const spec = PSTACK_GRAPHS["bug-fix"];
     const h = fakeHost({
@@ -481,7 +448,6 @@ describe("skip_final_review uses run product changes not the last report", () =>
 
   it("still dispatches astra-final-review when a write node changed source and the last node only wrote .keel", async () => {
     const { h, spec } = await plantVerifyFinal("run-keep-review", ["src/login.ts"], 508);
-    expect(readState(h, "run-keep-review").facts?.skip_final_review).toBe(false);
     await withRun(h, "run-keep-review", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.status = "running";
@@ -494,22 +460,24 @@ describe("skip_final_review uses run product changes not the last report", () =>
     if (r.next.kind !== "dispatch") throw new Error("dispatch");
     expect(r.next.dispatch_key).toBe("run-keep-review:astra-final-review:1");
     expect(readState(h, "run-keep-review").cursor).toBe("astra-final-review");
+    expect(readState(h, "run-keep-review").nodes["astra-final-review"]?.status).not.toBe("skipped");
   });
 
-  it("still skips when all write-node product files are docs/tests under the line cap", async () => {
-    const { h, spec } = await plantVerifyFinal("run-docs-skip", ["docs/readme.md", "tests/a.test.ts"], 12);
-    expect(readState(h, "run-docs-skip").facts?.skip_final_review).toBe(true);
-    await withRun(h, "run-docs-skip", (raw) => {
+  it("still dispatches astra-final-review when all write-node product files are docs/tests under the old line cap", async () => {
+    const { h, spec } = await plantVerifyFinal("run-docs-review", ["docs/readme.md", "tests/a.test.ts"], 12);
+    await withRun(h, "run-docs-review", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.status = "running";
       s.next = undefined;
       s.cursor = "wait-ci";
       s.nodes["wait-ci"] = { status: "active", attempts: 1 };
     });
-    const r = await advance(h, "run-docs-skip", { type: "wait_done", on: "ok" }, { spec });
-    expect(readState(h, "run-docs-skip").cursor).toBe("g-accept");
-    expect(readState(h, "run-docs-skip").nodes["astra-final-review"]?.status).toBe("skipped");
-    expect(r.next.kind).toBe("decide");
+    const r = await advance(h, "run-docs-review", { type: "wait_done", on: "ok" }, { spec });
+    expect(r.next.kind).toBe("dispatch");
+    if (r.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(r.next.dispatch_key).toBe("run-docs-review:astra-final-review:1");
+    expect(readState(h, "run-docs-review").cursor).toBe("astra-final-review");
+    expect(readState(h, "run-docs-review").nodes["astra-final-review"]?.status).not.toBe("skipped");
   });
 });
 
@@ -652,7 +620,7 @@ describe("local verify binds worktree HEAD not the remote PR head", () => {
 });
 
 describe("FAIL then small verify report still re-runs final review", () => {
-  it("skip_final_review after FAIL does not consume the old verdict", async () => {
+  it("FAIL then a later .keel-only verify still re-runs final review", async () => {
     const h = fakeHost({ node: (method: string) => verifyNode(method, HEAD_B, HEAD_B) });
     const { runId, key } = await plantVerify(h, "bug-fix", HEAD_B);
     await withRun(h, runId, (raw) => {
@@ -680,7 +648,6 @@ describe("FAIL then small verify report still re-runs final review", () => {
       },
     });
     const afterVerify = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
-    expect(afterVerify.facts?.skip_final_review).toBe(false);
     expect(afterVerify.cursor).toBe("open-pr");
     const opened: any = await runTool(makeContext(h, "c3", profile), "keel_wait", { run_id: runId });
     expect(opened.ok, opened.message).toBe(true);

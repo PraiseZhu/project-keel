@@ -26,22 +26,24 @@ import {
 import {
   acceptCatalogResponse,
   buildSettingsView,
+  catalogArrivalAction,
+  escapeHtml as esc,
   groupModelOptions,
+  renderInheritOptionHtml,
+  renderProfileButtonHtml,
+  renderRowHtml,
   routeAfterAgentChange,
   routeAfterEffortChange,
   routeAfterModelChange,
-  SETTINGS_ROW_IDS,
+  shouldRefreshCatalogOnOpen,
   TASK_SCOPE_TYPES,
   type SettingsHarness,
   type SettingsRowId,
-  type SettingsRowView,
 } from "./settings-model.ts";
 import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
 import { clockTone, renderClockStatus, stopHookTone, type StopHookInstall } from "./hooks-status.ts";
 import { readReplyMode, REPLY_MODE_LABELS, saveReplyMode, type ReplyMode } from "./reply-setting.ts";
 import { parseKvResponse } from "../shared/kv-response.ts";
-
-const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 const io: SettingsIO = {
   async getKv() {
@@ -76,6 +78,9 @@ let taskType: TaskType = "default";
 let catalog: CatalogState = { status: "error", models: [], retry: false, message: "" };
 let catalogSeq = 0;
 let catalogInflight: Promise<CatalogState> | undefined;
+let catalogInteracting = false;
+let catalogProgrammaticFocus = false;
+let pendingCatalog: CatalogState | undefined;
 
 const input = document.querySelector<HTMLInputElement>("#key");
 const statusEl = document.querySelector<HTMLElement>("#status");
@@ -207,34 +212,12 @@ function currentView() {
   return buildSettingsView(draft, { harness, profileId: selectedId, taskType }, catalog.models);
 }
 
-function optionHtml(o: { value: string; label: string; disabled?: boolean }, selected: string): string {
-  return `<option value="${esc(o.value)}"${o.value === selected ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`;
-}
-
-function selectHtml(ctrl: SettingsRowView["agent"], row: SettingsRowId, act: "agent" | "model" | "effort", cls?: string): string {
-  const groups = ctrl.groups.map((g) => `<optgroup label="${esc(g.label)}">${g.options.map((o) => optionHtml(o, ctrl.value)).join("")}</optgroup>`).join("");
-  const options = ctrl.options.map((o) => optionHtml(o, ctrl.value)).join("");
-  return `<select class="${cls ?? act}" data-act="${act}" data-row="${row}" aria-label="${esc(ctrl.label)}"${ctrl.disabled ? " disabled" : ""}>${options}${groups}</select>`;
-}
-
-function renderRow(row: SettingsRowView): string {
-  const locked = row.locked ? " style=\"opacity:.45\"" : "";
-  const pick = `<div class="pick"${locked}>${selectHtml(row.agent, row.id, "agent")}${selectHtml(row.model, row.id, "model", "model")}${selectHtml(row.effort, row.id, "effort")}</div>`;
-  let sub = row.source ?? "";
-  if (row.stale) sub = (sub ? `${sub} · ` : "") + `<span class="stale-reason">${esc(row.stale)}</span>`;
-  if (row.locked) sub = `沿用所有任务的设置 · <button type="button" class="link" data-act="own" data-row="${row.id}">单独设置</button>`;
-  else if (taskType !== "default" && !row.profileLevel && SETTINGS_ROW_IDS.includes(row.id)) {
-    sub = (sub ? `${sub} · ` : "") + `<button type="button" class="link" data-act="inherit-slot" data-row="${row.id}">沿用所有任务</button>`;
-  }
-  return `<div class="row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}"><div class="role"><b>${esc(row.label)}</b><span>${esc(row.description)}</span></div>${pick}${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
-}
-
 function renderAdvanced(view: ReturnType<typeof currentView>): void {
   if (!advancedBody) return;
   const items = profileList(draft, view.profileId);
   const selected = draft.profiles.find((p) => p.id === view.profileId);
-  const inheritOpts = draft.profiles.filter((p) => p.id !== view.profileId).map((p) => `<option value="${esc(p.id)}"${selected?.inherit === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("");
-  const profileBtns = items.map((p) => `<button type="button" data-act="select" data-id="${esc(p.id)}"${p.selected ? " class=\"on\"" : ""}>${esc(p.name)}${p.defaultOf ? ` · ${HARNESS_LABELS[p.defaultOf]}默认` : ""}</button>`).join("");
+  const inheritOpts = draft.profiles.filter((p) => p.id !== view.profileId).map((p) => renderInheritOptionHtml(p, selected?.inherit)).join("");
+  const profileBtns = items.map((p) => renderProfileButtonHtml(p)).join("");
   let fallbacks = "";
   if (selected) {
     const col = selected.nodes[taskType === "default" ? "default" : taskType] ?? selected.nodes.default;
@@ -305,12 +288,17 @@ function renderManual(restore?: { act: string; row: string }): void {
   }
   if (rowsEl) {
     if (view.empty) rowsEl.innerHTML = `<div class="empty">${esc(view.empty)}</div>`;
-    else rowsEl.innerHTML = view.rows.map(renderRow).join("");
+    else rowsEl.innerHTML = view.rows.map((row) => renderRowHtml(row, taskType)).join("");
   }
   renderAdvanced(view);
   if (restore) {
-    const el = document.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]`);
-    el?.focus();
+    catalogProgrammaticFocus = true;
+    try {
+      const el = document.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]`);
+      el?.focus();
+    } finally {
+      catalogProgrammaticFocus = false;
+    }
   }
 }
 
@@ -359,24 +347,54 @@ async function doSave(next = draft): Promise<void> {
   else setManualStatus("error", result.message);
 }
 
+function takePendingCatalog(): boolean {
+  if (!pendingCatalog) return false;
+  catalog = pendingCatalog;
+  pendingCatalog = undefined;
+  return true;
+}
+
+function endSelectInteraction(): void {
+  if (!catalogInteracting) return;
+  catalogInteracting = false;
+  if (takePendingCatalog()) renderManual();
+}
+
 async function refreshCatalog(opts?: { render?: boolean }): Promise<void> {
   const seq = ++catalogSeq;
   if (!catalogInflight) catalogInflight = fetchCatalog(io).finally(() => { catalogInflight = undefined; });
   const next = await catalogInflight;
-  if (!acceptCatalogResponse(catalogSeq, seq)) return;
+  const action = catalogArrivalAction({
+    seqAccepted: acceptCatalogResponse(catalogSeq, seq),
+    interacting: catalogInteracting,
+    render: opts?.render,
+  });
+  if (action === "ignore") return;
+  if (action === "defer") {
+    pendingCatalog = next;
+    return;
+  }
   catalog = next;
-  if (opts?.render !== false) renderManual();
+  pendingCatalog = undefined;
+  if (action === "store-and-render") renderManual();
 }
 
 function onCatalogOpen(ev: Event): void {
   const t = ev.target as HTMLElement;
-  const act = t.getAttribute("data-act");
-  if (act === "model" || act === "effort" || act === "agent") void refreshCatalog();
+  if (!shouldRefreshCatalogOnOpen({ act: t.getAttribute("data-act"), programmatic: catalogProgrammaticFocus })) return;
+  catalogInteracting = true;
+  void refreshCatalog();
 }
 
 rowsEl?.addEventListener("focusin", onCatalogOpen);
 rowsEl?.addEventListener("mousedown", onCatalogOpen);
 rowsEl?.addEventListener("pointerdown", onCatalogOpen);
+rowsEl?.addEventListener("focusout", (ev) => {
+  if (!rowsEl) return;
+  const related = (ev as FocusEvent).relatedTarget as Node | null;
+  if (related && rowsEl.contains(related)) return;
+  endSelectInteraction();
+});
 
 document.querySelector("#model-tabs")?.addEventListener("click", (ev) => {
   const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-harness]");
@@ -484,6 +502,8 @@ function onControlChange(ev: Event): void {
     draft = setHarnessDefault(draft, selectedId, (t as HTMLInputElement).checked);
     renderManual();
   } else if ((act === "agent" || act === "model" || act === "effort") && row) {
+    catalogInteracting = false;
+    takePendingCatalog();
     const view = currentView();
     const cur = view.rows.find((r) => r.id === row);
     if (row === "direction" && act === "model" && t.value === "") {

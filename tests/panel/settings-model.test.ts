@@ -3,18 +3,25 @@ import { setDirectionRoute, setSlot } from "../../src/panel/manual-editor.ts";
 import {
   acceptCatalogResponse,
   buildSettingsView,
+  catalogArrivalAction,
+  escapeHtml,
   groupModelOptions,
+  renderInheritOptionHtml,
+  renderProfileButtonHtml,
+  renderRowHtml,
   routeAfterAgentChange,
   routeAfterEffortChange,
   routeAfterModelChange,
   SETTINGS_ACCORDION_IDS,
   SETTINGS_ROW_IDS,
   SETTINGS_STATUS_IDS,
+  shouldDeferCatalogRender,
+  shouldRefreshCatalogOnOpen,
   visibleModels,
 } from "../../src/panel/settings-model.ts";
-import { DEFAULT_MANUAL, type AgentModel } from "../../src/shared/manual/schema.ts";
+import { cloneManual, DEFAULT_MANUAL, type AgentModel } from "../../src/shared/manual/schema.ts";
 import { appendixCAgentModels } from "../manual/model-manual.test.ts";
-import { readCatalog } from "../../src/panel/manual-editor.ts";
+import { parseImportedJson, readCatalog, saveManual, type SettingsIO } from "../../src/panel/manual-editor.ts";
 
 function model(partial: AgentModel): AgentModel {
   return { name: partial.id, visible: true, ...partial };
@@ -151,5 +158,180 @@ describe("route patch helpers", () => {
     const self = setDirectionRoute(saved, "sol", undefined);
     const again = buildSettingsView(self, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "direction")!;
     expect(again.directionSelf).toBe(true);
+  });
+});
+
+const XSS = "<img src=x onerror=alert(1)>";
+const XSS_ESCAPED = "&lt;img src=x onerror=alert(1)&gt;";
+
+function fakeIo(models: readonly AgentModel[]): SettingsIO {
+  const kv: Record<string, unknown> = {};
+  return {
+    async getKv() { return { ...kv }; },
+    async putKv(next) {
+      for (const k of Object.keys(kv)) delete kv[k];
+      Object.assign(kv, next);
+      return { ok: true, status: 204 };
+    },
+    async getAgentModels() { return { status: 200, body: { ok: true, models } }; },
+    broadcast() {},
+  };
+}
+
+function rowsHtml(view: ReturnType<typeof buildSettingsView>): string {
+  return view.rows.map((row) => renderRowHtml(row, view.taskType)).join("");
+}
+
+describe("catalog interaction lock", () => {
+  it("defers redraw while a select is being operated and ignores programmatic focus", () => {
+    expect(shouldDeferCatalogRender(true)).toBe(true);
+    expect(shouldDeferCatalogRender(false)).toBe(false);
+    expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "effort", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "agent", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic: true })).toBe(false);
+    expect(shouldRefreshCatalogOnOpen({ act: "save", programmatic: false })).toBe(false);
+    expect(catalogArrivalAction({ seqAccepted: true, interacting: true })).toBe("defer");
+    expect(catalogArrivalAction({ seqAccepted: true, interacting: false })).toBe("store-and-render");
+    expect(catalogArrivalAction({ seqAccepted: true, interacting: true, render: false })).toBe("store");
+    expect(catalogArrivalAction({ seqAccepted: false, interacting: false })).toBe("ignore");
+  });
+
+  it("keeps the live select through pointerdown/focus and delayed catalog, then applies after change or blur", () => {
+    let interacting = false;
+    let programmatic = false;
+    let pending = false;
+    let rendered = 0;
+    let stored = 0;
+
+    const arrive = (seqAccepted: boolean, render?: boolean) => {
+      const action = catalogArrivalAction({ seqAccepted, interacting, render });
+      if (action === "ignore") return action;
+      if (action === "defer") {
+        pending = true;
+        return action;
+      }
+      stored += 1;
+      pending = false;
+      if (action === "store-and-render") rendered += 1;
+      return action;
+    };
+
+    expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic })).toBe(true);
+    interacting = true;
+    expect(arrive(true)).toBe("defer");
+    expect(rendered).toBe(0);
+    expect(pending).toBe(true);
+
+    programmatic = true;
+    expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic })).toBe(false);
+    programmatic = false;
+
+    expect(arrive(false)).toBe("ignore");
+    expect(pending).toBe(true);
+
+    interacting = false;
+    if (pending) {
+      pending = false;
+      rendered += 1;
+    }
+    expect(rendered).toBe(1);
+
+    interacting = true;
+    expect(arrive(true, false)).toBe("store");
+    expect(rendered).toBe(1);
+    expect(stored).toBe(1);
+  });
+});
+
+describe("settings HTML escaping", () => {
+  it("escapes inherit id/name, fallback model/provider, lead.model, and catalog labels", async () => {
+    const amp = "a&b\"c<";
+    const parentId = `base${XSS}`;
+    const childId = `child${XSS}`;
+    const parentName = `父${XSS}`;
+    const childName = `子${XSS}`;
+    const base = cloneManual(DEFAULT_MANUAL);
+    const sol = base.profiles[0]!;
+    const grok = base.profiles[1]!;
+    const inheritJson = JSON.stringify({
+      version: 1,
+      profiles: [
+        { ...sol, id: childId, name: childName, inherit: parentId, nodes: {} },
+        { ...sol, id: parentId, name: parentName },
+        grok,
+      ],
+      defaults_by_harness: { ...base.defaults_by_harness, codex: childId },
+    });
+    const parsed = parseImportedJson(inheritJson);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const models = appendixCAgentModels();
+    const saved = await saveManual(fakeIo(models), parsed.manual, models);
+    expect(saved).toMatchObject({ ok: true });
+    const view = buildSettingsView(parsed.manual, { harness: "codex", taskType: "default" }, models);
+    const html = rowsHtml(view);
+    expect(html).not.toMatch(/<img/i);
+    expect(html).toContain(XSS_ESCAPED);
+    expect(html).toContain(`继承自 ${escapeHtml(parentId)}`);
+    expect(view.rows.filter((r) => r.source?.includes(parentId))).toHaveLength(5);
+
+    const chips = renderProfileButtonHtml({ id: childId, name: childName, selected: true, defaultOf: "codex" });
+    expect(chips).not.toMatch(/<img/i);
+    expect(chips).toContain(`data-id="${escapeHtml(childId)}"`);
+    expect(chips).toContain(escapeHtml(childName));
+    expect(renderInheritOptionHtml({ id: parentId, name: parentName }, parentId)).toContain(escapeHtml(parentName));
+
+    const fbJson = JSON.stringify({
+      version: 1,
+      profiles: [
+        {
+          ...sol,
+          nodes: {
+            default: {
+              ...sol.nodes.default,
+              explorer: {
+                primary: sol.nodes.default!.explorer!.primary,
+                fallbacks: [{ agent: "codex", model: XSS, provider_id: XSS }],
+              },
+            },
+          },
+        },
+        grok,
+      ],
+      defaults_by_harness: base.defaults_by_harness,
+    });
+    const fbParsed = parseImportedJson(fbJson);
+    expect(fbParsed.ok).toBe(true);
+    if (!fbParsed.ok) return;
+    const fbModels = [
+      ...models,
+      model({ id: XSS, agent: "codex", providerId: XSS, name: XSS, providerName: XSS, efforts: ["high"] }),
+    ];
+    expect(await saveManual(fakeIo(fbModels), fbParsed.manual, fbModels)).toMatchObject({ ok: true });
+    const fbHtml = rowsHtml(buildSettingsView(fbParsed.manual, { harness: "codex", taskType: "default" }, fbModels));
+    expect(fbHtml).not.toMatch(/<img/i);
+    expect(fbHtml).toContain(`备用：Codex · ${XSS_ESCAPED} · ${XSS_ESCAPED}`);
+
+    const leadJson = JSON.stringify({
+      version: 1,
+      profiles: [{ ...sol, lead: { ...sol.lead, model: XSS } }, grok],
+      defaults_by_harness: base.defaults_by_harness,
+    });
+    const leadParsed = parseImportedJson(leadJson);
+    expect(leadParsed.ok).toBe(true);
+    if (!leadParsed.ok) return;
+    const leadModels = [
+      ...models,
+      model({ id: XSS, agent: "codex", providerId: sol.lead.provider_id, name: XSS, providerName: amp, efforts: ["high"] }),
+    ];
+    expect(await saveManual(fakeIo(leadModels), leadParsed.manual, leadModels)).toMatchObject({ ok: true });
+    const leadView = buildSettingsView(leadParsed.manual, { harness: "codex", taskType: "default" }, leadModels);
+    const leadHtml = rowsHtml(leadView);
+    expect(leadHtml).not.toMatch(/<img/i);
+    expect(leadHtml).toContain(`只列比主控（${XSS_ESCAPED}）强或持平的模型`);
+    expect(leadHtml).toContain(escapeHtml(amp));
+    expect(leadHtml).toContain("&amp;");
+    expect(leadHtml).toContain("&quot;");
   });
 });

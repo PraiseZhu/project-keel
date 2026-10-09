@@ -1,4 +1,4 @@
-// Pure view-data for the settings model page. DOM stays in settings.ts.
+// Pure view-data and HTML fragments for the settings model page. Event wiring stays in settings.ts.
 
 import { resolve, resolveDirection } from "../shared/manual/resolve.ts";
 import { directionOptions } from "../shared/manual/model-tiers.ts";
@@ -143,6 +143,64 @@ export function groupModelOptions(models: readonly AgentModel[], agent: string):
 
 export function acceptCatalogResponse(latestSeq: number, responseSeq: number): boolean {
   return latestSeq === responseSeq;
+}
+
+export function escapeHtml(s: unknown): string {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+}
+
+/** True when a catalog refresh must not rebuild the select the user is operating. */
+export function shouldDeferCatalogRender(interacting: boolean): boolean {
+  return interacting;
+}
+
+/** Ignore programmatic focus after a rebuild so it cannot restart the catalog refresh loop. */
+export function shouldRefreshCatalogOnOpen(opts: { act: string | null; programmatic: boolean }): boolean {
+  if (opts.programmatic) return false;
+  return opts.act === "model" || opts.act === "effort" || opts.act === "agent";
+}
+
+export type CatalogArrivalAction = "ignore" | "store" | "defer" | "store-and-render";
+
+export function catalogArrivalAction(opts: {
+  seqAccepted: boolean;
+  interacting: boolean;
+  render?: boolean;
+}): CatalogArrivalAction {
+  if (!opts.seqAccepted) return "ignore";
+  if (opts.render === false) return "store";
+  if (shouldDeferCatalogRender(opts.interacting)) return "defer";
+  return "store-and-render";
+}
+
+export function renderOptionHtml(o: SelectOption, selected: string): string {
+  return `<option value="${escapeHtml(o.value)}"${o.value === selected ? " selected" : ""}${o.disabled ? " disabled" : ""}>${escapeHtml(o.label)}</option>`;
+}
+
+export function renderSelectHtml(ctrl: SelectControl, row: SettingsRowId, act: "agent" | "model" | "effort", cls?: string): string {
+  const groups = ctrl.groups.map((g) => `<optgroup label="${escapeHtml(g.label)}">${g.options.map((o) => renderOptionHtml(o, ctrl.value)).join("")}</optgroup>`).join("");
+  const options = ctrl.options.map((o) => renderOptionHtml(o, ctrl.value)).join("");
+  return `<select class="${cls ?? act}" data-act="${act}" data-row="${escapeHtml(row)}" aria-label="${escapeHtml(ctrl.label)}"${ctrl.disabled ? " disabled" : ""}>${options}${groups}</select>`;
+}
+
+export function renderRowHtml(row: SettingsRowView, taskType: TaskType): string {
+  const locked = row.locked ? " style=\"opacity:.45\"" : "";
+  const pick = `<div class="pick"${locked}>${renderSelectHtml(row.agent, row.id, "agent")}${renderSelectHtml(row.model, row.id, "model", "model")}${renderSelectHtml(row.effort, row.id, "effort")}</div>`;
+  let sub = row.source ? escapeHtml(row.source) : "";
+  if (row.stale) sub = (sub ? `${sub} · ` : "") + `<span class="stale-reason">${escapeHtml(row.stale)}</span>`;
+  if (row.locked) sub = `沿用所有任务的设置 · <button type="button" class="link" data-act="own" data-row="${escapeHtml(row.id)}">单独设置</button>`;
+  else if (taskType !== "default" && !row.profileLevel && SETTINGS_ROW_IDS.includes(row.id)) {
+    sub = (sub ? `${sub} · ` : "") + `<button type="button" class="link" data-act="inherit-slot" data-row="${escapeHtml(row.id)}">沿用所有任务</button>`;
+  }
+  return `<div class="row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}"><div class="role"><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.description)}</span></div>${pick}${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+export function renderProfileButtonHtml(p: { id: string; name: string; selected?: boolean; defaultOf?: Harness }): string {
+  return `<button type="button" data-act="select" data-id="${escapeHtml(p.id)}"${p.selected ? " class=\"on\"" : ""}>${escapeHtml(p.name)}${p.defaultOf ? ` · ${HARNESS_LABELS[p.defaultOf]}默认` : ""}</button>`;
+}
+
+export function renderInheritOptionHtml(p: { id: string; name: string }, selectedId?: string): string {
+  return `<option value="${escapeHtml(p.id)}"${selectedId === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`;
 }
 
 function agentControl(id: string, value: Harness, disabled: boolean): SelectControl {

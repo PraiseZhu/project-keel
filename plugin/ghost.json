@@ -191,6 +191,10 @@
               "type": "string"
             },
             "description": "写域 glob，写入 planned_params / brief。变更类与 pr 类有写代码节点，必须传，缺则 SCOPE_REQUIRED；investigation 可不传。"
+          },
+          "base_ref": {
+            "type": "string",
+            "description": "可选：叠在哪个分支上做（如上一个 PR 的分支）。变更类 worktree 从 origin/<base_ref> 起步，开 PR 时以它为 base；缺省用仓库默认分支。"
           }
         },
         "required": [

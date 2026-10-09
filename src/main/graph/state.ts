@@ -258,6 +258,8 @@ export interface GraphRunState {
   sol_decisions: GateAnswer[];
   astra_calls: number;
   scopeAllow?: readonly string[];
+  /** Stacked-PR base branch; open-pr targets it when no PR is bound yet. */
+  base_ref?: string;
   gate_cache?: Record<string, unknown>;
   budget: { astra_left: number };
   verdict?: Verdict;
@@ -298,6 +300,7 @@ export interface InitRunOpts {
   now?: number;
   author_families?: string[];
   scopeAllow?: readonly string[];
+  base_ref?: string;
 }
 
 
@@ -336,6 +339,7 @@ export function initGraphState(opts: InitRunOpts): GraphRunState {
     facts: opts.facts,
     late_reports: [],
     ...(opts.scopeAllow ? { scopeAllow: opts.scopeAllow } : {}),
+    ...(opts.base_ref ? { base_ref: opts.base_ref } : {}),
   };
 }
 

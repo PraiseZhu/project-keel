@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { makeContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
 import { buildBrief } from "../../src/main/graph/brief.ts";
-import { createRun } from "../../src/main/graph/interpreter.ts";
+import { advance, createRun } from "../../src/main/graph/interpreter.ts";
+import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
@@ -137,3 +138,43 @@ describe("R33D-03 rereview: no unchecked read-only path", () => {
   });
 });
 
+
+describe("keel_run base_ref stacks a change on another PR branch", () => {
+  it("creates the worktree from origin/<base_ref> and opens the PR against it", async () => {
+    const h = fakeHost({
+      node: (m: string) => {
+        if (m === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "abc" } };
+        if (m === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        return { ok: false, message: m };
+      },
+    });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"], base_ref: "keel/pr7-tool-consolidation",
+    });
+    expect(r.ok).toBe(true);
+    expect(h.nodeCalls.find((c) => c.method === "worktree/create")?.params).toMatchObject({ base_ref: "origin/keel/pr7-tool-consolidation" });
+    const path = [...h.files.keys()].find((k) => k.endsWith("graph-state.json"))!;
+    const st = JSON.parse(h.files.get(path)!) as GraphRunState;
+    expect(st.base_ref).toBe("keel/pr7-tool-consolidation");
+  });
+
+  it("open-pr uses base_ref as the PR base when no PR is bound", async () => {
+    const h = fakeHost();
+    const spec = PSTACK_GRAPHS.pr;
+    await createRun(h, {
+      run_id: "run-base", spec_id: spec.id, profile_id: "sol", lead_harness: "codex", task_type: "pr",
+      entry: "open-pr", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), base_ref: "keel/pr7-tool-consolidation",
+    });
+    const r = await advance(h, "run-base", { type: "tick" }, { spec });
+    if (r.next.kind !== "wait") throw new Error("wait");
+    expect(r.next.call.args).toMatchObject({ base: "keel/pr7-tool-consolidation" });
+  });
+
+  it("rejects a base_ref that is not a plain branch name", async () => {
+    const h = fakeHost({ node: (m: string) => ({ ok: false, message: m }) });
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
+      goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"], base_ref: "main;rm -rf /",
+    });
+    expect(r.errorCode).toBe("INVALID_INPUT");
+  });
+});

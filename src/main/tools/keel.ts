@@ -253,7 +253,9 @@ async function materializeRun(
       }
       worktree = wt.path;
     } else {
-      const wt = await node<{ path?: string }>(ctx, "worktree/create", { repo_dir: pending.repo_dir, name: `keel-${runId}` });
+      const wt = await node<{ path?: string }>(ctx, "worktree/create", {
+        repo_dir: pending.repo_dir, name: `keel-${runId}`, ...(pending.base_ref ? { base_ref: `origin/${pending.base_ref}` } : {}),
+      });
       worktree = wt.path;
     }
   } catch (e) {
@@ -280,6 +282,7 @@ async function materializeRun(
     astra_budget: cfg.limits.astraBudget,
     now: ctx.host.now(),
     ...(pending.scope ? { scopeAllow: pending.scope } : {}),
+    ...(pending.base_ref ? { base_ref: pending.base_ref } : {}),
   });
   await ctx.host.fs({ op: "delete", root: "data", path: routePendingPath(runId) });
   return step(ctx, runId, { type: "tick" });
@@ -867,6 +870,8 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
   const pr = typeof args.pr === "number" || typeof args.pr === "string" ? args.pr : undefined;
   const sc = normalizeSc(args.sc);
   const scopeAllow = Array.isArray(args.scope) && args.scope.every((x) => typeof x === "string") ? (args.scope as string[]) : undefined;
+  const baseRef = str(args.base_ref);
+  if (baseRef !== undefined && !/^[A-Za-z0-9._/-]+$/.test(baseRef)) throw new KeelError("INVALID_INPUT", "base_ref 只能是分支名（字母、数字、. _ / -）。", { field: "base_ref" });
   const pendingBase = (): RoutePending => ({
     goal,
     repo_dir: repoDir,
@@ -877,6 +882,7 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     ...(scopeAllow ? { scope: scopeAllow } : {}),
     ...(pr !== undefined ? { pr } : {}),
     ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+    ...(baseRef ? { base_ref: baseRef } : {}),
   });
   if (!picked.profile) {
     const pending = pendingBase();
@@ -929,6 +935,7 @@ export async function keelRun(ctx: ToolContext, args: Record<string, unknown>) {
     ...(scopeAllow ? { scope: scopeAllow } : {}),
     ...(pr !== undefined ? { pr } : {}),
     ...(str(args.branch) ? { branch: str(args.branch) } : {}),
+    ...(baseRef ? { base_ref: baseRef } : {}),
   }, routed.taskType);
   return pack(runId, picked.profile, out.next, { spec_id: PSTACK_GRAPHS[routed.taskType].id, worktree: out.state.worktree });
 }

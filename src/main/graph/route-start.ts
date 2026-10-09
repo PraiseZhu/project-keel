@@ -18,6 +18,8 @@ export interface RoutePending {
   readonly scope?: string[];
   readonly pr?: number | string;
   readonly branch?: string;
+  /** Branch a change run stacks on (worktree base and PR base); defaults to the repo default branch. */
+  readonly base_ref?: string;
 }
 
 export function isGraphTaskType(v: string): v is GraphTaskType {

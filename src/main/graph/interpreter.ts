@@ -397,7 +397,7 @@ function nextWait(state: GraphRunState): Next {
           ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
           sections: prOpenSections(state),
           push: true,
-          ...(state.pr_binding?.base_ref ? { base: state.pr_binding.base_ref } : {}),
+          ...(state.pr_binding?.base_ref ?? state.base_ref ? { base: state.pr_binding?.base_ref ?? state.base_ref } : {}),
         },
       },
       note: "主控先调用 pr_open（authorization_source 由主控按用户授权填写），再调用 keel_wait。",

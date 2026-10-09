@@ -174,4 +174,23 @@ describe("configured Vigil author handoff through the real Keel tool/RPC path", 
     expect(await f.ready()).toMatchObject({ ok: false, errorCode: "GATE_NOT_MET" });
     expect(f.read().pr.isDraft).toBe(true); expect(f.read().comments).toHaveLength(0);
   });
+
+  it("kv.lanes helper path is used when packed profile lanes are empty, and status is stopped_after_handoff", async () => {
+    const f = fixture();
+    const helperPath = f.ctx.profile.lanes[0]?.handoffHelperPath;
+    expect(helperPath).toBeTruthy();
+    f.host.kv.lanes = [{ repo, preset: "draft-gated-handoff", handoffHelperPath: helperPath }];
+    const ctx = makeContext(f.host, "kv-lanes", { lanes: [], routingPath: null, plansDir: null, boardRepos: [] });
+    const ready = () => runTool(ctx, "pr_ready", {
+      repo, pr: 7,
+      authorization_source: "User authorized handoff of this fixture PR",
+      review_entry: { head_sha: head, checked_at: new Date(f.host.now()).toISOString(), result: "pass", source: "isolated review-entry fixture" },
+    });
+    expect(await ready()).toMatchObject({ ok: true, result: { handed_off: true, handoff: { watcher_receipt: { head } } } });
+    expect(await runTool(ctx, "pr_status", { repo, pr: 7 })).toMatchObject({
+      ok: true,
+      result: { handedOff: true, nextAction: "stopped_after_handoff" },
+    });
+    expect(f.read().comments).toHaveLength(1);
+  });
 });

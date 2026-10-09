@@ -175,6 +175,17 @@ export function setLead(manual: ModelManual, id: string, lead: Route): ModelManu
   return patchProfile(manual, id, (p) => ({ ...p, lead }));
 }
 
+/** undefined = 同方案 (drop final_review_route). Route = store the tuple on this profile. */
+export function setFinalReviewRoute(manual: ModelManual, id: string, route?: Route): ModelManual {
+  return patchProfile(manual, id, (p) => {
+    if (!route) {
+      const { final_review_route: _drop, ...rest } = p;
+      return rest;
+    }
+    return { ...p, final_review_route: route };
+  });
+}
+
 export function setInherit(manual: ModelManual, id: string, inherit: string | undefined): ModelManual {
   return patchProfile(manual, id, (p) => {
     if (!inherit) {

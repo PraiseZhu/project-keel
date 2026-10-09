@@ -14,6 +14,7 @@ import {
   renameProfile,
   saveManual,
   setDirectionRoute,
+  setFinalReviewRoute,
   setHarnessDefault,
   setInherit,
   setLead,
@@ -35,6 +36,7 @@ import {
   routeAfterAgentChange,
   routeAfterEffortChange,
   routeAfterModelChange,
+  SETTINGS_ROW_IDS,
   shouldRefreshCatalogOnOpen,
   TASK_SCOPE_TYPES,
   type SettingsHarness,
@@ -291,15 +293,26 @@ function renderManual(restore?: { act: string; row: string }): void {
     else rowsEl.innerHTML = view.rows.map((row) => renderRowHtml(row, taskType)).join("");
   }
   renderAdvanced(view);
-  if (restore) {
+  if (restore && rowsEl) {
     catalogProgrammaticFocus = true;
     try {
-      const el = document.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]`);
-      el?.focus();
+      const el = rowsEl.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]`);
+      if (el && typeof el.focus === "function" && !(el as HTMLSelectElement).disabled) el.focus();
     } finally {
       catalogProgrammaticFocus = false;
     }
   }
+}
+
+function focusedModelControl(): { act: string; row: string } | undefined {
+  const el = document.activeElement;
+  if (!el || !rowsEl?.contains(el)) return undefined;
+  if (el.tagName !== "SELECT") return undefined;
+  const act = el.getAttribute("data-act");
+  const row = el.getAttribute("data-row");
+  if (act !== "agent" && act !== "model" && act !== "effort") return undefined;
+  if (!row || !(SETTINGS_ROW_IDS as readonly string[]).includes(row)) return undefined;
+  return { act, row };
 }
 
 function currentSlot(role: Role): Slot {
@@ -317,6 +330,10 @@ function applyRowRoute(row: SettingsRowId, next: Route): void {
   }
   if (row === "direction") {
     draft = setDirectionRoute(draft, selectedId, next.model && next.provider_id ? next : undefined);
+    return;
+  }
+  if (row === "final-review") {
+    draft = setFinalReviewRoute(draft, selectedId, next.model && next.provider_id ? next : undefined);
     return;
   }
   const role = row as Role;
@@ -376,7 +393,7 @@ async function refreshCatalog(opts?: { render?: boolean }): Promise<void> {
   }
   catalog = next;
   pendingCatalog = undefined;
-  if (action === "store-and-render") renderManual();
+  if (action === "store-and-render") renderManual(focusedModelControl());
 }
 
 function onCatalogOpen(ev: Event): void {
@@ -508,6 +525,11 @@ function onControlChange(ev: Event): void {
     const cur = view.rows.find((r) => r.id === row);
     if (row === "direction" && act === "model" && t.value === "") {
       if (selectedId) draft = setDirectionRoute(draft, selectedId, undefined);
+      renderManual({ act, row });
+      return;
+    }
+    if (row === "final-review" && act === "model" && t.value === "") {
+      if (selectedId) draft = setFinalReviewRoute(draft, selectedId, undefined);
       renderManual({ act, row });
       return;
     }

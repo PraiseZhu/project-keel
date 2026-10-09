@@ -1,6 +1,6 @@
 // Pure view-data and HTML fragments for the settings model page. Event wiring stays in settings.ts.
 
-import { resolve, resolveDirection } from "../shared/manual/resolve.ts";
+import { resolve, resolveDirection, resolveFinalReview } from "../shared/manual/resolve.ts";
 import { directionOptions } from "../shared/manual/model-tiers.ts";
 import {
   HARNESSES,
@@ -19,7 +19,7 @@ import { findModel, HARNESS_LABELS, materializeSlot, routeFromModel, staleReason
 
 export const SETTINGS_STATUS_IDS = ["jev", "catalog", "hooks", "clock"] as const;
 export const SETTINGS_ACCORDION_IDS = ["jev", "lanes", "advanced"] as const;
-export const SETTINGS_ROW_IDS = ["lead", "direction", "explorer", "researcher", "worker", "verifier", "architect"] as const;
+export const SETTINGS_ROW_IDS = ["lead", "direction", "explorer", "researcher", "worker", "verifier", "architect", "final-review"] as const;
 export type SettingsRowId = (typeof SETTINGS_ROW_IDS)[number];
 export type SettingsHarness = "codex" | "claude-code";
 
@@ -30,7 +30,8 @@ export const SETTINGS_ROW_META: Record<SettingsRowId, { label: string; descripti
   researcher: { label: "研究", description: "查资料、核对接口" },
   worker: { label: "实现", description: "复现、写代码、提交" },
   verifier: { label: "验证", description: "换一个模型复核" },
-  architect: { label: "方案与终审", description: "定方案、最终审查" },
+  architect: { label: "方案", description: "定方案" },
+  "final-review": { label: "终审", description: "最终审查" },
 };
 
 export const TASK_SCOPE_TYPES: readonly Exclude<TaskType, "default">[] = ["bug-fix", "feature", "refactoring", "investigation", "pr"];
@@ -371,6 +372,48 @@ function leadRow(profile: Profile, models: readonly AgentModel[], profileLevelNo
   };
 }
 
+function finalReviewRow(manual: ModelManual, profile: Profile, taskType: TaskType, models: readonly AgentModel[], profileLevelNote: boolean): SettingsRowView {
+  const explicit = profile.final_review_route;
+  let effective: Route | undefined;
+  try {
+    effective = resolveFinalReview(manual, profile.id, taskType).primary;
+  } catch {
+    effective = profile.nodes.default?.architect?.primary;
+  }
+  const agent = (explicit?.agent ?? effective?.agent ?? profile.harness) as Harness;
+  const displayRoute: Route | undefined = explicit ?? (agent ? { agent, model: "", provider_id: "", ...(effective?.effort ? { effort: effective.effort } : {}) } : undefined);
+  const hit = explicit
+    ? findModel(models, explicit.agent, explicit.model, explicit.provider_id)
+    : (effective ? findModel(models, effective.agent, effective.model, effective.provider_id) : undefined);
+  const visibleHit = hit?.visible === true ? hit : undefined;
+  let source = explicit
+    ? undefined
+    : (effective ? `同方案（${HARNESS_LABELS[effective.agent]} · ${effective.model} · ${effective.provider_id}）` : "同方案");
+  if (profileLevelNote) source = source ? `作用于所有任务。${source}` : "作用于所有任务";
+  const groups: SelectGroup[] = groupModelOptions(models, agent).map((g) => ({
+    label: g.label,
+    options: g.options.map((o) => ({ value: o.value, label: o.label })),
+  }));
+  return {
+    id: "final-review",
+    ...SETTINGS_ROW_META["final-review"],
+    lead: false,
+    route: displayRoute,
+    source,
+    stale: explicit ? staleReason(explicit, models) : undefined,
+    locked: false,
+    profileLevel: true,
+    directionSelf: false,
+    agent: agentControl("final-review", agent, false),
+    model: modelControl("final-review", explicit, models, false, {
+      firstOption: { value: "", label: "同方案" },
+      groups,
+      placeholder: explicit ? undefined : "同方案",
+    }),
+    effort: effortControl("final-review", explicit ?? effective, visibleHit ?? hit, !explicit),
+  };
+}
+
 function directionRow(manual: ModelManual, profile: Profile, taskType: TaskType, models: readonly AgentModel[], profileLevelNote: boolean): SettingsRowView {
   const self = !profile.direction_route && profile.direction_gate !== "astra";
   let route: Route | undefined;
@@ -455,6 +498,7 @@ export function buildSettingsView(
     leadRow(profile, catalog, profileLevelNote),
     directionRow(manual, profile, taskType, catalog, profileLevelNote),
     ...ROLES.map((role) => roleRow(role, manual, profile, taskType, catalog)),
+    finalReviewRow(manual, profile, taskType, catalog, profileLevelNote),
   ];
   return {
     ...base,

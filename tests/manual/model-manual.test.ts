@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { KeelError } from "../../src/main/host.ts";
 import { resolve, resolveProfileForHarness } from "../../src/main/manual/resolve.ts";
 import { family } from "../../src/shared/fanout.ts";
-import { resolveDirection } from "../../src/shared/manual/resolve.ts";
+import { resolveDirection, resolveFinalReview } from "../../src/shared/manual/resolve.ts";
 import {
   cloneManual,
   DEFAULT_MANUAL,
@@ -93,6 +93,7 @@ describe("Appendix C defaults", () => {
     expect(grok.inherit).toBeUndefined();
     expect(grok.direction_gate).toBe("astra");
     expect(grok.direction_route).toEqual({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
+    expect(grok.final_review_route).toEqual({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
     expect(grok.lead).toEqual({ agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "high" });
     expect(grok.nodes.default?.explorer?.primary).toEqual({ agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "medium" });
     expect(grok.nodes.default?.researcher?.primary).toEqual({ agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "high" });
@@ -107,6 +108,8 @@ describe("Appendix C defaults", () => {
     const sol = resolveProfileForHarness(DEFAULT_MANUAL, "codex");
     expect(sol.direction_gate).toBe("lead");
     expect(sol.direction_route).toBeUndefined();
+    expect(sol.final_review_route).toBeUndefined();
+    expect("final_review_route" in sol).toBe(false);
     expect(sol.lead).toEqual({ agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" });
     expect(sol.nodes.default?.explorer?.primary).toMatchObject({ model: "gpt-6-luna", effort: "medium" });
     expect(sol.nodes.default?.researcher?.primary).toMatchObject({ model: "gpt-6-luna", effort: "high" });
@@ -276,6 +279,38 @@ describe("validateManual", () => {
       profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, direction_route: { agent: "codex" } } : p),
     })).toThrow(expect.objectContaining({ code: "MANUAL_INVALID", path: expect.stringContaining("direction_route") }));
   });
+
+  it("parses and validates final_review_route; omitted field is not filled in", () => {
+    const raw = cloneManual(DEFAULT_MANUAL);
+    const parsed = parseManual({
+      ...raw,
+      profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_route: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" } } : p),
+    });
+    expect(parsed.profiles[0]!.final_review_route).toEqual({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    expect(importManual(exportManual(parsed))).toEqual(parsed);
+    expect(validateManual(parsed, appendixCAgentModels(), { manual: parsed })).toEqual([]);
+
+    const omitted = parseManual(legacyGrokInheritManual());
+    expect(omitted.profiles[1]!.final_review_route).toBeUndefined();
+    expect("final_review_route" in omitted.profiles[1]!).toBe(false);
+
+    const bad = cloneManual(parsed);
+    (bad.profiles[0] as { final_review_route: Route }).final_review_route = { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "ultra" };
+    expect(validateManual(bad, appendixCAgentModels(), { manual: bad }).some((i) => i.path.includes("final_review_route") && i.message.includes("ultra"))).toBe(true);
+
+    const missing = cloneManual(parsed);
+    (missing.profiles[0] as { final_review_route: Route }).final_review_route = { agent: "codex", model: "no-such-model", provider_id: "art-cindy", effort: "xhigh" };
+    expect(validateManual(missing, appendixCAgentModels(), { manual: missing }).some((i) => i.path.includes("final_review_route") && i.message.includes("不存在"))).toBe(true);
+
+    expect(() => parseManual({
+      ...raw,
+      profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_route: { agent: "codex" } } : p),
+    })).toThrow(expect.objectContaining({ code: "MANUAL_INVALID", path: expect.stringContaining("final_review_route") }));
+    expect(() => parseManual({
+      ...raw,
+      profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_route: null } : p),
+    })).toThrow(expect.objectContaining({ code: "MANUAL_INVALID", path: expect.stringContaining("final_review_route") }));
+  });
 });
 
 describe("resolveDirection", () => {
@@ -298,5 +333,60 @@ describe("resolveDirection", () => {
       },
     };
     expect(resolveDirection(tasked, "sol", "feature").primary.model).toBe("gpt-6-luna");
+  });
+});
+
+describe("resolveFinalReview", () => {
+  it("uses final_review_route when present and otherwise the architect slot including inherit", () => {
+    expect(resolveFinalReview(DEFAULT_MANUAL, "sol", "default")).toEqual(resolve(DEFAULT_MANUAL, "sol", "default", "architect"));
+    expect(resolveFinalReview(DEFAULT_MANUAL, "grok", "default")).toEqual({
+      primary: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" },
+      fallbacks: [],
+    });
+
+    const inherited = legacyGrokInheritManual();
+    expect(resolveFinalReview(inherited, "grok", "feature").primary).toMatchObject({ model: "gpt-6-astra" });
+    expect(resolveFinalReview(inherited, "grok", "bug-fix").fallbacks.length).toBeGreaterThan(0);
+
+    const tasked = cloneManual(DEFAULT_MANUAL);
+    (tasked.profiles[0] as { nodes: Profile["nodes"] }).nodes = {
+      ...tasked.profiles[0]!.nodes,
+      feature: {
+        architect: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } },
+      },
+    };
+    expect(resolveFinalReview(tasked, "sol", "feature").primary.model).toBe("gpt-6-luna");
+  });
+
+  it("does not inherit a parent final_review_route", () => {
+    const lead = { agent: "codex" as const, model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" };
+    const parentArch = { agent: "codex" as const, model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" };
+    const manual: ModelManual = {
+      version: 1,
+      profiles: [
+        {
+          id: "parent",
+          name: "parent",
+          harness: "codex",
+          lead,
+          direction_gate: "lead",
+          final_review_route: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" },
+          nodes: { default: { architect: { primary: parentArch } } },
+        },
+        {
+          id: "kid",
+          name: "kid",
+          harness: "codex",
+          lead,
+          direction_gate: "lead",
+          inherit: "parent",
+          nodes: {},
+        },
+      ],
+      defaults_by_harness: { codex: "parent" },
+    };
+    expect(resolveFinalReview(manual, "kid", "default")).toEqual({ primary: parentArch, fallbacks: [] });
+    expect(resolveFinalReview(manual, "parent", "default").fallbacks).toEqual([]);
+    expect(() => resolveFinalReview(DEFAULT_MANUAL, "missing", "default")).toThrow(expect.objectContaining({ code: "PROFILE_UNKNOWN" }));
   });
 });

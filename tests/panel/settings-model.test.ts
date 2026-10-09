@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { setDirectionRoute, setSlot } from "../../src/panel/manual-editor.ts";
+import { setDirectionRoute, setFinalReviewRoute, setSlot } from "../../src/panel/manual-editor.ts";
 import {
   acceptCatalogResponse,
   buildSettingsView,
@@ -28,7 +28,7 @@ function model(partial: AgentModel): AgentModel {
 }
 
 describe("buildSettingsView", () => {
-  it("renders two harness tabs with the same seven rows and three controls", () => {
+  it("renders two harness tabs with the same eight rows and three controls", () => {
     const models = appendixCAgentModels();
     for (const harness of ["codex", "claude-code"] as const) {
       const view = buildSettingsView(DEFAULT_MANUAL, { harness, taskType: "default" }, models);
@@ -38,7 +38,9 @@ describe("buildSettingsView", () => {
       expect(view.accordionIds).toEqual([...SETTINGS_ACCORDION_IDS]);
       expect(view.rowIds).toEqual([...SETTINGS_ROW_IDS]);
       expect(view.rows.map((r) => r.id)).toEqual([...SETTINGS_ROW_IDS]);
-      expect(view.rows).toHaveLength(7);
+      expect(view.rows).toHaveLength(8);
+      expect(view.rows.find((r) => r.id === "architect")?.label).toBe("方案");
+      expect(view.rows.find((r) => r.id === "final-review")?.label).toBe("终审");
       for (const row of view.rows) {
         expect(row.agent.label).toBe("运行环境");
         expect(row.model.label).toBe("模型");
@@ -82,6 +84,37 @@ describe("buildSettingsView", () => {
     expect(after.rows.find((r) => r.id === "worker")?.locked).toBe(false);
     expect(after.overrideCount).toBe(1);
     expect(buildSettingsView(owned, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")?.route?.effort).toBe("medium");
+    const fr = view.rows.find((r) => r.id === "final-review")!;
+    expect(fr.profileLevel).toBe(true);
+    expect(fr.locked).toBe(false);
+    expect(fr.source).toMatch(/作用于所有任务/);
+    expect(rowsHtml(view)).not.toMatch(/data-act="own" data-row="final-review"/);
+    expect(rowsHtml(view)).not.toMatch(/data-act="inherit-slot" data-row="final-review"/);
+  });
+
+  it("final-review is 同方案 on Codex and explicit Astra on Claude, listing all visible models", () => {
+    const models = appendixCAgentModels();
+    const codex = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const fr = codex.rows.find((r) => r.id === "final-review")!;
+    expect(fr.model.options[0]).toMatchObject({ value: "", label: "同方案" });
+    expect(fr.model.value).toBe("");
+    expect(fr.agent.disabled).toBe(false);
+    expect(fr.effort.disabled).toBe(true);
+    expect(fr.source).toMatch(/同方案/);
+    expect(fr.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(true);
+    const switched = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
+    const after = buildSettingsView(switched, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
+    expect(after.agent.value).toBe("claude-code");
+    expect(after.model.value).toBe("anthropic/claude-opus-5-5\txd");
+    expect(after.effort.disabled).toBe(false);
+    expect(after.effort.value).toBe("xhigh");
+
+    const claude = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
+    expect(claude.rows.find((r) => r.id === "architect")?.route).toMatchObject({ model: "anthropic/claude-opus-5-5", effort: "xhigh" });
+    const cfr = claude.rows.find((r) => r.id === "final-review")!;
+    expect(cfr.route).toMatchObject({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    expect(cfr.model.options[0]).toMatchObject({ value: "", label: "同方案" });
+    expect(cfr.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(true);
   });
 });
 
@@ -158,6 +191,18 @@ describe("route patch helpers", () => {
     const self = setDirectionRoute(saved, "sol", undefined);
     const again = buildSettingsView(self, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "direction")!;
     expect(again.directionSelf).toBe(true);
+  });
+
+  it("setFinalReviewRoute round-trips through the view and 同方案 drops the field", () => {
+    const models = appendixCAgentModels();
+    const saved = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    const row = buildSettingsView(saved, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
+    expect(row.model.value).toBe("gpt-6-luna\tart-cindy");
+    const self = setFinalReviewRoute(saved, "sol", undefined);
+    expect("final_review_route" in self.profiles[0]!).toBe(false);
+    const again = buildSettingsView(self, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
+    expect(again.model.value).toBe("");
+    expect(again.model.options[0]?.label).toBe("同方案");
   });
 });
 
@@ -333,5 +378,22 @@ describe("settings HTML escaping", () => {
     expect(leadHtml).toContain(escapeHtml(amp));
     expect(leadHtml).toContain("&amp;");
     expect(leadHtml).toContain("&quot;");
+
+    const frJson = JSON.stringify({
+      version: 1,
+      profiles: [{ ...sol, final_review_route: { agent: "codex", model: XSS, provider_id: XSS, effort: "high" } }, grok],
+      defaults_by_harness: base.defaults_by_harness,
+    });
+    const frParsed = parseImportedJson(frJson);
+    expect(frParsed.ok).toBe(true);
+    if (!frParsed.ok) return;
+    const frModels = [
+      ...models,
+      model({ id: XSS, agent: "codex", providerId: XSS, name: XSS, providerName: XSS, efforts: ["high"] }),
+    ];
+    expect(await saveManual(fakeIo(frModels), frParsed.manual, frModels)).toMatchObject({ ok: true });
+    const frHtml = rowsHtml(buildSettingsView(frParsed.manual, { harness: "codex", taskType: "default" }, frModels));
+    expect(frHtml).not.toMatch(/<img/i);
+    expect(frHtml).toContain(XSS_ESCAPED);
   });
 });

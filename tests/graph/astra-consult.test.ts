@@ -9,7 +9,7 @@ import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import { cloneManual, DEFAULT_MANUAL, type AgentModel, type ModelManual } from "../../src/shared/manual/schema.ts";
 import { DEFAULT_THRESHOLDS } from "../../src/shared/types.ts";
 import { fakeHost, typesafeAnswering } from "../helpers/fakeHost.ts";
-import { appendixCAgentModels } from "../manual/model-manual.test.ts";
+import { appendixCAgentModels, legacyGrokInheritManual } from "../manual/model-manual.test.ts";
 
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
 
@@ -204,5 +204,129 @@ describe("astra-consult direction_route dispatch", () => {
     if (review.next.kind === "dispatch") {
       expect(review.next.create_worker).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
     }
+  });
+});
+
+describe("astra-final-review final_review_route dispatch", () => {
+  const models = appendixCAgentModels();
+
+  it("dispatches Claude plan as Opus and default final review as Astra", async () => {
+    const plan = await dispatchNode("architect-plan", DEFAULT_MANUAL, models, "grok");
+    expect(plan.next.kind).toBe("dispatch");
+    if (plan.next.kind === "dispatch") {
+      expect(plan.next.create_worker).toMatchObject({
+        agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh",
+      });
+    }
+    const review = await dispatchNode("astra-final-review", DEFAULT_MANUAL, models, "grok");
+    expect(review.next.kind).toBe("dispatch");
+    if (review.next.kind === "dispatch") {
+      expect(review.next.create_worker).toMatchObject({
+        agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh",
+      });
+    }
+    const consult = await dispatchNode(ASTRA_CONSULT_ID, DEFAULT_MANUAL, models, "grok");
+    expect(consult.next.kind).toBe("dispatch");
+    if (consult.next.kind === "dispatch") {
+      expect(consult.next.create_worker).toMatchObject({ model: "anthropic/claude-opus-5-5" });
+    }
+  });
+
+  it("opens a human gate when the explicit route is unavailable and retries the same route", async () => {
+    const manual = cloneManual(DEFAULT_MANUAL);
+    (manual.profiles[0] as { final_review_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).final_review_route = {
+      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
+    };
+    const missing = models.filter((m) => m.id !== "gpt-6-luna");
+    const spec = PSTACK_GRAPHS.feature;
+    const h = fakeHost({ node: nodeOk, agentModels: missing });
+    await createRun(h, {
+      run_id: "run-fr",
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "feature",
+      entry: "astra-final-review",
+      goal: "新增支付功能",
+      worktree: "/repo/.worktrees/x",
+      astra_budget: 4,
+      now: h.now(),
+    });
+    const optsMissing = { spec, config: cfg(manual), models: missing };
+    await advance(h, "run-fr", { type: "tick" }, optsMissing);
+    const gated = await advance(h, "run-fr", {
+      type: "report", phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+      session_id: "s1",
+    }, optsMissing);
+    expect(gated.next.kind).toBe("decide");
+    if (gated.next.kind === "decide") {
+      expect(gated.next.gate_id).toBe("human:astra-final-review");
+      expect(gated.next.options).toEqual(["retry", "stop"]);
+    }
+    expect(gated.state.status).toBe("waiting_human");
+    expect(gated.state.budget.astra_left).toBe(4);
+    expect(gated.state.astra_calls).toBe(0);
+    expect(Object.values(gated.state.nodes).some((n) => n.dispatch_key)).toBe(false);
+
+    await withRun(h, "run-fr", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.sol_decisions.push({ gate_id: "human:astra-final-review", attempt: 1, answer: "retry" });
+    });
+    const retried = await advance(h, "run-fr", { type: "tick" }, { spec, config: cfg(manual), models });
+    expect(retried.next.kind).toBe("dispatch");
+    if (retried.next.kind === "dispatch") {
+      expect(retried.next.create_worker).toMatchObject({
+        agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
+      });
+    }
+
+    const h2 = fakeHost({ node: nodeOk, agentModels: missing });
+    await createRun(h2, {
+      run_id: "run-fr-stop",
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "feature",
+      entry: "astra-final-review",
+      goal: "新增支付功能",
+      worktree: "/repo/.worktrees/x",
+      astra_budget: 4,
+      now: h2.now(),
+    });
+    await advance(h2, "run-fr-stop", { type: "tick" }, optsMissing);
+    await advance(h2, "run-fr-stop", {
+      type: "report", phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+      session_id: "s1",
+    }, optsMissing);
+    await withRun(h2, "run-fr-stop", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.sol_decisions.push({ gate_id: "human:astra-final-review", attempt: 1, answer: "stop" });
+    });
+    const stopped = await advance(h2, "run-fr-stop", { type: "tick" }, optsMissing);
+    expect(stopped.next.kind).toBe("stop");
+  });
+
+  it("keeps omitted-field fallback and stop behavior on old manuals", async () => {
+    const inherited = legacyGrokInheritManual();
+    const noPrimary = models.filter((m) => m.id !== "gpt-6-astra");
+    const fallback = await dispatchNode("astra-final-review", inherited, noPrimary, "grok");
+    expect(fallback.next.kind).toBe("dispatch");
+    if (fallback.next.kind === "dispatch") {
+      expect(fallback.next.create_worker).toMatchObject({ model: "openai/gpt-6-astra", provider_id: "xd" });
+    }
+    const none = models.filter((m) => !m.id.includes("astra"));
+    const stopped = await dispatchNode("astra-final-review", inherited, none, "grok");
+    expect(stopped.next.kind).toBe("stop");
+    const emptyExplicit = cloneManual(DEFAULT_MANUAL);
+    (emptyExplicit.profiles[0] as { final_review_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).final_review_route = {
+      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
+    };
+    const empty = await dispatchNode("astra-final-review", emptyExplicit, []);
+    expect(empty.next.kind).toBe("decide");
+    if (empty.next.kind === "decide") expect(empty.next.gate_id).toBe("human:astra-final-review");
+    const emptyOmitted = await dispatchNode("astra-final-review", DEFAULT_MANUAL, []);
+    expect(emptyOmitted.next.kind).toBe("stop");
   });
 });

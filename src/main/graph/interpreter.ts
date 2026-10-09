@@ -3,7 +3,7 @@
 import { loadRuntimeConfig, type RuntimeConfig } from "../config.ts";
 import { KeelError, type Host } from "../host.ts";
 import { resolve } from "../manual/resolve.ts";
-import { resolveDirection } from "../../shared/manual/resolve.ts";
+import { findProfile, resolveDirection, resolveFinalReview } from "../../shared/manual/resolve.ts";
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
@@ -224,6 +224,14 @@ function routesForNode(manual: ModelManual, state: GraphRunState, role: Role, no
       throw e;
     }
   }
+  if (nodeId === "astra-final-review") {
+    try {
+      return resolveFinalReview(manual, state.profile_id, state.task_type);
+    } catch (e) {
+      if (e instanceof ManualError) throw new KeelError(e.code, e.message, { path: e.path });
+      throw e;
+    }
+  }
   return resolve(manual, state.profile_id, state.task_type, role);
 }
 
@@ -282,12 +290,37 @@ async function planOrca(
   host: Host,
 ): Promise<Next> {
   const role = (specNode.role ?? "worker") as Role;
+  let explicitFinal: Route | undefined;
+  if (specNode.id === "astra-final-review") {
+    try {
+      explicitFinal = findProfile(manual, state.profile_id).final_review_route;
+    } catch (e) {
+      if (e instanceof ManualError) throw new KeelError(e.code, e.message, { path: e.path });
+      throw e;
+    }
+  }
+  const finalReviewHuman = (reason: string): Next =>
+    nextDecide(state, "human:astra-final-review", reason, ["retry", "stop"], true, {
+      path: `profiles/${state.profile_id}/final_review_route`,
+      route: explicitFinal,
+    });
+  if (explicitFinal && (models === undefined || models.length === 0)) {
+    return finalReviewHuman("显式终审路线不可用：模型清单为空或不可读，不能换模型");
+  }
   const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback, specNode.id);
   if ("stop" in picked) {
+    if (explicitFinal) return finalReviewHuman(`显式终审路线不可用：${picked.stop}，不能换模型`);
     state.status = "stopped";
     const next: Next = { kind: "stop", reason: picked.stop, needs_user: [picked.stop] };
     state.next = next;
     return next;
+  }
+  if (explicitFinal && models) {
+    const hit = models.find((m) => m.id === picked.route.model && m.agent === picked.route.agent && m.providerId === picked.route.provider_id);
+    const efforts = hit?.efforts && hit.efforts.length > 0 ? hit.efforts : null;
+    if (!hit || (picked.route.effort !== undefined && efforts && !efforts.includes(picked.route.effort))) {
+      return finalReviewHuman("显式终审路线不可用：档位或模型不可用，不能换模型");
+    }
   }
   if (specNode.role === "architect") {
     if ((state.budget.astra_left ?? 0) <= 0) {

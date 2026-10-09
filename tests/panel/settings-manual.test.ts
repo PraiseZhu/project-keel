@@ -15,6 +15,7 @@ import {
   routeFromModel,
   saveManual,
   setDirectionRoute,
+  setFinalReviewRoute,
   setHarnessDefault,
   setSlot,
   staleReason,
@@ -208,6 +209,44 @@ describe("setDirectionRoute", () => {
     expect(self.profiles[0]!.direction_gate).toBe("lead");
     expect(self.profiles[0]!.direction_route).toBeUndefined();
     expect("direction_route" in self.profiles[0]!).toBe(false);
+  });
+});
+
+describe("setFinalReviewRoute", () => {
+  it("stores, clears, and copies the field without touching direction or nodes", async () => {
+    const withRoute = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    expect(withRoute.profiles[0]!.final_review_route).toEqual({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    expect(withRoute.profiles[0]!.direction_gate).toBe(DEFAULT_MANUAL.profiles[0]!.direction_gate);
+    expect(withRoute.profiles[0]!.nodes).toEqual(DEFAULT_MANUAL.profiles[0]!.nodes);
+    const cleared = setFinalReviewRoute(withRoute, "sol", undefined);
+    expect(cleared.profiles[0]!.final_review_route).toBeUndefined();
+    expect("final_review_route" in cleared.profiles[0]!).toBe(false);
+    const copied = copyProfile(withRoute, "sol");
+    expect(copied.manual.profiles.find((p) => p.id === copied.id)?.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+
+    const models = appendixCAgentModels();
+    const io = fakeIo({ kv: { keep: true }, models });
+    expect(await saveManual(io, withRoute, models)).toEqual({ ok: true });
+    expect(io.kv.keep).toBe(true);
+    expect((io.kv.manual as ModelManual).profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+    const exported = prettyExport(withRoute);
+    const parsed = parseImportedJson(exported);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.manual.profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+    const io2 = fakeIo({ kv: { keep: true }, models });
+    expect(await saveManual(io2, parsed.manual, models)).toEqual({ ok: true });
+    expect((io2.kv.manual as ModelManual).profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+
+    const broken = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "nope", provider_id: "art-cindy", effort: "high" });
+    const io3 = fakeIo({ kv: { keep: true }, models });
+    expect(await saveManual(io3, broken, models)).toMatchObject({ ok: false, kind: "invalid" });
+    expect(io3.puts).toEqual([]);
+
+    const legacy = legacyGrokInheritManual();
+    const io4 = fakeIo({ kv: { manual: legacy, keep: true }, models });
+    expect(await saveManual(io4, legacy, models)).toEqual({ ok: true });
+    expect("final_review_route" in (io4.kv.manual as ModelManual).profiles[1]!).toBe(false);
   });
 });
 

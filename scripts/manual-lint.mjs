@@ -25,6 +25,11 @@ for (const f of files) {
     if (!first.startsWith("> 移植自 pstack ") || !first.includes(upstreamPath) || !first.includes(SHA)) errors.push(`missing provenance header: ${rel}`);
   }
 }
+const keelManual = readFileSync(join(dir, "keel/MANUAL.md"), "utf8");
+const keelBody = keelManual.replace(/^#.*\n+/, "");
+const keelFirst = keelBody.split(/\n\n/)[0] ?? "";
+if ([...keelFirst].length > 1500) errors.push(`keel MANUAL first paragraph ${[...keelFirst].length} > 1500 chars`);
+
 const units = manifest.manual?.items ?? [];
 if (units.length < 1 || units.length > 8) errors.push(`manual.items count ${units.length}`);
 for (const u of units) if (!existsSync(join("plugin", u.dir, "MANUAL.md"))) errors.push(`unit ${u.name} lacks MANUAL.md`);

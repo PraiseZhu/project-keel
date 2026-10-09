@@ -2,11 +2,13 @@
 // stdout carries protocol messages only; diagnostics go to stderr.
 
 import { createInterface } from "node:readline";
+import { startNodeClock } from "./clock.ts";
 import { installUpstreamRunner } from "./context.ts";
 import { dispatch } from "./rpc.ts";
 import "./extensions.ts";
 
 installUpstreamRunner();
+startNodeClock();
 
 function reply(message: unknown): void {
   process.stdout.write(JSON.stringify(message) + "\n");

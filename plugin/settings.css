@@ -2,4 +2,15 @@ body { margin:0; padding:12px; font:inherit; color:var(--text-primary,inherit); 
 label { display:block; margin-bottom:8px; }
 input { width:100%; box-sizing:border-box; padding:9px; border:1px solid var(--border-default,#8888); border-radius:6px; background:var(--surface,transparent); color:inherit; }
 button { margin:10px 8px 0 0; padding:7px 12px; border:1px solid var(--border-default,#8888); border-radius:6px; color:inherit; background:var(--surface,transparent); cursor:pointer; }
-a { color:inherit; } #status { min-height:1.4em; } .hint { opacity:.75; font-size:.92em; } h3 { margin:18px 0 6px; font-size:1em; }
+a { color:inherit; } #status, #manual-status { min-height:1.4em; } .hint { opacity:.75; font-size:.92em; } h3 { margin:18px 0 6px; font-size:1em; }
+#manual { margin-top:8px; }
+#manual .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0; }
+#manual select, #manual input[type=text] { width:auto; max-width:100%; margin:0; padding:5px 8px; }
+#manual table { border-collapse:collapse; width:100%; font-size:12px; }
+#manual th, #manual td { border:1px solid var(--border-default,#8888); padding:6px; vertical-align:top; }
+#manual .grid { overflow-x:auto; }
+#manual .stale { outline:1px solid var(--danger,#c45c5c); background:color-mix(in srgb, #c45c5c 14%, transparent); }
+#manual .stale-reason, #manual .issues { color:var(--danger,#c45c5c); margin:4px 0; }
+#manual .ok { color:var(--success,#2a7,inherit); }
+#manual .cell-route { display:flex; flex-direction:column; gap:4px; min-width:11em; }
+#manual button { margin:4px 6px 0 0; }

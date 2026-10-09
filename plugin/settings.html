@@ -6,10 +6,23 @@
 <div><button type="submit">保存凭证</button><button type="button" id="clear">清除凭证</button></div></form>
 <p id="status" role="status"></p>
 <a href="https://console.typesafe.ai/home">前往 Typesafe 控制台</a>
+<h3>Stop 钩子</h3>
+<p id="hooks-status" role="status">读取中…</p>
+<p id="clock-status" role="status">常驻时钟：未知</p>
+<p class="hint">只读检测 Claude Code 与 Codex 配置里是否已有 KEEL stop-gate。正式安装需授权，本页不改配置。</p>
+<h3>评审回帖</h3>
+<div><select id="reply-confirm"><option value="auto">自动发送</option><option value="confirm">每条确认</option></select></div>
+<p id="reply-status" role="status"></p>
+<p class="hint">pr_reply 回复 PR 评审线程的方式。默认自动发送；选“每条确认”则每次发表前弹框。</p>
 <h3>车道与派工路由</h3>
 <div id="lanes"></div>
 <p class="hint">以上来自本机个人配置（构建时注入，改配置后重新构建安装）。</p>
 <h3>当前派工路由</h3>
 <div><select id="roles-lead"><option value="claude-code">lead：Claude Code</option><option value="codex">lead：Codex</option><option value="pi">lead：Pi</option></select><button type="button" id="roles-refresh">现读 routing.json</button></div>
 <div id="roles"></div>
+<h3>编排模型说明书</h3>
+<p class="hint">编排器节点模型存在 KEEL 的 /kv，改完下次派工即生效。下方「现读 routing.json」仍只管普通派工。</p>
+<p id="manual-status" role="status"></p>
+<div id="manual"></div>
+<input id="manual-file" type="file" accept="application/json" hidden>
 <script src="/settings.js"></script></body></html>

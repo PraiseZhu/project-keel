@@ -1,6 +1,11 @@
 // The slice of the `cindy` sandbox global Keel uses. Tools take a Host so tests
 // can run them against fakes; production wires it to the real global in index.ts.
 
+import type { AgentModel } from "../shared/manual/schema.ts";
+import type { CindyTasksApi } from "./host/tasks.ts";
+
+export type { AgentModel };
+
 export interface FetchResponse {
   readonly ok: boolean;
   readonly status: number;
@@ -31,6 +36,12 @@ export interface FsResponse {
   readonly message?: string;
 }
 
+export interface AgentModelsResponse {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly models: readonly AgentModel[];
+}
+
 export interface Host {
   fetch(req: {
     url: string;
@@ -49,6 +60,12 @@ export interface Host {
   requestSchedule?(req: { name: string; prompt: string; intervalMs: number }): Promise<{ ok: boolean; errorCode?: string; message?: string }>;
   now(): number;
   sleep(ms: number): Promise<void>;
+  /** Sandbox GET /kv. Electron brain is read-only. */
+  kvGet(): Promise<Record<string, unknown>>;
+  /** Sandbox GET /agent-models. */
+  agentModels(): Promise<AgentModelsResponse>;
+  /** Optional cindy.tasks; plugin_task nodes run inside KEEL when present. */
+  tasks?: CindyTasksApi;
 }
 
 export class KeelError extends Error {

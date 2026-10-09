@@ -112,8 +112,238 @@
       }
     },
     {
+      "name": "keel_run",
+      "description": "开一次 KEEL 图运行。主控方案顺序：profile 点名 → lead 对应 harness 的默认方案 → 没有默认则 next.kind=decide 让你选。变更类在 <仓>/.worktrees/keel-<run> 建 worktree；pr 类型检出已有分支（被占用则 next.stop）；investigation 不建 worktree，只记起始指纹。返回 {run_id, profile, next}。之后只照 next 做。永不合并。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "type": "string",
+            "description": "任务目标原话。"
+          },
+          "sc": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "text"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "verify": {
+                  "type": "string"
+                },
+                "min_level": {
+                  "type": "string",
+                  "enum": [
+                    "live-ui-verified",
+                    "unit-test-verified",
+                    "type-check-only"
+                  ]
+                }
+              }
+            },
+            "description": "成功标准 {id,text,verify?,min_level?}[]。"
+          },
+          "repo_dir": {
+            "type": "string",
+            "description": "仓库绝对路径。"
+          },
+          "lead": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude-code",
+              "pi"
+            ],
+            "description": "当前主控 harness。"
+          },
+          "profile": {
+            "type": "string",
+            "description": "点名主控方案 id。"
+          },
+          "pr": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "已有 PR 编号（pr 任务类型）。"
+          },
+          "playbook": {
+            "type": "string",
+            "description": "可选：bug-fix / feature / refactoring / investigation / pr。"
+          },
+          "branch": {
+            "type": "string",
+            "description": "pr 类型要检出的已有分支。"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "写域 glob，写入 planned_params / brief。变更类与 pr 类有写代码节点，必须传，缺则 SCOPE_REQUIRED；investigation 可不传。"
+          },
+          "base_ref": {
+            "type": "string",
+            "description": "可选：叠在哪个分支上做（如上一个 PR 的分支）。变更类 worktree 从 origin/<base_ref> 起步，开 PR 时以它为 base；缺省用仓库默认分支。"
+          }
+        },
+        "required": [
+          "goal",
+          "repo_dir",
+          "lead"
+        ]
+      }
+    },
+    {
+      "name": "keel_report",
+      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report。写代码节点越域返回 SCOPE_VIOLATION。返回 next。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "accepted",
+              "reconcile",
+              "recover",
+              "final"
+            ]
+          },
+          "dispatch_key": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "object"
+          },
+          "worker_id": {
+            "type": "string"
+          },
+          "worker_session_id": {
+            "type": "string"
+          },
+          "dispatch_outcome": {
+            "type": "object"
+          },
+          "queued_message_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string",
+            "description": "插件任务 create 回执的 task_id，accepted 原样传递。"
+          },
+          "revision": {
+            "type": "string",
+            "description": "插件任务 create 回执的 revision，accepted 原样传递。"
+          },
+          "task_run_id": {
+            "type": "string",
+            "description": "插件任务 send 回执的 task_run_id，accepted 原样传递。"
+          },
+          "get_workspace_info": {
+            "type": "object",
+            "description": "与 list_workers 同时调用的工作区信息；workflow id 作为 team_id。"
+          },
+          "queries_result": {
+            "type": "object"
+          },
+          "action": {
+            "type": "string"
+          },
+          "action_result": {
+            "type": "object"
+          },
+          "inline_report": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "run_id",
+          "phase"
+        ]
+      }
+    },
+    {
+      "name": "keel_wait",
+      "description": "在工具调用内阻塞等待 CI（走无旧 Jev 的 pr-facts）、插件任务或在途节点。最长 15 分钟，期间发心跳。返回 next 与 waited_seconds。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "max_minutes": {
+            "type": "integer",
+            "description": "≤15，缺省 15。"
+          }
+        },
+        "required": [
+          "run_id"
+        ]
+      }
+    },
+    {
+      "name": "keel_gate",
+      "description": "回答方向门或人工门。传入 run_id、gate_id、answer、reason；done 门选 waive 时必须给 authorization_source（用户原话）。返回 next。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "gate_id": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "authorization_source": {
+            "type": "string",
+            "description": "done 门选 waive 时必填：用户同意暂缓该 SC 的原话。"
+          }
+        },
+        "required": [
+          "run_id",
+          "gate_id",
+          "answer"
+        ]
+      }
+    },
+    {
+      "name": "keel_status",
+      "description": "列出全部（或指定）run 的 status、next、current_nodes。不推进图。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
       "name": "pstack_start",
-      "description": "开始一次 pstack 工作流：用 Jev（J1 路由 + J2 深度）选 playbook，返回 run_id、playbook、手册路径、步骤、深度与 architect/arena 建议。Jev 不可用时退回关键词路由，不报错。只读：可能在 repo_dir 读 git 状态；联网 api.typesafe.ai；在插件私有数据目录写台账。跨多个 PR 的任务会返回“交给 task-priority → approve-exec”的指引。",
+      "description": "迁移入口：task 映射为 keel_run 的 goal。必须传 repo_dir，缺则报错。请优先直接用 keel_run({goal, sc, repo_dir, lead, scope})。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -124,7 +354,7 @@
           },
           "repo_dir": {
             "type": "string",
-            "description": "可选：目标仓库目录。"
+            "description": "目标仓库目录（必填）。"
           },
           "repo": {
             "type": "string",
@@ -137,20 +367,37 @@
           "context": {
             "type": "string",
             "description": "可选：补充上下文。"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "写域 glob，原样转交 keel_run。写代码任务必须传，缺则 SCOPE_REQUIRED。"
           }
         },
         "required": [
-          "task"
+          "task",
+          "repo_dir"
         ]
       }
     },
     {
       "name": "pstack_decide",
-      "description": "在 pstack 固定判断点调用 Jev（模板 J1–J12），按阈值策略返回 act/reask/minimal/stop 并写台账。J7 用 0.8 执行线，其余 0.75。通用问答请用 jev。联网 api.typesafe.ai；写插件私有数据目录。",
+      "description": "pstack 判断与台账。op=decide（缺省）：在固定判断点调用 Jev（模板 J1–J12），按阈值策略返回 act/reask/minimal/stop 并写台账，J7 用 0.8 执行线，其余 0.75，通用问答请用 jev，联网 api.typesafe.ai。op=log：追加一行 decision/step/evidence/gap；op=read：读取某次或最近的运行。写插件私有数据目录。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "decide",
+              "log",
+              "read"
+            ],
+            "description": "缺省 decide。"
+          },
           "template": {
             "type": "string",
             "enum": [
@@ -166,14 +413,15 @@
               "J10",
               "J11",
               "J12"
-            ]
+            ],
+            "description": "decide 必填。"
           },
           "state": {
             "type": [
               "object",
               "string"
             ],
-            "description": "判断所需的事实（只给相关内容）。"
+            "description": "decide 必填：判断所需的事实（只给相关内容）。"
           },
           "options": {
             "type": "array",
@@ -184,36 +432,11 @@
           },
           "run_id": {
             "type": "string",
-            "description": "可选：台账 run_id。"
+            "description": "台账 run_id；read 时可省略取最近。"
           },
           "reasked": {
             "type": "boolean",
             "description": "已补充上下文重问过一次时传 true。"
-          }
-        },
-        "required": [
-          "template",
-          "state"
-        ]
-      }
-    },
-    {
-      "name": "pstack_ledger",
-      "description": "读写 pstack 运行台账（插件私有数据目录）。log 追加一行 decision/step/evidence/gap；read 读取某次或最近的运行。不联网、不碰仓库。",
-      "parameters": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "op": {
-            "type": "string",
-            "enum": [
-              "log",
-              "read"
-            ]
-          },
-          "run_id": {
-            "type": "string",
-            "description": "run_id；read 时可省略取最近。"
           },
           "kind": {
             "type": "string",
@@ -222,11 +445,12 @@
               "step",
               "evidence",
               "gap"
-            ]
+            ],
+            "description": "log 必填。"
           },
           "summary": {
             "type": "string",
-            "description": "一句话摘要。"
+            "description": "log：一句话摘要。"
           },
           "evidence": {
             "type": [
@@ -234,21 +458,18 @@
               "string",
               "array"
             ],
-            "description": "证据（命令、SHA、链接）。"
+            "description": "log：证据（命令、SHA、链接）。"
           },
           "limit": {
             "type": "integer",
             "description": "read 返回行数上限。"
           }
-        },
-        "required": [
-          "op"
-        ]
+        }
       }
     },
     {
       "name": "pr_status",
-      "description": "读取 PR 状态（只读，调用本机 gh/git 访问 GitHub）：车道、上游 watch-pr 判定（冲突→评审线程→CI→合并闸→等待→可合并）、Ready 门禁、允许动作与下一步（Jev J8/J6 只在允许动作内排序）。可合并时只返回链接，插件不提供合并。",
+      "description": "读取 PR 状态（只读，调用本机 gh/git 访问 GitHub）：车道、上游 watch-pr 判定（冲突→评审线程→CI→合并闸→等待→可合并）、Ready 门禁、允许动作与下一步（Jev J8/J6 只在允许动作内排序）。可合并时只返回链接，插件不提供合并。board:true 时改为刷新“我名下 open PR”看板：每个 PR 的车道、判定、下一步，更新面板与未读角标。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -268,6 +489,17 @@
           "run_id": {
             "type": "string",
             "description": "可选：pstack_start 返回的 run_id，用于写台账。"
+          },
+          "board": {
+            "type": "boolean",
+            "description": "刷新我名下 open PR 看板，而不是读单个 PR。"
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "board：限定 owner/name 列表；缺省用本机配置。"
           }
         }
       }
@@ -455,7 +687,7 @@
     },
     {
       "name": "pr_reply",
-      "description": "在 PR 评审线程或主讨论区发表回复（会写 GitHub，对外可见）。每次都先弹确认框让用户亲自确认正文；用户取消返回 USER_DECLINED。交接后的 PR 返回 LANE_HANDED_OFF。",
+      "description": "在 PR 评审线程或主讨论区发表回复（会写 GitHub，对外可见）。默认直接发表；设置页选“每条确认”时先弹确认框，用户取消返回 USER_DECLINED。交接后的 PR 返回 LANE_HANDED_OFF。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -493,23 +725,6 @@
           "target_id",
           "body"
         ]
-      }
-    },
-    {
-      "name": "pr_board",
-      "description": "刷新“我名下 open PR”看板（只读，本机 gh）：每个 PR 的车道、判定、下一步；更新面板与未读角标，写插件私有数据目录。可合并的 PR 只显示“可合并”和链接。",
-      "parameters": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "repos": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "限定 owner/name 列表；缺省用本机配置。"
-          }
-        }
       }
     },
     {
@@ -554,8 +769,8 @@
       }
     },
     {
-      "name": "roles",
-      "description": "现读本机 Orca routing.json，返回 developer/reviewer/tester/merger 对应的 {agent, model, effort, provider_id, fallbacks} 与来源档位。读不到或格式错返回 ROUTING_UNREADABLE（fail-closed，不自行换模型）。只读本地文件。",
+      "name": "fanout",
+      "description": "多模型并行派工。op=plan：规划 arena/interrogate/swarm，现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/；不派发 Worker——第一阶段 create_workers.workers 先派，裁判/验证车道在 after_stage1 里，等第一阶段全部回报后再派；只读审查车道在传入的 repo_dir 里，范围固定为 base_sha...当前 HEAD。op=ingest：汇收车道结果（arena 用 J3 选基础；interrogate 去重后 J4 分级；swarm 输出 PASS/ISSUES/BLOCKED），缺回报记为 gaps；cleanup:true 先弹确认，只清没有未提交改动、没有 open PR 的 worktree。op=roles：现读 routing.json 返回 developer/reviewer/tester/merger 对应的 {agent, model, effort, provider_id, fallbacks}；读不到或格式错返回 ROUTING_UNREADABLE（fail-closed）。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -563,39 +778,19 @@
           "op": {
             "type": "string",
             "enum": [
-              "show",
-              "refresh"
+              "plan",
+              "ingest",
+              "roles"
             ]
           },
-          "lead_agent": {
-            "type": "string",
-            "enum": [
-              "claude-code",
-              "codex",
-              "pi"
-            ],
-            "description": "当前 lead 会话的 agent（必填）。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。"
-          }
-        },
-        "required": [
-          "lead_agent"
-        ]
-      }
-    },
-    {
-      "name": "fanout_plan",
-      "description": "规划多模型并行（arena/interrogate/swarm）：现读 routing.json 生成每条车道的派工参数（create_workers 可直接用），写车道由本机 git 预建 <仓>/.worktrees/pstack-<id>-<label>/。不派发 Worker——派发由主 Agent 执行：第一阶段 create_workers.workers 先派，裁判/验证车道在 after_stage1 里，等第一阶段全部回报后再派。只读审查车道就在传入的 repo_dir（可以是功能 worktree）里，审查范围固定为 base_sha...当前 HEAD。",
-      "parameters": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
           "kind": {
             "type": "string",
             "enum": [
               "arena",
               "interrogate",
               "swarm"
-            ]
+            ],
+            "description": "plan / ingest 必填。"
           },
           "run_id": {
             "type": "string",
@@ -607,30 +802,30 @@
           },
           "base_ref": {
             "type": "string",
-            "description": "写车道起点。"
+            "description": "plan：写车道起点。"
           },
           "task": {
             "type": "string",
-            "description": "任务描述。"
+            "description": "plan：任务描述（必填）。"
           },
           "rubric": {
             "type": "string",
-            "description": "评审标准。"
+            "description": "plan：评审标准。"
           },
           "lanes": {
             "type": "integer",
-            "description": "车道数（arena/interrogate 缺省 3）。"
+            "description": "plan：车道数（arena/interrogate 缺省 3）。"
           },
           "slices": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "swarm 的切片。"
+            "description": "plan：swarm 的切片。"
           },
           "lead_model": {
             "type": "string",
-            "description": "lead 会话模型 id（只用于让裁判席避开同家族）。"
+            "description": "plan：lead 会话模型 id（只用于让裁判席避开同家族）。"
           },
           "lead_agent": {
             "type": "string",
@@ -639,62 +834,34 @@
               "codex",
               "pi"
             ],
-            "description": "当前 lead 会话的 agent（必填）。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。"
+            "description": "plan / roles 必填：当前 lead 会话的 agent。审核档按它读 review.when_lead.<agent>，没有覆盖才用顶层 review；无法确认就先问，不要猜。"
           },
           "user_requested": {
             "type": "boolean",
-            "description": "用户本轮明确点名要多模型审查时传 true；本地多模型审查默认关闭的车道不传就拒绝。"
-          }
-        },
-        "required": [
-          "kind",
-          "task",
-          "lead_agent"
-        ]
-      }
-    },
-    {
-      "name": "fanout_ingest",
-      "description": "汇收并行车道结果：arena 收各 worktree diff 并用 Jev J3 选基础；interrogate 解析审查 JSON、去重后 J4 分级，输出共识/单模型/分歧；swarm 输出 PASS/ISSUES/BLOCKED 与缺口。interrogate 车道缺回报或没有 JSON 块记为 gaps（不当作 0 发现）。cleanup:true 先弹确认，只清本次 fanout 中没有未提交改动、没有 open PR 的 worktree，未合并分支保留。",
-      "parameters": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+            "description": "plan：用户本轮明确点名要多模型审查时传 true；本地多模型审查默认关闭的车道不传就拒绝。"
+          },
           "fanout_id": {
             "type": "string",
-            "description": "fanout_plan 返回的 id。"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "arena",
-              "interrogate",
-              "swarm"
-            ]
-          },
-          "repo_dir": {
-            "type": "string",
-            "description": "仓库目录。"
+            "description": "ingest：plan 返回的 id（必填）。"
           },
           "lane_results": {
             "type": "array",
             "items": {
               "type": "object"
             },
-            "description": "每条车道的 {label, text?, verdict?}。"
+            "description": "ingest：每条车道的 {label, text?, verdict?}。"
           },
           "cleanup": {
             "type": "boolean",
-            "description": "汇收后清理本次 worktree。"
+            "description": "ingest：汇收后清理本次 worktree。"
           },
-          "run_id": {
-            "type": "string",
-            "description": "台账 run_id。"
+          "refresh": {
+            "type": "boolean",
+            "description": "roles：强制重读 routing.json。"
           }
         },
         "required": [
-          "fanout_id",
-          "kind"
+          "op"
         ]
       }
     }
@@ -702,8 +869,7 @@
   "node": {
     "entry": "node/worker.cjs",
     "protocol": "json-rpc-stdio",
-    "lifecycle": "on-demand",
-    "idleTimeoutSeconds": 300
+    "lifecycle": "resident"
   },
   "network": {
     "hosts": [
@@ -733,11 +899,25 @@
     "title": "KEEL",
     "html": "panel.html"
   },
+  "mainView": {
+    "title": "KEEL",
+    "icon": "chart-column",
+    "html": "graph-view.html"
+  },
   "badge": true,
   "confirm": true,
   "fs": true,
+  "sessionContext": true,
+  "card": {},
+  "subscribe": {
+    "topics": [
+      "turn"
+    ]
+  },
   "agent": {
-    "schedule": true
+    "schedule": true,
+    "background": true,
+    "tasks": true
   },
   "manual": {
     "items": [

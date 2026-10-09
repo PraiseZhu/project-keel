@@ -96,7 +96,7 @@ const manual = `# pstack 上游镜像（Keel）
 
 1. 先调 \`pstack_start({ task })\`，它用 Jev 选 playbook 并给出下面表里的路径；用户点名 playbook 时传 \`playbook\`。
 2. 路由与非协商规则：${call("skills/poteto-mode/SKILL.md")}。
-3. 判断点用 \`pstack_decide\`（J1–J12），留痕用 \`pstack_ledger\`。
+3. 判断点用 \`pstack_decide\`（J1–J12），留痕用 \`pstack_decide({ op: "log" })\`。
 
 ## Playbooks（${index.playbooks.length}）
 

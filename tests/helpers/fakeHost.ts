@@ -1,7 +1,11 @@
-import type { FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
+import type { AgentModel, FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
+import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 
 export interface FakeHost extends Host {
   files: Map<string, string>;
+  kv: Record<string, unknown>;
+  agentModelList: AgentModel[];
+  kvReads: number;
   fetches: { url: string; body?: string }[];
   nodeCalls: { method: string; params: unknown }[];
   confirms: string[];
@@ -10,15 +14,32 @@ export interface FakeHost extends Host {
   clock: { t: number };
 }
 
+const DEFAULT_AGENT_MODELS: AgentModel[] = [
+  { id: "grok-4.6", agent: "pi", providerId: "art-cindy" },
+  { id: "grok-4.6", agent: "claude-code", providerId: "art-cindy" },
+  { id: "gpt-6-luna", agent: "codex", providerId: "art-cindy" },
+  { id: "gpt-6-astra", agent: "codex", providerId: "art-cindy" },
+  { id: "gpt-6.1-sol", agent: "codex", providerId: "art-cindy" },
+  { id: "openai/gpt-6-luna", agent: "codex", providerId: "xd" },
+  { id: "openai/gpt-6-astra", agent: "codex", providerId: "xd" },
+  { id: "x-ai-grok/grok-4.6", agent: "pi", providerId: "xd" },
+];
+
 export function fakeHost(opts: {
   fetch?: (url: string, body?: string) => FetchResponse | Promise<FetchResponse>;
   node?: (method: string, params: any) => NodeResponse | Promise<NodeResponse>;
   confirm?: boolean;
+  kv?: Record<string, unknown>;
+  agentModels?: readonly AgentModel[];
+  tasks?: CindyTasksApi;
 } = {}): FakeHost {
   const files = new Map<string, string>();
   const clock = { t: Date.UTC(2026, 9, 4, 12, 0, 0) };
   const h: FakeHost = {
     files, clock,
+    kv: { ...(opts.kv ?? {}) },
+    agentModelList: [...(opts.agentModels ?? DEFAULT_AGENT_MODELS)],
+    kvReads: 0,
     fetches: [], nodeCalls: [], confirms: [], broadcasts: [], progressed: [],
     async fetch(req) {
       h.fetches.push({ url: req.url, ...(req.body ? { body: req.body } : {}) });
@@ -27,12 +48,13 @@ export function fakeHost(opts: {
     },
     async node(method, params) {
       h.nodeCalls.push({ method, params });
-      if (!opts.node) return { ok: false, message: "no node" };
-      return opts.node(method, params);
+      if (opts.node) return opts.node(method, params);
+      if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } };
+      return { ok: false, message: "no node" };
     },
     async fs(req) {
       if (req.op === "write") { files.set(req.path!, req.content ?? ""); return { ok: true }; }
-      if (req.op === "read") return files.has(req.path!) ? { ok: true, content: files.get(req.path!)! } : { ok: false, message: "not found" };
+      if (req.op === "read") return files.has(req.path!) ? { ok: true, content: files.get(req.path!)! } : { ok: false, message: `文件不存在:${req.path}` };
       if (req.op === "delete") { files.delete(req.path!); return { ok: true }; }
       const prefix = (req.path ? req.path + "/" : "");
       const names = new Set<string>();
@@ -45,6 +67,14 @@ export function fakeHost(opts: {
     broadcast(m) { h.broadcasts.push(m); },
     now: () => clock.t,
     async sleep(ms) { clock.t += ms; },
+    async kvGet() {
+      h.kvReads += 1;
+      return { ...h.kv };
+    },
+    async agentModels() {
+      return { ok: true, status: 200, models: h.agentModelList };
+    },
+    ...(opts.tasks ? { tasks: opts.tasks } : {}),
   };
   return h;
 }

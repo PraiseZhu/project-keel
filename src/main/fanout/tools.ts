@@ -1,10 +1,11 @@
-// fanout_plan / fanout_ingest. Keel plans and ingests; the main Agent dispatches Orca workers.
+// fanout tool (op plan / ingest / roles). Keel plans and ingests; the main Agent dispatches Orca workers.
 
 import type { FanoutKind } from "../../shared/fanout.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
+import { rolesTool } from "../tools/misc.ts";
 import { classifyAgreement, crossJudge, dedupe, findingsOf, jsonBlocks, laneShape, swarmRow } from "./ingest.ts";
 import { createWorkersPayload, isStage2, outputContract, promptFor, type PreparedLane, type PromptContext } from "./spec.ts";
 
@@ -25,6 +26,15 @@ interface Prepared {
 
 function fanoutId(now: number): string {
   return `fo-${new Date(now).toISOString().replace(/[-:T]/g, "").slice(2, 12)}-${Math.floor(Math.random() * 0xfff).toString(16).padStart(3, "0")}`;
+}
+
+/** fanout tool: op "plan" / "ingest" / "roles" (the former fanout_plan, fanout_ingest and roles tools). */
+export async function fanoutTool(ctx: ToolContext, args: Record<string, unknown>) {
+  const op = args.op;
+  if (op === "plan") return fanoutPlan(ctx, args);
+  if (op === "ingest") return fanoutIngest(ctx, args);
+  if (op === "roles") return rolesTool(ctx, { ...args, op: args.refresh === true ? "refresh" : "show" });
+  throw new KeelError("INVALID_INPUT", `fanout 的 op 只能是 plan / ingest / roles，收到 ${JSON.stringify(op)}。`);
 }
 
 export async function fanoutPlan(ctx: ToolContext, args: Record<string, unknown>) {
@@ -57,7 +67,7 @@ export async function fanoutPlan(ctx: ToolContext, args: Record<string, unknown>
       "第一阶段：把 create_workers.workers 原样派发（2 个及以上用 create_workers，1 个用 create_worker）；派发说明为每个 Worker 标注 (model/effort)，有 note 的照写。",
       "第二阶段（若有 create_workers.after_stage1）：等第一阶段全部回报后再原样派发；裁判/验证车道不得与候选、切片同时开工。",
       "primary 报 NO_PROVIDER_FOR_AGENT / PROVIDER_ROUTE_UNAVAILABLE / BUDGET_MODEL_REQUIRES_API_MODE 时按该车道 fallbacks 顺序降级并写明原因；用尽即停，不自找替代。",
-      `收齐后调用 fanout_ingest({ fanout_id: "${id}", kind: "${kind}", lane_results: [...] })。`,
+      `收齐后调用 fanout({ op: "ingest", fanout_id: "${id}", kind: "${kind}", lane_results: [...] })。`,
       "没有 Orca（当前 harness 无 create_workers）时：只读车道可用原生 subagent 降级，必须标注“同模型降级，非多模型”；写车道不降级。",
     ],
   };
@@ -66,7 +76,7 @@ export async function fanoutPlan(ctx: ToolContext, args: Record<string, unknown>
 export async function fanoutIngest(ctx: ToolContext, args: Record<string, unknown>) {
   const id = requireString(args, "fanout_id");
   const rec = await ctx.host.fs({ op: "read", root: "data", path: `fanout/${id}.json` });
-  if (!rec.ok || !rec.content) throw new KeelError("FANOUT_NOT_FOUND", `找不到 fanout ${id}。先调用 fanout_plan。`);
+  if (!rec.ok || !rec.content) throw new KeelError("FANOUT_NOT_FOUND", `找不到 fanout ${id}。先调用 fanout({ op: "plan" })。`);
   const prep = JSON.parse(rec.content) as Prepared & { task: string };
   const kind = (typeof args.kind === "string" ? args.kind : prep.kind) as FanoutKind;
   const results = (Array.isArray(args.lane_results) ? args.lane_results : []) as { label: string; text?: string }[];

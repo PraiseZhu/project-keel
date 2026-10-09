@@ -1,12 +1,12 @@
 [
   {
     "find": "~/.cursor/rules/pstack-models.mdc",
-    "replace": "the Keel `roles` tool (reads the Orca routing.json fresh)",
+    "replace": "the Keel `fanout({op:\"roles\"})` tool (reads the Orca routing.json fresh)",
     "why": "Model roles come from the user's Orca routing.json, not a Cursor rule file."
   },
   {
     "find": "pstack-models.mdc",
-    "replace": "Keel `roles` tool",
+    "replace": "Keel `fanout({op:\"roles\"})` tool",
     "why": "Same as above, short mentions."
   },
   {
@@ -21,7 +21,7 @@
   },
   {
     "find": "scripts/log.sh",
-    "replace": "Keel `pstack_ledger({op:\"log\"})` tool",
+    "replace": "Keel `pstack_decide({op:\"log\"})` tool",
     "why": "Decision log lives in the plugin data dir."
   },
   {

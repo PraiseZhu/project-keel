@@ -53,3 +53,23 @@ export function findProfile(manual: ModelManual, profileId: string): Profile {
   if (!profile) throw new ManualError("PROFILE_UNKNOWN", `找不到主控方案 ${profileId}。`, `profiles/${profileId}`);
   return profile;
 }
+
+/**
+ * astra-consult route: explicit direction_route on this profile, else the architect slot.
+ * direction_route is not inherited from a parent profile.
+ */
+export function resolveDirection(manual: ModelManual, profileId: string, taskType: TaskType): ResolvedRoutes {
+  const profile = findProfile(manual, profileId);
+  if (profile.direction_route) return { primary: profile.direction_route, fallbacks: [] };
+  return resolve(manual, profileId, taskType, "architect");
+}
+
+/**
+ * astra-final-review route: explicit final_review_route on this profile, else the architect slot.
+ * final_review_route is not inherited from a parent profile.
+ */
+export function resolveFinalReview(manual: ModelManual, profileId: string, taskType: TaskType): ResolvedRoutes {
+  const profile = findProfile(manual, profileId);
+  if (profile.final_review_route) return { primary: profile.final_review_route, fallbacks: [] };
+  return resolve(manual, profileId, taskType, "architect");
+}

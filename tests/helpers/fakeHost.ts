@@ -23,6 +23,9 @@ const DEFAULT_AGENT_MODELS: AgentModel[] = [
   { id: "openai/gpt-6-luna", agent: "codex", providerId: "xd" },
   { id: "openai/gpt-6-astra", agent: "codex", providerId: "xd" },
   { id: "x-ai-grok/grok-4.6", agent: "pi", providerId: "xd" },
+  { id: "anthropic/claude-opus-5-5", agent: "claude-code", providerId: "xd" },
+  { id: "anthropic/claude-haiku-5-5", agent: "claude-code", providerId: "xd" },
+  { id: "anthropic/claude-sonnet-5-5", agent: "claude-code", providerId: "xd" },
 ];
 
 export function fakeHost(opts: {

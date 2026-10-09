@@ -38,6 +38,10 @@ export interface Profile {
   readonly harness: Harness;
   readonly lead: Route;
   readonly direction_gate: DirectionGate;
+  /** Optional astra-consult route. Omitted means fall back to the architect slot. */
+  readonly direction_route?: Route;
+  /** Optional astra-final-review route. Omitted means fall back to the architect slot. */
+  readonly final_review_route?: Route;
   readonly inherit?: string;
   readonly nodes: ProfileNodes;
 }
@@ -109,8 +113,17 @@ export const DEFAULT_MANUAL: ModelManual = {
       harness: "claude-code",
       lead: { agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "high" },
       direction_gate: "astra",
-      inherit: "sol",
-      nodes: {},
+      direction_route: { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" },
+      final_review_route: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" },
+      nodes: {
+        default: {
+          explorer: { primary: { agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "medium" } },
+          researcher: { primary: { agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "high" } },
+          worker: { primary: { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" } },
+          verifier: luna("high"),
+          architect: { primary: { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" } },
+        },
+      },
     },
   ],
   defaults_by_harness: { codex: "sol", "claude-code": "grok" },
@@ -192,11 +205,17 @@ function parseProfile(raw: unknown, path: string): Profile {
     nodes[taskType] = col;
   }
   const profile: Profile = { id: o.id.trim(), name: o.name.trim(), harness: o.harness, lead, direction_gate: o.direction_gate, nodes };
+  const withDirection = o.direction_route !== undefined
+    ? { ...profile, direction_route: parseRoute(o.direction_route, `${path}/direction_route`) }
+    : profile;
+  const withFinal = o.final_review_route !== undefined
+    ? { ...withDirection, final_review_route: parseRoute(o.final_review_route, `${path}/final_review_route`) }
+    : withDirection;
   if (o.inherit !== undefined) {
     if (typeof o.inherit !== "string" || !o.inherit.trim()) throw new ManualError("MANUAL_INVALID", "inherit 若填写必须是方案 id。", `${path}/inherit`);
-    return { ...profile, inherit: o.inherit.trim() };
+    return { ...withFinal, inherit: o.inherit.trim() };
   }
-  return profile;
+  return withFinal;
 }
 
 export function parseManual(raw: unknown): ModelManual {

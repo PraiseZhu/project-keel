@@ -14,13 +14,18 @@ import {
   readCatalog,
   routeFromModel,
   saveManual,
+  setDirectionRoute,
+  setFinalReviewRoute,
   setHarnessDefault,
   setSlot,
   staleReason,
   type SettingsIO,
 } from "../../src/panel/manual-editor.ts";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { cloneManual, DEFAULT_MANUAL, type AgentModel, type ModelManual } from "../../src/shared/manual/schema.ts";
-import { appendixCAgentModels } from "../manual/model-manual.test.ts";
+import { appendixCAgentModels, legacyGrokInheritManual } from "../manual/model-manual.test.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 import type { KeelProfile } from "../../src/shared/types.ts";
 
@@ -69,10 +74,11 @@ describe("catalog 404 / 503", () => {
 
 describe("profile list mutations", () => {
   it("refuses to delete a profile that others inherit", () => {
-    const gate = canDeleteProfile(DEFAULT_MANUAL, "sol");
+    const inherited = legacyGrokInheritManual();
+    const gate = canDeleteProfile(inherited, "sol");
     expect(gate.ok).toBe(false);
     if (!gate.ok) expect(gate.reason).toMatch(/解除继承/);
-    const deleted = deleteProfile(DEFAULT_MANUAL, "sol");
+    const deleted = deleteProfile(inherited, "sol");
     expect(deleted).toEqual({ error: expect.stringMatching(/解除继承/) });
     const grok = deleteProfile(DEFAULT_MANUAL, "grok");
     expect("manual" in grok).toBe(true);
@@ -192,5 +198,77 @@ describe("RuntimeConfig cache hook", () => {
     const again = await loadRuntimeConfig(h, built);
     expect(again.lanes).toEqual([{ repo: "two/repo", preset: "personal" }]);
     expect(h.kvReads).toBe(2);
+  });
+});
+
+describe("setDirectionRoute", () => {
+  it("stores astra + route, and 主控自己定 drops the field", () => {
+    const withRoute = setDirectionRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    expect(withRoute.profiles[0]).toMatchObject({ direction_gate: "astra", direction_route: { model: "gpt-6-astra", effort: "xhigh" } });
+    const self = setDirectionRoute(withRoute, "sol", undefined);
+    expect(self.profiles[0]!.direction_gate).toBe("lead");
+    expect(self.profiles[0]!.direction_route).toBeUndefined();
+    expect("direction_route" in self.profiles[0]!).toBe(false);
+  });
+});
+
+describe("setFinalReviewRoute", () => {
+  it("stores, clears, and copies the field without touching direction or nodes", async () => {
+    const withRoute = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    expect(withRoute.profiles[0]!.final_review_route).toEqual({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    expect(withRoute.profiles[0]!.direction_gate).toBe(DEFAULT_MANUAL.profiles[0]!.direction_gate);
+    expect(withRoute.profiles[0]!.nodes).toEqual(DEFAULT_MANUAL.profiles[0]!.nodes);
+    const cleared = setFinalReviewRoute(withRoute, "sol", undefined);
+    expect(cleared.profiles[0]!.final_review_route).toBeUndefined();
+    expect("final_review_route" in cleared.profiles[0]!).toBe(false);
+    const copied = copyProfile(withRoute, "sol");
+    expect(copied.manual.profiles.find((p) => p.id === copied.id)?.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+
+    const models = appendixCAgentModels();
+    const io = fakeIo({ kv: { keep: true }, models });
+    expect(await saveManual(io, withRoute, models)).toEqual({ ok: true });
+    expect(io.kv.keep).toBe(true);
+    expect((io.kv.manual as ModelManual).profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+    const exported = prettyExport(withRoute);
+    const parsed = parseImportedJson(exported);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.manual.profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+    const io2 = fakeIo({ kv: { keep: true }, models });
+    expect(await saveManual(io2, parsed.manual, models)).toEqual({ ok: true });
+    expect((io2.kv.manual as ModelManual).profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
+
+    const broken = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "nope", provider_id: "art-cindy", effort: "high" });
+    const io3 = fakeIo({ kv: { keep: true }, models });
+    expect(await saveManual(io3, broken, models)).toMatchObject({ ok: false, kind: "invalid" });
+    expect(io3.puts).toEqual([]);
+
+    const legacy = legacyGrokInheritManual();
+    const io4 = fakeIo({ kv: { manual: legacy, keep: true }, models });
+    expect(await saveManual(io4, legacy, models)).toEqual({ ok: true });
+    expect("final_review_route" in (io4.kv.manual as ModelManual).profiles[1]!).toBe(false);
+  });
+});
+
+describe("settings.html structure", () => {
+  it("has the mockup skeleton and no routing.json / 5×6 grid markers", () => {
+    const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../plugin/settings.html"), "utf8");
+    for (const id of ["status-bar", "model-tabs", "task-scope", "model-rows", "accordion-jev", "accordion-lanes", "accordion-advanced", "reply-seg"]) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    expect(html).toContain('data-status="jev"');
+    expect(html).toContain('data-status="catalog"');
+    expect(html).toContain('data-status="hooks"');
+    expect(html).toContain('data-status="clock"');
+    expect(html).toContain("Codex 主控");
+    expect(html).toContain("Claude Code 主控");
+    expect(html).toContain("所有任务");
+    expect(html).toContain("按任务类型");
+    expect(html).toContain("评审回帖");
+    expect(html).not.toContain("现读 routing.json");
+    expect(html).not.toContain("当前派工路由");
+    expect(html).not.toContain("roles-refresh");
+    expect(html).not.toContain("id=\"roles\"");
+    expect(html).not.toContain("5×6");
   });
 });

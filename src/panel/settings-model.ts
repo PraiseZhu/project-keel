@@ -347,7 +347,7 @@ function directionRow(manual: ModelManual, profile: Profile, taskType: TaskType,
     agent: agentControl("direction", agent, self),
     model: modelControl("direction", self ? undefined : route, models, false, {
       firstOption: { value: "", label: "主控自己定" },
-      groups: self ? [] : groups,
+      groups,
       placeholder: self ? "主控自己定" : undefined,
     }),
     effort: effortControl("direction", self ? undefined : route, visibleHit ?? hit, self),

@@ -491,7 +491,11 @@ function onControlChange(ev: Event): void {
       renderManual({ act, row });
       return;
     }
-    const prev = cur?.route ?? { agent: "codex" as const, model: "", provider_id: "" };
+    const prev = cur?.route ?? {
+      agent: ((cur?.agent.value as Harness) || "codex"),
+      model: "",
+      provider_id: "",
+    };
     let next: Route;
     if (act === "agent") next = routeAfterAgentChange(catalog.models, t.value as Harness, prev.effort);
     else if (act === "model") {

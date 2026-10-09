@@ -7,6 +7,7 @@ import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief } from "./brief.ts";
+import { GATES } from "./gates.ts";
 import { crossesFunctionBoundaryOrUnknown, failureFingerprint, shouldSkipFinalReview } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
 import type { AgentModel, ModelManual, Role, Route } from "../../shared/manual/schema.ts";
@@ -189,7 +190,10 @@ function edgeOn(spec: GraphSpec, from: string, on: EdgeOn): string | undefined {
 }
 
 function whenOk(node: GraphNode, state: GraphRunState): boolean {
-  if (node.id === "astra-final-review" && state.facts?.skip_final_review) return false;
+  if (node.id === "astra-final-review" && state.facts?.skip_final_review) {
+    // A prior FAIL is not evidence for the new HEAD; force another final review.
+    if (state.nodes["astra-final-review"]?.last_report?.verdict !== "FAIL") return false;
+  }
   const w = node.when;
   if (!w || w.kind === "always") return true;
   if (w.kind === "crosses_function_boundary") return state.facts?.crosses_function_boundary === true;
@@ -241,11 +245,36 @@ function pickRoute(
   return { stop: "全部路线不可用" };
 }
 
+function reportRank(id: string): number {
+  if (id === "astra-final-review") return 0;
+  if (id.startsWith("verify") || id.includes("review")) return 1;
+  return 2;
+}
+
+function completedKeelReports(state: GraphRunState): string[] {
+  const root = state.worktree ?? "<worktree>";
+  const items: { id: string; path: string; rank: number }[] = [];
+  for (const [id, n] of Object.entries(state.nodes)) {
+    if (!n.report_path && !n.last_report && n.status !== "succeeded" && n.status !== "failed") continue;
+    if ((n.attempts ?? 0) < 1) continue;
+    const path = n.report_path ?? `${root}/.keel/${id}-${n.attempts}.md`;
+    items.push({ id, path, rank: reportRank(id) });
+  }
+  items.sort((a, b) => a.rank - b.rank);
+  return [...new Set(items.map((x) => x.path))];
+}
+
 function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
+  const priorReports = node.writes && attempt >= 2 ? completedKeelReports(state) : undefined;
   return buildBrief(
     { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation", plugin_task: node.kind === "plugin_task" },
     { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.gh_repo ?? state.repo, pr: state.pr, taskType: state.task_type },
-    { attempt, dispatch_key: dispatchKeyValue, ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}) },
+    {
+      attempt,
+      dispatch_key: dispatchKeyValue,
+      ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}),
+      ...(priorReports?.length ? { priorReports } : {}),
+    },
   );
 }
 
@@ -373,16 +402,47 @@ function planPlugin(state: GraphRunState, specNode: GraphNode, node: ReturnType<
   return next;
 }
 
+const LOCAL_PREFIXES = ["/Users/", "/home/", "/private/", "/var/folders/"] as const;
+const PATH_STOP = /[\s`"')\]，。；]|[\u4e00-\u9fff]/;
+const PATH_SPACE_CONT = /^[A-Za-z0-9._-]+(?:\/|\.[A-Za-z0-9]{1,8}\b)/;
+
+/** Replace machine-local absolute paths with the basename so public PR text does not leak them. */
+export function scrubLocalPaths(text: string): string {
+  let out = text;
+  for (const prefix of LOCAL_PREFIXES) {
+    let from = 0;
+    while (from < out.length) {
+      const start = out.indexOf(prefix, from);
+      if (start < 0) break;
+      let i = start + prefix.length;
+      while (i < out.length) {
+        const c = out[i]!;
+        if (c === " " && PATH_SPACE_CONT.test(out.slice(i + 1))) {
+          i += 1;
+          continue;
+        }
+        if (PATH_STOP.test(c)) break;
+        i += 1;
+      }
+      const path = out.slice(start, i);
+      const name = path.replace(/\/+$/, "").split("/").filter(Boolean).pop() ?? "";
+      out = out.slice(0, start) + name + out.slice(i);
+      from = start + name.length;
+    }
+  }
+  return out;
+}
+
 export function prOpenSections(state: GraphRunState): Record<string, string> {
   const sc = (state.sc ?? []).map((s) => `- ${s.id}: ${s.text}`).join("\n") || "（无单独 SC）";
   const notes = Object.entries(state.nodes)
     .map(([id, n]) => `${id}: ${n.last_report?.summary ?? n.status}`)
     .join("\n") || "（尚无节点摘要）";
   return {
-    summary: state.goal,
-    goal: state.goal,
-    acceptance: sc,
-    notes,
+    summary: scrubLocalPaths(state.goal),
+    goal: scrubLocalPaths(state.goal),
+    acceptance: scrubLocalPaths(sc),
+    notes: scrubLocalPaths(notes),
   };
 }
 
@@ -394,7 +454,7 @@ function nextWait(state: GraphRunState): Next {
         tool: "pr_open",
         args: {
           repo_dir: state.worktree ?? state.invocation_dir ?? "",
-          ...(state.goal ? { title: state.goal.slice(0, 72) } : {}),
+          ...(state.goal ? { title: scrubLocalPaths(state.goal).slice(0, 72) } : {}),
           sections: prOpenSections(state),
           push: true,
           ...(state.pr_binding?.base_ref ?? state.base_ref ? { base: state.pr_binding?.base_ref ?? state.base_ref } : {}),
@@ -958,6 +1018,7 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     files_changed: files,
   });
   state.facts.skip_final_review = shouldSkipFinalReview(files, event.report?.changed_lines);
+  const reviewFail = id === "astra-final-review" && event.report?.verdict === "FAIL";
   if (id === ASTRA_CONSULT_ID && state.pending_astra_gate && (status === "done" || status === "partial")) {
     const options = state.pending_astra_gate.options;
     const raw = `${event.report?.summary ?? ""} ${event.report?.findings?.join(" ") ?? ""}`;
@@ -977,7 +1038,8 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     gateNode.status = "succeeded";
     return;
   }
-  if (status === "done" || status === "partial") succeed(state, spec, id, now);
+  // Explicit FAIL is a completed review, even when the worker wrote status=failed/blocked.
+  if (reviewFail || status === "done" || status === "partial") succeed(state, spec, id, now);
   else failNode(state, spec, id, now, event.inline_report?.fingerprint ?? failureFingerprint({ findings: event.report?.findings, ran: event.report?.ran, summary: event.report?.summary }));
 }
 
@@ -1192,10 +1254,23 @@ async function enter(
   if (specNode.kind === "gate") {
     const gateName = id.startsWith("g-retry") ? "retry" : id.startsWith("g-accept") ? "accept" : id.includes("arena") ? "arena" : "advance";
     let value: string | undefined;
-    if (gateName === "retry") value = await Promise.resolve(opts.gates?.retry?.({ node: id, consecutive_failures: node.consecutive_failures ?? 0, state }));
-    else if (gateName === "accept") value = await Promise.resolve(opts.gates?.accept?.({ node: id, state }));
-    else if (gateName === "arena") value = await Promise.resolve(opts.gates?.arena?.({ node: id, state }));
-    else value = await Promise.resolve(opts.gates?.advance?.({ node: id, state }));
+    if (gateName === "accept") {
+      let verdict: string | undefined;
+      for (const from of spec.edges.filter((e) => e.to === id).map((e) => e.from)) {
+        const v = state.nodes[from]?.last_report?.verdict;
+        if (typeof v === "string" && v) {
+          verdict = v;
+          break;
+        }
+      }
+      value = GATES["G-accept"].deterministic({ ...(verdict ? { verdict } : {}) });
+    }
+    if (!value) {
+      if (gateName === "retry") value = await Promise.resolve(opts.gates?.retry?.({ node: id, consecutive_failures: node.consecutive_failures ?? 0, state }));
+      else if (gateName === "accept") value = await Promise.resolve(opts.gates?.accept?.({ node: id, state }));
+      else if (gateName === "arena") value = await Promise.resolve(opts.gates?.arena?.({ node: id, state }));
+      else value = await Promise.resolve(opts.gates?.advance?.({ node: id, state }));
+    }
     if (!value) {
       const options =
         gateName === "retry" ? ["retry", "escalate", "stop"] :

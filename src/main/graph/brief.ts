@@ -31,6 +31,8 @@ export interface BriefCtx {
   readonly context?: string;
   readonly extraForbidden?: readonly string[];
   readonly verify?: readonly string[];
+  /** Completed-node .keel/ report paths for retry / revise dispatches. */
+  readonly priorReports?: readonly string[];
 }
 
 function isInvestigation(node: BriefNode, run: BriefRun): boolean {
@@ -63,10 +65,15 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
     ? `你的最后一条回复必须只包含一个 \`\`\`json fence 的完整 NodeReport：dispatch_key（必须是 ${ctx.dispatch_key}）、status（done|partial|blocked|failed）、summary、citation?、sc_evidence（{SC id: true/false}，ACCEPTANCE 每条都要写）、ran?、files_changed?。主控会把它原样交给 KEEL；你不要调用 keel_*，也不要写 .keel/。`
     : `把完整报告写到 \`${reportPath(node, run, ctx)}\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status（只能是 done / partial / blocked / failed，做完且验收通过写 done）、summary、branch?、head_sha?、files_changed、functions_touched、changed_lines、ran、sc_evidence、findings?、verdict?（只能是 PASS / PASS+NOTES / FAIL）、next_suggestions?），后面接正文。sc_evidence 写 {SC id: true/false}，ACCEPTANCE 每条都要写，true 只给你本次实际跑过验证并通过的 SC（缺了编排判不了完成）。functions_touched 写实际改到的函数名（缺了编排会按已跨函数处理）；changed_lines 写新增+删除行数（缺了不能跳过最终复核）。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。`;
   const standing = (run.standing ?? "").trim() || "（无）";
+  const prior =
+    node.writes && ctx.attempt >= 2 && ctx.priorReports?.length
+      ? `先读这些已完成报告再动手：${ctx.priorReports.join("；")}`
+      : "";
   const ctxLines = [
     `run ${run.run_id} / 节点 ${node.id} / attempt ${ctx.attempt} / dispatch_key ${ctx.dispatch_key}`,
     run.pr != null ? `PR ${run.repo ?? ""}#${run.pr}` : run.repo ? `仓 ${run.repo}` : "",
     ctx.context ?? "",
+    prior,
   ].filter(Boolean).join("。");
   return [
     pad("GOAL", run.goal.trim()),

@@ -383,13 +383,16 @@ function evidenceForGate(state: GraphRunState, gateId: string): Evidence {
   const prev = predecessorOfGate(state, gateId);
   if (!prev) return { evidence_present: false, new_evidence: false };
   const report = prev.report;
-  const ev = advanceEvidenceForNode({
-    nodeId: prev.nodeId,
-    ran: report?.ran,
-    ...(typeof report?.head_matches === "boolean" ? { head_matches: report.head_matches } : {}),
-    new_report: report?.fresh === true,
-    new_commit: (report?.files_changed?.length ?? 0) > 0,
-  });
+  const ev: Evidence = {
+    ...advanceEvidenceForNode({
+      nodeId: prev.nodeId,
+      ran: report?.ran,
+      ...(typeof report?.head_matches === "boolean" ? { head_matches: report.head_matches } : {}),
+      new_report: report?.fresh === true,
+      new_commit: (report?.files_changed?.length ?? 0) > 0,
+    }),
+    ...(report?.verdict ? { verdict: report.verdict } : {}),
+  };
   if (report?.fresh) report.fresh = false;
   return ev;
 }
@@ -1102,6 +1105,22 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       } catch { facts = undefined; }
       const prHead = facts?.snapshot.pr.headSha ?? undefined;
       const headMatches = Boolean(parsed.head_sha && prHead && parsed.head_sha === prHead);
+      const localVerify = parsedKey?.nodeId === "verify-same-surface" || parsedKey?.nodeId === "equivalence";
+      let snapHeadMatches: boolean | undefined;
+      if (localVerify) {
+        let localHead: string | undefined;
+        try {
+          if (st?.worktree) {
+            const git = await node<{ head?: string }>(ctx, "git/state", { repo_dir: st.worktree });
+            localHead = typeof git.head === "string" && git.head ? git.head : undefined;
+          }
+        } catch {
+          localHead = undefined;
+        }
+        snapHeadMatches = Boolean(parsed.head_sha && localHead && parsed.head_sha === localHead);
+      } else if (parsed.head_sha && prHead) {
+        snapHeadMatches = headMatches;
+      }
       const snap: NodeReportSnap = {
         status: parsed.status,
         summary: parsed.summary,
@@ -1110,7 +1129,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         ...(parsed.functions_touched ? { functions_touched: parsed.functions_touched } : {}),
         ...(parsed.changed_lines !== undefined ? { changed_lines: parsed.changed_lines } : {}),
         ...(parsed.head_sha ? { head_sha: parsed.head_sha } : {}),
-        ...(parsed.head_sha && prHead ? { head_matches: headMatches } : {}),
+        ...(snapHeadMatches !== undefined ? { head_matches: snapHeadMatches } : {}),
         ...(parsed.findings ? { findings: parsed.findings } : {}),
         ...(parsed.citation ? { citation: parsed.citation } : {}),
         ...(parsed.sc_evidence ? { sc_evidence: parsed.sc_evidence } : {}),

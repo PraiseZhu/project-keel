@@ -8,7 +8,7 @@ import { draftFor, resolveLane } from "../../shared/lanes.ts";
 import type { KeelProfile, Verification } from "../../shared/types.ts";
 import { ToolError, gh, ghJson, git, gitRaw } from "../env.ts";
 import { withCwd } from "../context.ts";
-import { originRepo, readBaseFile, resolvePr, snapshot } from "./snapshot.ts";
+import { originRepo, readBaseFile, resolveExisting, resolvePr, snapshot } from "./snapshot.ts";
 import { GhGitHubReader } from "./upstream/github.ts";
 
 
@@ -51,17 +51,34 @@ export async function prOpen(profile: KeelProfile, p: { repo_dir: string; title:
   const repo = await originRepo(p.repo_dir);
   const { rule, match } = resolveLane(profile, repo);
   const base = p.base ?? (await ghJson<{ defaultBranchRef: { name: string } }>(["repo", "view", repo, "--json", "defaultBranchRef"])).defaultBranchRef.name;
-  if (rule.baseRuleFiles?.prRules) {
+  const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: p.repo_dir })).trim();
+  if (branch === base || branch === "HEAD") throw new ToolError("LANE_RULE", `当前在 ${branch}，不能从默认分支开 PR。请先建功能分支。`);
+  const existing = await resolveExisting({ repo_dir: p.repo_dir });
+  if (!existing && rule.baseRuleFiles?.prRules) {
     const problem = validateTitle(p.title, titleTypesFrom(await readBaseFile(repo, base, rule.baseRuleFiles.prRules)));
     if (problem) throw new ToolError("TITLE_INVALID", problem);
   }
-  const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: p.repo_dir })).trim();
-  if (branch === base || branch === "HEAD") throw new ToolError("LANE_RULE", `当前在 ${branch}，不能从默认分支开 PR。请先建功能分支。`);
   if (p.push) await git(["push", "-u", "origin", branch], { cwd: p.repo_dir, timeoutMs: 120_000 });
   const upstream = await gitRaw(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], { cwd: p.repo_dir });
   if (upstream.code !== 0) throw new ToolError("NOT_PUSHED", `分支 ${branch} 还没推送到远端。传 push:true 并附授权来源，或先手动推送。`);
   const ahead = (await git(["rev-list", "--count", "@{u}..HEAD"], { cwd: p.repo_dir })).trim();
   if (ahead !== "0") throw new ToolError("NOT_PUSHED", `本地比远端多 ${ahead} 个提交，请先推送。`);
+  if (existing) {
+    const view = await ghJson<{ url?: string; isDraft?: boolean }>(["pr", "view", String(existing.number), "--repo", existing.repo, "--json", "url,isDraft"]);
+    const headSha = (await git(["rev-parse", "HEAD"], { cwd: p.repo_dir })).trim();
+    const url = typeof view?.url === "string" && view.url ? view.url : `https://github.com/${existing.repo}/pull/${existing.number}`;
+    return {
+      url,
+      number: existing.number,
+      repo: existing.repo,
+      head_sha: headSha,
+      reused: true,
+      draft: typeof view?.isDraft === "boolean" ? view.isDraft : false,
+      draft_forced_by_lane: false,
+      preset: rule.preset,
+      preflight: match?.preflight ?? null,
+    };
+  }
   const { draft, forced } = draftFor(rule, p.draft);
   const args = ["pr", "create", "--repo", repo, "--base", base, "--head", branch, "--title", p.title, "--body", renderBody(p.sections)];
   if (draft) args.push("--draft");

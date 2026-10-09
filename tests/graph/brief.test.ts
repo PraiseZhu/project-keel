@@ -90,4 +90,17 @@ describe("writing node brief", () => {
     expect(text).toContain("不要 push");
     expect(buildBrief({ id: "explore", role: "explorer" }, { run_id: "run-1", goal: "g", worktree: "/w" }, { attempt: 1, dispatch_key: "run-1:explore:1" })).not.toContain("并 commit");
   });
+
+  it("lists completed .keel reports on attempt 2+ and tells the worker to read them first", () => {
+    const reports = [
+      "/repo/.worktrees/keel-run-1/.keel/astra-final-review-1.md",
+      "/repo/.worktrees/keel-run-1/.keel/implement-1.md",
+    ];
+    const retry = buildBrief(node, run, { ...ctx, priorReports: reports });
+    expect(retry).toContain("先读这些已完成报告再动手");
+    expect(retry).toContain(reports[0]);
+    expect(retry).toContain(reports[1]);
+    const first = buildBrief(node, run, { ...ctx, attempt: 1, dispatch_key: "run-1:implement:1", priorReports: reports });
+    expect(first).not.toContain("先读这些已完成报告再动手");
+  });
 });

@@ -124,16 +124,38 @@ describe("G-retry", () => {
 
 describe("G-accept", () => {
   it("adopts an Astra PASS without Jev", async () => {
-    const r = await runGate(ctx(), "G-accept", { verdict: "PASS" }, { run_id: "r1", direction_gate: "astra", jev: jev("revise", 0.99) });
+    const stub = vi.fn(jev("revise", 0.99));
+    const r = await runGate(ctx(), "G-accept", { verdict: "PASS" }, { run_id: "r1", direction_gate: "astra", jev: stub });
     expect(r).toMatchObject({ deterministic: "adopt", routed: "act", value: "adopt" });
+    expect(stub).not.toHaveBeenCalled();
   });
-  it("acts on Jev above threshold when the verdict is not PASS", async () => {
-    const r = await runGate(ctx(), "G-accept", { verdict: "FAIL" }, { run_id: "r1", jev: jev("revise", 0.8) });
+  it("adopts PASS+NOTES without Jev", async () => {
+    const stub = vi.fn(jev("revise", 0.99));
+    const r = await runGate(ctx(), "G-accept", { verdict: "PASS+NOTES" }, { run_id: "r1", jev: stub });
+    expect(r).toMatchObject({ deterministic: "adopt", routed: "act", value: "adopt" });
+    expect(stub).not.toHaveBeenCalled();
+  });
+  it("revises a FAIL without Jev", async () => {
+    const stub = vi.fn(jev("ask_user", 0.99));
+    const r = await runGate(ctx(), "G-accept", { verdict: "FAIL" }, { run_id: "r1", direction_gate: "astra", jev: stub });
+    expect(r).toMatchObject({ deterministic: "revise", routed: "act", value: "revise" });
+    expect(stub).not.toHaveBeenCalled();
+  });
+  it("asks Jev when the verdict is missing", async () => {
+    const r = await runGate(ctx(), "G-accept", {}, { run_id: "r1", jev: jev("revise", 0.8) });
     expect(r).toMatchObject({ routed: "act", value: "revise" });
+    expect(r.deterministic).toBeUndefined();
   });
   it("never sends a low-confidence accept back to Astra", async () => {
-    const r = await runGate(ctx(), "G-accept", { verdict: "FAIL" }, { run_id: "r1", direction_gate: "astra", jev: jev("adopt", 0.2) });
+    const r = await runGate(ctx(), "G-accept", {}, { run_id: "r1", direction_gate: "astra", jev: jev("adopt", 0.2) });
     expect(r.routed).toBe("lead");
+  });
+  it("labels options to match the g-accept edges", () => {
+    const q = GATES["G-accept"].question({ verdict: "FAIL" });
+    expect(q.criteria.adopt).toMatch(/验证/);
+    expect(q.criteria.revise).toMatch(/按意见改/);
+    expect(q.criteria.ask_user).toMatch(/主控|用户/);
+    expect(q.criteria.adopt).not.toMatch(/按意见改/);
   });
 });
 

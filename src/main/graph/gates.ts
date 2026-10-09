@@ -157,7 +157,9 @@ export const GATES: Record<GateId, GateDef> = {
     forceLeadOnLow: true,
     deterministic(e) {
       const v = str(e, "verdict", "astra_verdict");
-      return v === "PASS" || v === "PASS+NOTES" ? "adopt" : undefined;
+      if (v === "PASS" || v === "PASS+NOTES") return "adopt";
+      if (v === "FAIL") return "revise";
+      return undefined;
     },
     options: () => ["adopt", "revise", "ask_user"],
     fallback: () => "ask_user",
@@ -165,7 +167,11 @@ export const GATES: Record<GateId, GateDef> = {
       return {
         state: { verdict: str(e, "verdict", "astra_verdict") ?? "", notes: e.notes ?? null },
         instructions: "是否采纳这次复核意见？",
-        criteria: { adopt: "按意见改", revise: "保留方向但改具体改动", ask_user: "交给主控/用户" },
+        criteria: {
+          adopt: "采纳本次复核，进入验证当前 head",
+          revise: "按意见改，退回写代码节点",
+          ask_user: "交给主控/用户",
+        },
       };
     },
   },

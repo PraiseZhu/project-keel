@@ -187,7 +187,11 @@ describe("R26-03 open-pr next pushes a branch with no upstream", () => {
     expect(next.call.tool).toBe("pr_open");
     const args = next.call.args as Record<string, unknown>;
     expect(args.push).toBe(true);
-    vi.spyOn(env, "ghJson").mockResolvedValue({ defaultBranchRef: { name: "main" } });
+    vi.spyOn(env, "ghJson").mockImplementation(async (args: readonly string[]) => {
+      if (args[0] === "repo" && args[1] === "view") return { defaultBranchRef: { name: "main" } };
+      if (args[0] === "pr" && args[1] === "list") return [];
+      throw new Error(`unexpected ghJson ${args.join(" ")}`);
+    });
     vi.spyOn(env, "gh").mockResolvedValue("https://github.com/acme/app/pull/42\n");
     const opened = await nodePrOpen(EMPTY_PROFILE, {
       repo_dir: String(args.repo_dir),

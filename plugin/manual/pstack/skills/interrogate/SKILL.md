@@ -1,10 +1,10 @@
-> 移植自 pstack skills/interrogate/SKILL.md @ e43c7ee（MIT）。改写：port-feature：Reviewers run as Orca workers from routing.json via fanout_plan; findings use the unified P0–P3 scale.
+> 移植自 pstack skills/interrogate/SKILL.md @ e43c7ee（MIT）。改写：port-feature：Reviewers run as Orca workers from routing.json via fanout({op:"plan"}); findings use the unified P0–P3 scale.
 
 > 上游说明（interrogate）：Use for \"interrogate\", \"adversarial review\", \"multi-model review\", \"challenge this\", \"stress test this code\", \"find blind spots\", or \"tear this apart\". Multiple LLM reviewers challenge changes from independent angles.
 
 **Keel 改写（优先于下文上游内容）**
 
-并行车道由 `fanout_plan` 规划：模型现读 routing.json（不同家族的 review / execute / 另一审核变体档；`lead_agent` 决定审核档读不读 `review.when_lead.<agent>`），写车道 worktree 预建在 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`。主 Agent 先 `start_team({worker_permission_mode:"bypassPermissions"})`，再分两段派发：先派 `create_workers.workers`，候选 / 切片全部回报后再派 `after_stage1` 里的交叉评审 / 验证车道；派发说明标注 `(model/effort)`。结果交给 `fanout_ingest` 汇收（arena 用 Jev J3 选基础，interrogate 用 J4 统一分级）。只按 routing.json 预授权的 fallbacks 降级，配置不可读即 fail-closed。没有 Orca 时只能用原生 subagent 降级，并明确标注“同模型，非多模型”。
+并行车道由 `fanout({ op: "plan" })` 规划：模型现读 routing.json（不同家族的 review / execute / 另一审核变体档；`lead_agent` 决定审核档读不读 `review.when_lead.<agent>`），写车道 worktree 预建在 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`。主 Agent 先 `start_team({worker_permission_mode:"bypassPermissions"})`，再分两段派发：先派 `create_workers.workers`，候选 / 切片全部回报后再派 `after_stage1` 里的交叉评审 / 验证车道；派发说明标注 `(model/effort)`。结果交给 `fanout({ op: "ingest" })` 汇收（arena 用 Jev J3 选基础，interrogate 用 J4 统一分级）。只按 routing.json 预授权的 fallbacks 降级，配置不可读即 fail-closed。没有 Orca 时只能用原生 subagent 降级，并明确标注“同模型，非多模型”。
 
 ---
 
@@ -37,7 +37,7 @@ Write one clear paragraph. If you're unsure about the intent, ask the user befor
 
 ## Step 3, Spawn Reviewers
 
-Launch all reviewers in a single message using the Task tool. Use the `interrogate reviewers` line in `the Keel `roles` tool (reads the Orca routing.json fresh)`, one reviewer per entry, extending or shrinking the Reviewer A/B/C labels below to the configured entry count. If the rule or that line is missing, use the table defaults.
+Launch all reviewers in a single message using the Task tool. Use the `interrogate reviewers` line in `the Keel `fanout({op:"roles"})` tool (reads the Orca routing.json fresh)`, one reviewer per entry, extending or shrinking the Reviewer A/B/C labels below to the configured entry count. If the rule or that line is missing, use the table defaults.
 
 | Subagent | Default model |
 |----------|---------------|

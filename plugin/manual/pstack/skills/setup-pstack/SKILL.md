@@ -1,16 +1,16 @@
-> 移植自 pstack skills/setup-pstack/SKILL.md @ e43c7ee（MIT）。改写：policy：Roles come from routing.json via the roles tool; nothing is written to ~/.cursor.
+> 移植自 pstack skills/setup-pstack/SKILL.md @ e43c7ee（MIT）。改写：policy：Roles come from routing.json via the fanout tool (op roles); nothing is written to ~/.cursor.
 
 > 上游说明（setup-pstack）：Configure which models pstack uses per role and at what reasoning budget. Detects your available models and writes an always-applied rule that overrides the skill defaults. Use for /setup-pstack, "configure pstack models", "pstack budget", or changing pstack's model choices.
 
 **Keel 改写（优先于下文上游内容）**
 
-角色到模型的映射不写 `~/.cursor`：用 `roles` 工具现读本机 Orca routing.json。Typesafe API Key 在 Keel 插件详情页的设置区填写。不需要安装任何独立 skill。
+角色到模型的映射不写 `~/.cursor`：用 `fanout({ op: "roles" })` 现读本机 Orca routing.json。Typesafe API Key 在 Keel 插件详情页的设置区填写。不需要安装任何独立 skill。
 
 ---
 
 # Setup pstack
 
-Write `the Keel `roles` tool (reads the Orca routing.json fresh)`, an always-applied rule that sets pstack's model per role.
+Write `the Keel `fanout({op:"roles"})` tool (reads the Orca routing.json fresh)`, an always-applied rule that sets pstack's model per role.
 
 ## Steps
 
@@ -20,7 +20,7 @@ Enumerate the model slugs you can pass to a `Task` subagent in this session. Tha
 
 ### 2. Load current state
 
-The default role-to-model mapping is the rule shape shown in step 5 below. If `the Keel `roles` tool (reads the Orca routing.json fresh)` already exists, read it and treat its `# budget` line and its role values as the current choices. Otherwise start from those defaults. A line whose role is not in step 5, such as `how critics`, is from a retired role. Drop it.
+The default role-to-model mapping is the rule shape shown in step 5 below. If `the Keel `fanout({op:"roles"})` tool (reads the Orca routing.json fresh)` already exists, read it and treat its `# budget` line and its role values as the current choices. Otherwise start from those defaults. A line whose role is not in step 5, such as `how critics`, is from a retired role. Drop it.
 
 ### 3. Budget, map, and confirm
 
@@ -41,7 +41,7 @@ Every real slug written must be in the detected set. `inherit-parent` and `auto`
 
 ### 5. Write the rule
 
-Write `the Keel `roles` tool (reads the Orca routing.json fresh)` with `alwaysApply: true`, a `# budget` line with the chosen label and its target effort, and one line per role, using the same labels poteto-mode uses. Overwrite the whole file so re-runs stay idempotent. Shape:
+Write `the Keel `fanout({op:"roles"})` tool (reads the Orca routing.json fresh)` with `alwaysApply: true`, a `# budget` line with the chosen label and its target effort, and one line per role, using the same labels poteto-mode uses. Overwrite the whole file so re-runs stay idempotent. Shape:
 
 ```
 ---

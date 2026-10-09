@@ -1,15 +1,75 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="/settings.css"></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/settings.css"></head>
 <body>
-<p>Keel 用 Typesafe Jev 做判断。API Key 只交给主机保险库，插件和 AI 都拿不到明文。</p>
-<form id="form"><label for="key">Typesafe API Key</label><input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="输入 API Key">
-<div><button type="submit">保存凭证</button><button type="button" id="clear">清除凭证</button></div></form>
-<p id="status" role="status"></p>
-<a href="https://console.typesafe.ai/home">前往 Typesafe 控制台</a>
-<h3>车道与派工路由</h3>
-<div id="lanes"></div>
-<p class="hint">以上来自本机个人配置（构建时注入，改配置后重新构建安装）。</p>
-<h3>当前派工路由</h3>
-<div><select id="roles-lead"><option value="claude-code">lead：Claude Code</option><option value="codex">lead：Codex</option><option value="pi">lead：Pi</option></select><button type="button" id="roles-refresh">现读 routing.json</button></div>
-<div id="roles"></div>
-<script src="/settings.js"></script></body></html>
+<div class="wrap">
+<h2>状态</h2>
+<div class="status" id="status-bar">
+  <div class="st" data-status="jev"><div class="k">Jev 凭证</div><div class="v"><i class="dot unknown" id="status-jev-dot"></i><span id="status-jev-value">读取中…</span></div></div>
+  <div class="st" data-status="catalog"><div class="k">模型清单（实时）</div><div class="v"><i class="dot unknown" id="status-catalog-dot"></i><span id="status-catalog-value">读取中…</span></div></div>
+  <div class="st" data-status="hooks"><div class="k">收工拦截</div><div id="status-hooks-value"><div class="v"><i class="dot unknown"></i>读取中…</div></div></div>
+  <div class="st" data-status="clock"><div class="k">后台时钟</div><div class="v"><i class="dot unknown" id="status-clock-dot"></i><span id="status-clock-value">未知</span></div></div>
+</div>
+
+<h2>模型</h2>
+<div class="head">
+  <div class="tabs" id="model-tabs" role="tablist">
+    <button type="button" class="on" data-act="harness" data-harness="codex" role="tab" aria-selected="true">Codex 主控</button>
+    <button type="button" data-act="harness" data-harness="claude-code" role="tab" aria-selected="false">Claude Code 主控</button>
+  </div>
+  <div class="seg2" id="task-scope">
+    <button type="button" class="on" data-act="scope" data-scope="all">所有任务</button>
+    <button type="button" data-act="scope" data-scope="task">按任务类型</button>
+  </div>
+</div>
+<div id="taskbar" hidden></div>
+<p id="manual-status" role="status"></p>
+<div class="card" id="model-rows"></div>
+<div class="bar">
+  <span class="meta" id="model-hint">改完点保存，下一次派工生效。</span>
+  <div class="bar-actions">
+    <button type="button" class="btn sec" data-act="restore">恢复默认</button>
+    <button type="button" class="btn pri" data-act="save">保存</button>
+  </div>
+</div>
+<p class="src">每个下拉框打开时实时读取你所有网关里已启用的模型；档位只列该模型支持的档。</p>
+
+<h2>工作方式</h2>
+<div class="card">
+  <div class="row reply-row">
+    <div class="role"><b>评审回帖</b><span>KEEL 回复 PR 评审线程</span></div>
+    <div class="seg2" id="reply-seg">
+      <button type="button" data-reply="auto">自动发送</button>
+      <button type="button" data-reply="confirm">每条确认</button>
+    </div>
+  </div>
+</div>
+<p id="reply-status" role="status"></p>
+<select id="reply-confirm" hidden><option value="auto">自动发送</option><option value="confirm">每条确认</option></select>
+
+<details id="accordion-jev">
+  <summary>Jev 凭证<span>更换或清除 ›</span></summary>
+  <div class="acc-body">
+    <p>Keel 用 Typesafe Jev 做判断。API Key 只交给主机保险库，插件和 AI 都拿不到明文。</p>
+    <form id="form"><label for="key">Typesafe API Key</label><input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="输入 API Key">
+    <div><button type="submit">保存凭证</button><button type="button" id="clear">清除凭证</button></div></form>
+    <p id="status" role="status"></p>
+    <a href="https://console.typesafe.ai/home">前往 Typesafe 控制台</a>
+  </div>
+</details>
+
+<details id="accordion-lanes">
+  <summary>本机车道<span id="lanes-summary">只读 ›</span></summary>
+  <div class="acc-body">
+    <div id="lanes"></div>
+    <p class="hint">以上来自本机个人配置（构建时注入，改配置后重新构建安装）。</p>
+  </div>
+</details>
+
+<details id="accordion-advanced">
+  <summary>高级<span>模型档次表 · 方案管理 · 导入导出 ›</span></summary>
+  <div class="acc-body" id="advanced-body"></div>
+</details>
+</div>
+<input id="manual-file" type="file" accept="application/json" hidden>
+<script src="/settings.js"></script>
+</body></html>

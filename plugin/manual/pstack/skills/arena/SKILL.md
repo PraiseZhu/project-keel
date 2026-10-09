@@ -4,7 +4,7 @@
 
 **Keel 改写（优先于下文上游内容）**
 
-并行车道由 `fanout_plan` 规划：模型现读 routing.json（不同家族的 review / execute / 另一审核变体档；`lead_agent` 决定审核档读不读 `review.when_lead.<agent>`），写车道 worktree 预建在 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`。主 Agent 先 `start_team({worker_permission_mode:"bypassPermissions"})`，再分两段派发：先派 `create_workers.workers`，候选 / 切片全部回报后再派 `after_stage1` 里的交叉评审 / 验证车道；派发说明标注 `(model/effort)`。结果交给 `fanout_ingest` 汇收（arena 用 Jev J3 选基础，interrogate 用 J4 统一分级）。只按 routing.json 预授权的 fallbacks 降级，配置不可读即 fail-closed。没有 Orca 时只能用原生 subagent 降级，并明确标注“同模型，非多模型”。
+并行车道由 `fanout({ op: "plan" })` 规划：模型现读 routing.json（不同家族的 review / execute / 另一审核变体档；`lead_agent` 决定审核档读不读 `review.when_lead.<agent>`），写车道 worktree 预建在 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`。主 Agent 先 `start_team({worker_permission_mode:"bypassPermissions"})`，再分两段派发：先派 `create_workers.workers`，候选 / 切片全部回报后再派 `after_stage1` 里的交叉评审 / 验证车道；派发说明标注 `(model/effort)`。结果交给 `fanout({ op: "ingest" })` 汇收（arena 用 Jev J3 选基础，interrogate 用 J4 统一分级）。只按 routing.json 预授权的 fallbacks 降级，配置不可读即 fail-closed。没有 Orca 时只能用原生 subagent 降级，并明确标注“同模型，非多模型”。
 
 ---
 
@@ -29,7 +29,7 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Use the `arena runners` line in `the Keel `roles` tool (reads the Orca routing.json fresh)`. If the rule or that line is missing, default to one each on `claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`. An `auto` or `inherit-parent` entry in this line or the cross-judge line means the parent model, so omit `model` for it. If the Task tool rejects a configured entry, run that seat on its family's default and say so. Families go by prefix: `claude-*`, `gpt-*`, and `grok-*`. With no family match, use `claude-opus-5-5-max`. If it rejects a default, use the closest valid slug of the same family from its error message. Spawn more when the arena covers multiple design directions. Same model N times when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use the `arena runners` line in `the Keel `fanout({op:"roles"})` tool (reads the Orca routing.json fresh)`. If the rule or that line is missing, default to one each on `claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`. An `auto` or `inherit-parent` entry in this line or the cross-judge line means the parent model, so omit `model` for it. If the Task tool rejects a configured entry, run that seat on its family's default and say so. Families go by prefix: `claude-*`, `gpt-*`, and `grok-*`. With no family match, use `claude-opus-5-5-max`. If it rejects a default, use the closest valid slug of the same family from its error message. Spawn more when the arena covers multiple design directions. Same model N times when the work is generation-bound rather than judgment-sensitive.
 4. Assign output paths. Each candidate writes to its own location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`), per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out
@@ -42,7 +42,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, choose one model from the `arena cross-judge pool` line in `the Keel `roles` tool (reads the Orca routing.json fresh)`. If the rule or that line is missing, choose from `claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`. Prefer a different model family from the parent's. Spawn one readonly judge subagent on that model. It sees the rubric and the candidates by path label, scores each criterion, and recommends a base with rationale. It runs in parallel with the parent's reading in Phase D, not with the candidates themselves. Don't spawn the judge while candidates are still writing.
+After all Phase B candidates complete, choose one model from the `arena cross-judge pool` line in `the Keel `fanout({op:"roles"})` tool (reads the Orca routing.json fresh)`. If the rule or that line is missing, choose from `claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`. Prefer a different model family from the parent's. Spawn one readonly judge subagent on that model. It sees the rubric and the candidates by path label, scores each criterion, and recommends a base with rationale. It runs in parallel with the parent's reading in Phase D, not with the candidates themselves. Don't spawn the judge while candidates are still writing.
 
 ## Phase D: Pick a base
 

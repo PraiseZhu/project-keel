@@ -4,7 +4,7 @@
 
 **Keel 改写（优先于下文上游内容）**
 
-并行车道由 `fanout_plan` 规划：模型现读 routing.json（不同家族的 review / execute / 另一审核变体档；`lead_agent` 决定审核档读不读 `review.when_lead.<agent>`），写车道 worktree 预建在 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`。主 Agent 先 `start_team({worker_permission_mode:"bypassPermissions"})`，再分两段派发：先派 `create_workers.workers`，候选 / 切片全部回报后再派 `after_stage1` 里的交叉评审 / 验证车道；派发说明标注 `(model/effort)`。结果交给 `fanout_ingest` 汇收（arena 用 Jev J3 选基础，interrogate 用 J4 统一分级）。只按 routing.json 预授权的 fallbacks 降级，配置不可读即 fail-closed。没有 Orca 时只能用原生 subagent 降级，并明确标注“同模型，非多模型”。
+并行车道由 `fanout({ op: "plan" })` 规划：模型现读 routing.json（不同家族的 review / execute / 另一审核变体档；`lead_agent` 决定审核档读不读 `review.when_lead.<agent>`），写车道 worktree 预建在 `<仓>/.worktrees/pstack-<fanout_id>-<label>/`。主 Agent 先 `start_team({worker_permission_mode:"bypassPermissions"})`，再分两段派发：先派 `create_workers.workers`，候选 / 切片全部回报后再派 `after_stage1` 里的交叉评审 / 验证车道；派发说明标注 `(model/effort)`。结果交给 `fanout({ op: "ingest" })` 汇收（arena 用 Jev J3 选基础，interrogate 用 J4 统一分级）。只按 routing.json 预授权的 fallbacks 降级，配置不可读即 fail-closed。没有 Orca 时只能用原生 subagent 降级，并明确标注“同模型，非多模型”。
 
 ---
 
@@ -34,7 +34,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt. Each candidate produces a design package shaped per `references/rationale-template.md`.
 
-Take the runners from the `architect runners` line in the `Keel `roles` tool` rule, in place of the `arena runners` line. If the rule or that line is missing, use `claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`. Alias and rejected entries follow the runner rules in the **arena** skill's Phase A.
+Take the runners from the `architect runners` line in the `Keel `fanout({op:"roles"})` tool` rule, in place of the `arena runners` line. If the rule or that line is missing, use `claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`. Alias and rejected entries follow the runner rules in the **arena** skill's Phase A.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 

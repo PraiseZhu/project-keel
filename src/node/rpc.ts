@@ -2,12 +2,19 @@
 // tests/merge-guard.test.ts asserts the table never grows one.
 
 import { EMPTY_PROFILE, type KeelProfile } from "../shared/types.ts";
-import { ToolError, gh, resolveTool } from "./env.ts";
-import { audit, createWorktree, gitState, prune } from "./git/worktree.ts";
+import { ToolError, gh, ghJson, resolveTool } from "./env.ts";
+import { contentFingerprint } from "./git/fingerprint.ts";
+import { patchId } from "./git/patch.ts";
+import { failedLog } from "./git/ci.ts";
+import { changedFiles, excludeKeel, gitDiff } from "./git/files.ts";
+import { readNodeReportFile } from "./git/report-file.ts";
+import { audit, createWorktree, gitState, originBaseSha, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
 import { inspectVigil } from "./pr/vigil-handoff.ts";
+import { bothStopHookStatuses } from "./hooks-status.ts";
 import { roles } from "./routes/routing.ts";
+import { CLOCK_PING_METHOD } from "../shared/clock.ts";
 
 declare const __KEEL_PROFILE__: KeelProfile | undefined;
 const BUILT_PROFILE: KeelProfile = typeof __KEEL_PROFILE__ !== "undefined" ? __KEEL_PROFILE__ : EMPTY_PROFILE;
@@ -42,10 +49,38 @@ const methods: Record<string, Method> = {
   "pr/reply": (p) => prReply(p as any),
   "pr/board": (p, profile) => prBoard(profile, p as any),
   "git/state": (p) => gitState(p.repo_dir),
+  "git/base-sha": (p) => originBaseSha(p as any),
+  "git/patch-id": (p) => patchId(p as any),
+  "git/content-fingerprint": (p) => contentFingerprint(p as any),
+  "git/changed-files": (p) => changedFiles(p as any),
+  "git/diff": (p) => gitDiff(p as any),
+  "git/exclude-keel": (p) => excludeKeel(p as any),
+  "ci/failed-log": (p) => failedLog(p as any),
+  "report/read": async (p) => readNodeReportFile(p as any),
   "worktree/create": (p) => createWorktree(p as any),
   "worktree/audit": (p) => audit(p.repo_dir),
   "worktree/prune": (p) => prune(p.repo_dir, p.paths ?? []),
   "routes/read": async (p, profile) => roles(profile.routingPath, p.lead_agent ?? null),
+  [CLOCK_PING_METHOD]: async () => ({ ok: true, t: Date.now() }),
+  "hooks/status": (p) => bothStopHookStatuses({
+    ...(typeof p.claude_config === "string" ? { claude_config: p.claude_config } : {}),
+    ...(typeof p.codex_config === "string" ? { codex_config: p.codex_config } : {}),
+  }),
+  "gh/rate-limit": async () => {
+    const raw = await ghJson<{ resources?: { graphql?: { used?: number; remaining?: number; limit?: number; reset?: number } } }>(["api", "rate_limit"]);
+    const g = raw.resources?.graphql ?? {};
+    return { used: g.used, remaining: g.remaining, limit: g.limit, reset: g.reset };
+  },
+  "gh/commit-status": async (p) => {
+    const repo = String(p.repo ?? "");
+    const sha = String(p.sha ?? "");
+    const context = String(p.context ?? "");
+    const state = p.state === "failure" || p.state === "pending" || p.state === "error" ? p.state : "success";
+    const description = String(p.description ?? "").slice(0, 140);
+    if (!repo || !sha || !context) throw new ToolError("INVALID_INPUT", "gh/commit-status 需要 repo、sha、context。");
+    await gh(["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", `context=${context}`, "-f", `description=${description}`]);
+    return { ok: true, repo, sha, context, state };
+  },
 };
 
 export function register(name: string, fn: Method): void {

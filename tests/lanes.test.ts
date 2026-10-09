@@ -4,6 +4,7 @@ import { LANE_PRESETS, type KeelProfile } from "../src/shared/types.ts";
 import { makeContext } from "../src/main/context.ts";
 import { runTool } from "../src/main/dispatch.ts";
 import { writeHandoff } from "../src/main/handoff.ts";
+import { isMergeable } from "../src/main/tools/pr.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 
 const profile: KeelProfile = {
@@ -60,6 +61,11 @@ describe("allowed actions", () => {
     const unmet = evaluateGate(gated, ["build"], [], []);
     expect(allowedActions({ rule: gated, decision: "blocker", blocker: "draft-pr", isDraft: true, gate: unmet, handedOff: false })).toEqual(["wait_for_ci"]);
     expect(allowedActions({ rule: gated, decision: "blocker", blocker: "draft-pr", isDraft: true, gate, handedOff: false })).toContain("mark_ready");
+  });
+  it("a ready PR whose Ready gate applies and is unmet cannot hand off or report mergeable", () => {
+    const unmet = evaluateGate(gated, ["build"], [], []);
+    expect(allowedActions({ rule: gated, decision: "ready", isDraft: false, gate: unmet, handedOff: false })).toEqual(["wait_for_ci"]);
+    expect(allowedActions({ rule: LANE_PRESETS.personal, decision: "ready", isDraft: false, gate: evaluateGate(LANE_PRESETS.personal, [], [], []), handedOff: false })).toEqual(["report_mergeable"]);
   });
 });
 
@@ -156,9 +162,9 @@ describe("pr_ready / pr_reply lane enforcement", () => {
     expect(r).toMatchObject({ ok: false, errorCode: "LANE_HANDED_OFF" });
     expect(calls).toEqual(["pr/resolve"]);
   });
-  it("pr_reply asks for confirmation and respects a decline", async () => {
+  it("pr_reply in confirm mode asks for confirmation and respects a decline", async () => {
     const calls: string[] = [];
-    const h = fakeHost({ node: nodeFake(true, calls), confirm: false });
+    const h = fakeHost({ node: nodeFake(true, calls), confirm: false, kv: { replyConfirm: "confirm" } });
     const r = await runTool(makeContext(h, "c1", profile), "pr_reply", { repo: "acme/gated-app", pr: 7, target_id: "issue", body: "hi" });
     expect(r).toMatchObject({ ok: false, errorCode: "USER_DECLINED" });
     expect(h.confirms).toHaveLength(1);
@@ -173,6 +179,17 @@ describe("pr_ready / pr_reply lane enforcement", () => {
 });
 
 describe("final-review follow-ups at the tool level", () => {
+  it("isMergeable is false when the Ready gate applies and is unmet", () => {
+    const unmet = evaluateGate(gated, ["build"], [], []);
+    const readySnap = { decision: { kind: "ready" as const }, rule: gated, mergeReadyLabel: true, pr: { ...pr, isDraft: false, labels: ["review:merge-ready"] }, gate: unmet };
+    expect(isMergeable(readySnap as Parameters<typeof isMergeable>[0])).toBe(false);
+    expect(isMergeable({ ...readySnap, gate: evaluateGate(gated, ["build"], [{ name: "build", bucket: "pass" }], []) } as Parameters<typeof isMergeable>[0])).toBe(true);
+  });
+  it("pr_status does not report mergeable or handoff when the Ready gate applies and is unmet", async () => {
+    const unmet = snapshot(false);
+    const r: any = await runTool(makeContext(fakeHost({ node: () => ({ ok: true, result: { ...unmet, decision: { kind: "ready" }, pr: { ...pr, isDraft: false } } }) }), "c1", profile), "pr_status", { repo: "acme/gated-app", pr: 7 });
+    expect(r).toMatchObject({ ok: true, result: { mergeable: false, allowedActions: ["wait_for_ci"], nextAction: "wait_for_ci" } });
+  });
   it("a ready PR in a labelled lane is not reported mergeable until the label is there", async () => {
     const ready = (labels: string[]) => ({ ...snapshot(true), decision: { kind: "ready" }, pr: { ...pr, isDraft: false, labels }, mergeReadyLabel: labels.includes("review:merge-ready") });
     const run = async (labels: string[]) => runTool(makeContext(fakeHost({ node: () => ({ ok: true, result: ready(labels) }) }), "c1", profile), "pr_status", { repo: "acme/gated-app", pr: 7 });
@@ -183,7 +200,7 @@ describe("final-review follow-ups at the tool level", () => {
     const h = fakeHost();
     const lanes = ["r1", "r2", "r3"].map((label) => ({ label, lane: "reviewer", write: false, working_dir: "/r", branch: null, route: {} }));
     await h.fs({ op: "write", root: "data", path: "fanout/fo-x.json", content: JSON.stringify({ fanout_id: "fo-x", kind: "interrogate", lanes, repo_root: null, task: "t" }) });
-    const r: any = await runTool(makeContext(h, "c1", profile), "fanout_ingest", { fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: "```json\n[]\n```" }, { label: "r2", text: "我看过了，没问题" }] });
+    const r: any = await runTool(makeContext(h, "c1", profile), "fanout", { op: "ingest", fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: "```json\n[]\n```" }, { label: "r2", text: "我看过了，没问题" }] });
     expect(r.ok).toBe(true);
     expect(r.result.complete).toBe(false);
     expect(r.result.gaps.map((g: any) => g.label).sort()).toEqual(["r2", "r3"]);
@@ -195,13 +212,13 @@ describe("final-review follow-ups at the tool level", () => {
     const h = fakeHost();
     const lanes = ["r1", "r2"].map((label) => ({ label, lane: "reviewer", write: false, working_dir: "/r", branch: null, route: {} }));
     await h.fs({ op: "write", root: "data", path: "fanout/fo-y.json", content: JSON.stringify({ fanout_id: "fo-y", kind: "interrogate", lanes, repo_root: null, task: "t" }) });
-    const r: any = await runTool(makeContext(h, "c1", profile), "fanout_ingest", { fanout_id: "fo-y", kind: "interrogate", lane_results: [{ label: "r1", text: '```json\n{"error":"review failed"}\n```' }, { label: "r2", text: '```json\n[{"severity_guess":"P1","impact":"core broken"}]\n```' }] });
+    const r: any = await runTool(makeContext(h, "c1", profile), "fanout", { op: "ingest", fanout_id: "fo-y", kind: "interrogate", lane_results: [{ label: "r1", text: '```json\n{"error":"review failed"}\n```' }, { label: "r2", text: '```json\n[{"severity_guess":"P1","impact":"core broken"}]\n```' }] });
     expect(r.result.complete).toBe(false);
     expect(r.result.gaps.map((g: any) => g.label).sort()).toEqual(["r1", "r2"]);
   });
-  it("a keyword-routed start tells the agent to check the routing table", async () => {
+  it("pstack_start as a migration entry requires repo_dir", async () => {
     const r: any = await runTool(makeContext(fakeHost(), "c1", profile), "pstack_start", { task: "修一下登录报错" });
-    expect(r.ok).toBe(true);
-    expect(r.result.next).toContain("路由表核对");
+    expect(r).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(r.message).toContain("repo_dir");
   });
 });

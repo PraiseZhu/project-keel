@@ -6,20 +6,22 @@ import { allowedActions, resolveLane } from "../../shared/lanes.ts";
 import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
-import { assertNotHandedOff, currentHandoff, writeHandoff } from "../handoff.ts";
+import { loadReplyConfirm } from "../config.ts";
+import { assertNotHandedOff, currentHandoff, writeHandoff, type HandoffRecord } from "../handoff.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
+import { listLocalPushes, recordLocalPush } from "../pushes.ts";
 
 type Snapshot = Omit<PrStatus, "handedOff" | "allowedActions" | "nextAction">;
 
-/** Ready by the upstream classifier, plus the lane's merge label and verify status when it has them. */
-export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr"> & { verification?: Snapshot["verification"] }): boolean =>
-  s.decision.kind === "ready" && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel)) && (!s.verification || s.verification.state === "pass");
+/** Ready by the upstream classifier, plus the lane's merge label, Ready gate, and verify status when it has them. */
+export const isMergeable = (s: Pick<Snapshot, "decision" | "rule" | "mergeReadyLabel" | "pr" | "gate"> & { verification?: Snapshot["verification"] }): boolean =>
+  s.decision.kind === "ready" && !(s.gate.applies && !s.gate.ok) && (!s.rule.mergeLabel || s.pr.labels.includes(s.rule.mergeLabel)) && (!s.verification || s.verification.state === "pass");
 
 /** Next step when the lane's verify status is missing on the current head. The status-writing command stays with the verifier (keel/MANUAL.md rule 10), not in the author's hint. */
 export function verifyHint(check: string, pr: { headSha: string | null }): string {
   const sha = (pr.headSha ?? "").slice(0, 12) || "当前 head";
-  return `当前提交 ${sha} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（fanout_plan({ kind: "swarm" }) 或 roles 的 e2e 档）。由验证者在自己的会话里跑测试、操作改动的功能、专门找反例，并按 keel/MANUAL.md 第 10 条写状态；作者不要自己写这个状态。之后有新提交要重新验证。`;
+  return `当前提交 ${sha} 还没有 ${check} 通过状态，验证前不算可合并。下一步：派一个不是作者的模型验证这一版（fanout({ op: "plan", kind: "swarm" }) 或 fanout({ op: "roles" }) 的 e2e 档）。由验证者在自己的会话里跑测试、操作改动的功能、专门找反例，并按 keel/MANUAL.md 第 10 条写状态；作者不要自己写这个状态。之后有新提交要重新验证。`;
 }
 
 function prArgs(args: Record<string, unknown>) {
@@ -30,9 +32,13 @@ function prArgs(args: Record<string, unknown>) {
   };
 }
 
+export async function snapshotArgs(ctx: ToolContext, args: Record<string, unknown>) {
+  return { ...prArgs(args), local_pushes: await listLocalPushes(ctx.host), now_ms: ctx.host.now() };
+}
+
 export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { mergeable: boolean; jev?: unknown; merge_hint?: string }> {
-  const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
-  const handedOff = Boolean(await currentHandoff(ctx, snap.pr.repo, snap.pr.number, snap.pr));
+  const snap = await node<Snapshot>(ctx, "pr/snapshot", await snapshotArgs(ctx, args));
+  const handedOff = Boolean(await currentHandoff(ctx, snap.pr.repo, snap.pr.number, snap.pr, snap));
   const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff, ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}) });
   let next: PrAction = allowed[0]!;
   let jev: unknown;
@@ -52,12 +58,15 @@ export async function status(ctx: ToolContext, args: Record<string, unknown>, op
   if (snap.verification && snap.verification.state !== "pass" && (snap.decision.kind === "ready" || snap.decision.blocker === "draft-pr"))
     return { ...out, merge_hint: verifyHint(snap.verification.check, snap.pr) };
   if (snap.decision.kind !== "ready") return out;
+  if (snap.gate.applies && !snap.gate.ok)
+    return { ...out, merge_hint: `Ready 门禁未满足（缺 ${[...snap.gate.missing, ...snap.gate.failing, ...snap.gate.pending].join("、") || "—"}），暂不算可合并。` };
   return mergeable
     ? { ...out, merge_hint: `可合并：请在 GitHub 打开 ${snap.pr.url} 自行合并。Keel 不提供合并。` }
     : { ...out, merge_hint: `CI 与评审已就绪，但还没有 ${snap.rule.mergeLabel} 标签，按车道规则暂不算可合并。` };
 }
 
 export async function prStatus(ctx: ToolContext, args: Record<string, unknown>) {
+  if (args.board === true) return prBoard(ctx, args);
   try {
     return await status(ctx, args);
   } catch (e) {
@@ -108,7 +117,8 @@ export async function prOpen(ctx: ToolContext, args: Record<string, unknown>) {
   // A branch whose PR was already handed off must not be pushed, even through pr_open.
   const existing = await node<{ repo: string; number: number } | null>(ctx, "pr/resolve", { repo_dir: repoDir });
   if (existing) await assertNotHandedOff(ctx, existing.repo, existing.number);
-  const r = await node(ctx, "pr/open", { repo_dir: repoDir, title, sections: args.sections, ...(typeof args.base === "string" ? { base: args.base } : {}), ...(typeof args.draft === "boolean" ? { draft: args.draft } : {}), push: args.push === true });
+  const r = await node<{ url: string; number: number; repo?: string; head_sha?: string }>(ctx, "pr/open", { repo_dir: repoDir, title, sections: args.sections, ...(typeof args.base === "string" ? { base: args.base } : {}), ...(typeof args.draft === "boolean" ? { draft: args.draft } : {}), push: args.push === true });
+  if (args.push === true && r.repo && r.head_sha) await recordLocalPush(ctx.host, r.repo, r.head_sha, ctx.host.now());
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_open ${r.url}（授权：${auth}）`, evidence: r });
   return { ...r, authorization_source: auth };
 }
@@ -133,7 +143,7 @@ export function checkEntry(raw: unknown, headSha: string | null, now: number): {
 export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const dry = args.dry_run === true;
   const auth = dry ? null : requireAuth(args, "转 Ready ");
-  const snapArgs = prArgs(args);
+  const snapArgs = await snapshotArgs(ctx, args);
   const pre = await node<Snapshot>(ctx, "pr/snapshot", snapArgs);
   const handed = Boolean(await currentHandoff(ctx, pre.pr.repo, pre.pr.number, pre.pr));
   if (!dry && handed) throw new KeelError("LANE_HANDED_OFF", "当前 PR 已交接；继续修改前先取回并转 Draft。");
@@ -144,18 +154,25 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const entry = entryNeeded ? checkEntry(args.review_entry, pre.pr.headSha, ctx.host.now()) : null;
   if (!dry && entry && !entry.ok)
     throw new KeelError("GATE_NOT_MET", `这个车道转 Ready 后交给自动化接管，服务器审查机进场证据不成立：${entry.problem}`, { missing: ["review_entry"], review_entry: entry });
+  const handoffBase = (): HandoffRecord => ({
+    repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: pre.pr.headSha,
+    gate: pre.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null },
+    was_draft: pre.pr.isDraft,
+  });
+  // Vigil lanes keep ownership in the external receipt; only local-record lanes need the pending-first record.
+  const integrated = resolveLane(ctx.profile, pre.pr.repo).match?.handoffHelperPath !== undefined;
+  if (!dry && entryNeeded && !integrated) await writeHandoff(ctx.host, { ...handoffBase(), status: "pending" });
   const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
   if (!r.gate.passed) {
     const v = pre.verification;
     const hint = v && v.state !== "pass" ? verifyHint(v.check, pre.pr) : "";
     throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。${hint}`, { missing: r.gate.missing, gate: r.gate });
   }
-  let handoff = null;
-  if (!dry && r.ready && pre.rule.postReadyOwner === "automation") {
-    const integrated = resolveLane(ctx.profile, pre.pr.repo).match?.handoffHelperPath !== undefined;
+  let handoff: HandoffRecord | null = null;
+  if (!dry && r.ready && entryNeeded) {
     if (integrated && (!r.watcher_handoff || r.watcher_handoff.head !== r.head_sha))
       throw new KeelError("HANDOFF_HELPER_INVALID", "Ready 已执行，但缺少当前 HEAD 的 Vigil 交接回执，作者交接未完成。");
-    handoff = { repo: pre.pr.repo, number: pre.pr.number, at: new Date(ctx.host.now()).toISOString(), head_sha: r.head_sha, gate: r.gate, evidence: { state: pre.pr.state, url: pre.pr.url, labels: pre.pr.labels, authorization_source: auth, review_entry: entry?.value ?? null }, ...(r.watcher_handoff ? { watcher_receipt: r.watcher_handoff } : {}) };
+    handoff = { ...handoffBase(), status: "complete", head_sha: r.head_sha, gate: r.gate, ...(r.watcher_handoff ? { watcher_receipt: r.watcher_handoff } : {}) };
     await writeHandoff(ctx.host, handoff);
   }
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_ready ${dry ? "dry-run" : "执行"} ${pre.pr.repo}#${pre.pr.number} → ready=${r.ready}`, evidence: r.gate });
@@ -194,10 +211,12 @@ export async function prReply(ctx: ToolContext, args: Record<string, unknown>) {
   const body = requireString(args, "body");
   const snap = await node<Snapshot>(ctx, "pr/snapshot", prArgs(args));
   await assertNotHandedOff(ctx, snap.pr.repo, snap.pr.number, snap.pr);
-  const preview = body.length > 180 ? body.slice(0, 180) + "…" : body;
-  const c = await ctx.host.confirm({ body: `在 ${snap.pr.repo}#${snap.pr.number} ${target === "issue" ? "主讨论区" : "评审线程"}发表回复${args.resolve ? "并标记已解决" : ""}：\n${preview}`, confirmText: "发表", cancelText: "先不发" });
-  if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未发表。`);
-  if (!c.confirmed) throw new KeelError("USER_DECLINED", "用户取消了这次回复，未发表。不要换个说法再弹一次。");
+  if ((await loadReplyConfirm(ctx.host)) === "confirm") {
+    const preview = body.length > 180 ? body.slice(0, 180) + "…" : body;
+    const c = await ctx.host.confirm({ body: `在 ${snap.pr.repo}#${snap.pr.number} ${target === "issue" ? "主讨论区" : "评审线程"}发表回复${args.resolve ? "并标记已解决" : ""}：\n${preview}`, confirmText: "发表", cancelText: "先不发" });
+    if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未发表。`);
+    if (!c.confirmed) throw new KeelError("USER_DECLINED", "用户取消了这次回复，未发表。不要换个说法再弹一次。");
+  }
   const r = await node(ctx, "pr/reply", { repo: snap.pr.repo, pr: snap.pr.number, target_id: target, body, resolve: args.resolve === true });
   if (typeof args.run_id === "string") await append(ctx.host, { run_id: args.run_id, kind: "step", summary: `pr_reply ${r.url}` });
   return r;

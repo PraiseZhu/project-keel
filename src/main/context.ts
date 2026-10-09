@@ -6,13 +6,14 @@ export interface ToolContext {
   readonly profile: KeelProfile;
   readonly thresholds: JevThresholds;
   readonly callId: string;
+  readonly sessionId?: string;
 }
 
 declare const __KEEL_PROFILE__: KeelProfile | undefined;
 export const BUILT_PROFILE: KeelProfile = typeof __KEEL_PROFILE__ !== "undefined" ? __KEEL_PROFILE__ : EMPTY_PROFILE;
 
-export function makeContext(host: Host, callId: string, profile: KeelProfile = BUILT_PROFILE, thresholds: JevThresholds = DEFAULT_THRESHOLDS): ToolContext {
-  return { host, profile, thresholds, callId };
+export function makeContext(host: Host, callId: string, profile: KeelProfile = BUILT_PROFILE, thresholds: JevThresholds = DEFAULT_THRESHOLDS, sessionId?: string): ToolContext {
+  return { host, profile, thresholds, callId, ...(sessionId ? { sessionId } : {}) };
 }
 
 /** Call the Node worker; turn RPC failures into KeelError with the worker's error code. */

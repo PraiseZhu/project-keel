@@ -38,7 +38,7 @@
 7. **Orca 派工读 routing.json**（`fanout({ op: "roles" | "plan" })`），Worker 一律 `bypassPermissions`；只按配置里的 fallbacks 降级，配置不可读即停。
 8. **多 PR 任务交给现有流水线**：task-priority（汇总任务优先级）→ approve-exec（批准执行）。Keel 不另起编排。
 9. **Jev 是判断参考，不是事实证明。** 事实与门禁由确定性代码给出；Jev 只在策略允许的选项里排序。confidence ≥ 0.75 执行（J7 ≥ 0.8）；低于阈值补上下文重问一次，仍低就取改动最小、可撤回的选项；Jev 不可用且判断涉及连带文件时停下回报。
-10. **当前提交要有非作者验证。** 车道配了 `verifyCheck`（如 `agent-verify`）时，当前 head 没有该状态通过，`pr_status` 只给 `verify_current_head`，`pr_ready` 返回 `GATE_NOT_MET`。作者：派一个不是作者的模型（`fanout({ op: "roles" })` 的 e2e 档，或 `fanout({ op: "plan", kind: "swarm" })`）验证当前 head，自己不写这个状态。验证者：在自己的会话里跑测试、操作改动的功能、专门找反例；通过后执行 `gh api repos/<owner>/<repo>/statuses/<sha> -f state=success -f "context=<verifyCheck>" -f "description=<模型> <方法>"`，不通过写 `state=failure` 并说明原因。有新提交就重验。只改文档或配置时可由作者自查后写状态。信任边界：Keel 不核验状态由谁写入；本机所有 agent 共用同一个 GitHub 账号，这道门防疏忽、不防蓄意伪造，靠用户抽查兜底。要真正隔离，需给验证者独立的 GitHub 身份。建议在仓库分支保护里把该状态设为必需，绕开 Keel 的合并也会被拦住。
+10. **当前提交要有非作者验证。** 车道配了 `verifyCheck`（如 `agent-verify`）时，当前 head 没有该状态通过，`pr_status` 只给 `verify_current_head`，`pr_ready` 返回 `GATE_NOT_MET`。作者：派一个不是作者的模型（`fanout({ op: "roles" })` 的 e2e 档，或 `fanout({ op: "plan", kind: "swarm" })`）验证当前 head，自己不写这个状态。验证者：在自己的会话里跑测试、操作改动的功能、专门找反例；通过后执行 `gh api repos/<owner>/<repo>/statuses/<sha> -f state=success -f "context=<verifyCheck>" -f "description=<模型> <方法>"`，不通过写 `state=failure` 并说明原因。有新提交就重验。只改文档或配置时可由作者自查后写状态。验证者报告的 `ran` 必须列测试运行器本身的命令（如 `npm test`、`npx vitest run`、`pytest`）；`npm run verify` 这类聚合脚本 KEEL 认不出测试，会把级别判成 `type-check-only`。done 门遇到级别低于 SC 要求且 head/patch 都一致时给 `retry_verify`/`stop`，选 `retry_verify` 后重新派非作者验证，不再只给 wait/stop 卡死。信任边界：Keel 不核验状态由谁写入；本机所有 agent 共用同一个 GitHub 账号，这道门防疏忽、不防蓄意伪造，靠用户抽查兜底。要真正隔离，需给验证者独立的 GitHub 身份。建议在仓库分支保护里把该状态设为必需，绕开 Keel 的合并也会被拦住。
 
 ## Cursor → Cindy 对照
 
@@ -74,7 +74,7 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 1. `pstack_start({ task: "<用户原话>", repo_dir })` → 得到 `run_id` 与 `pstack/skills/poteto-mode/playbooks/bug-fix.md`。
 2. 读 playbook，按步骤复现、写失败测试、修复、证明（J9 证据评分、J12 影响面）。
-3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。终审报告 `verdict=FAIL` 时图从 `g-accept` 直接退回写代码节点（不问 Jev；报告 status=failed/blocked 同样适用，且下一轮不能跳过终审）；PASS / PASS+NOTES 才进 verify-head。本地验证按工作树 HEAD 比对 `head_sha`，未推送的修复也能过 G-advance。写代码节点第 2 次及以后的派工 brief 会列出本 run 已完成节点的 `.keel/` 报告路径，至少含最近一次终审报告。
+3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。终审报告 `verdict=FAIL` 时图从 `g-accept` 直接退回写代码节点（不问 Jev；报告 status=failed/blocked 同样适用，且下一轮不能跳过终审）；PASS / PASS+NOTES 才进 verify-head。CI 修完（`fix-ci` 成功）走 `open-pr`：由 `pr_open` 推送并复用已有 PR，不要只提交就回去等 CI（否则等到的是旧提交）。本地验证按工作树 HEAD 比对 `head_sha`，未推送的修复也能过 G-advance。写代码节点第 2 次及以后的派工 brief 会列出本 run 已完成节点的 `.keel/` 报告路径，至少含最近一次终审报告。
 4. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。

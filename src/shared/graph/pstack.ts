@@ -302,7 +302,7 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
       ...retryThreads.edges,
       edge("ci-rerun-once", "wait-ci"),
       edge("ci-rerun-once", "fix-ci", "fail"),
-      edge("fix-ci", "wait-ci"),
+      edge("fix-ci", "open-pr"),
       edge("fix-ci", "g-retry-fix-ci", "fail"),
       edge("fix-ci", "astra-unstick", "fingerprint_repeat"),
       ...retryFix.edges,

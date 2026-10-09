@@ -73,6 +73,67 @@ describe("P1-1 change graph cannot false-complete", () => {
   });
 });
 
+describe("done gate retries verify when the verdict level is too low", () => {
+  it("matching head/patch with type-check-only offers retry_verify and re-dispatches the verifier", async () => {
+    const low = isChangeGraphDone({
+      pr_status: "report_mergeable",
+      author_families: ["gpt"],
+      verdict: { ...verdict, level: "type-check-only" },
+      current: current(),
+      sc: [{ id: "SC-1", hasEvidence: true }],
+      openHumanGates: 0,
+    });
+    expect(low.done).toBe(false);
+    expect(low.next).toBe("verify-head");
+
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "f", head: verdict.head_sha } };
+        if (method === "worktree/create") return { ok: true, result: { path: "/repo/.worktrees/x" } };
+        return { ok: false, message: method };
+      },
+    });
+    const spec = PSTACK_GRAPHS["bug-fix"];
+    await createRun(h, {
+      run_id: "run-level",
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "bug-fix",
+      entry: "done",
+      goal: "修登录报错",
+      worktree: "/repo/.worktrees/x",
+      now: h.now(),
+    });
+    await withRun(h, "run-level", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.cursor = "done";
+      s.team = { ready: true, team_id: "t1" };
+      s.nodes["verify-head"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      const mapped = mapChangeDoneFailure(s, low);
+      s.next = mapped;
+      s.status = mapped.kind === "decide" && mapped.gate_id.startsWith("human:") ? "waiting_human" : s.status;
+    });
+    const st = JSON.parse(h.files.get(graphStatePath("run-level"))!) as GraphRunState;
+    expect(st.next?.kind).toBe("decide");
+    if (st.next?.kind !== "decide") throw new Error("decide");
+    expect(st.next.options).toEqual(["retry_verify", "stop"]);
+    expect(st.next.gate_id).toBe("human:verify-head");
+    expect(st.cursor).toBe("verify-head");
+
+    const r: any = await runTool(makeContext(h, "c1", profile), "keel_gate", {
+      run_id: "run-level",
+      gate_id: "human:verify-head",
+      answer: "retry_verify",
+    });
+    expect(r.ok, r.message).toBe(true);
+    expect(r.result.next.kind).toBe("dispatch");
+    expect(r.result.next.dispatch_key).toMatch(/verify-head/);
+    expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).cursor).toBe("verify-head");
+  });
+});
+
 describe("P1-2 gates use evidence and runGate", () => {
   it("G-advance with exit_code 1 stays without asking the lead", async () => {
     const ev = advanceEvidenceForNode({

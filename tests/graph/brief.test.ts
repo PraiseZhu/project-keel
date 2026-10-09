@@ -51,6 +51,8 @@ describe("buildBrief", () => {
     expect(text).toContain("≤20 行摘要");
     expect(text).toContain("functions_touched");
     expect(text).toContain("changed_lines");
+    expect(text).toContain("测试运行器本身的命令");
+    expect(text).toContain("npm run verify");
     expect(text).toContain("dispatch_key run-1:implement:2");
     expect(text).toMatchSnapshot();
   });

@@ -77,6 +77,16 @@ describe("pstack graph compile", () => {
     expect(validateGraph(spec, expectedStepsFor(spec, playbooks).steps)).toEqual([]);
   });
 
+  it("fix-ci success walks to open-pr on every PR-tail graph", () => {
+    for (const id of ["bug-fix", "feature", "refactoring", "pr"] as const) {
+      const spec = graphForTask(id);
+      expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "open-pr" && e.on === "ok"), id).toBe(true);
+      expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "wait-ci" && e.on === "ok"), id).toBe(false);
+      expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "g-retry-fix-ci" && e.on === "fail"), id).toBe(true);
+      expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "astra-unstick" && e.on === "fingerprint_repeat"), id).toBe(true);
+    }
+  });
+
   it("pr graph is tail only", () => {
     const spec = graphForTask("pr");
     expect(spec.entry).toBe("open-pr");

@@ -206,6 +206,7 @@ describe("isChangeGraphDone", () => {
     const r = isChangeGraphDone(input({ verdict: verdict({ level: "type-check-only" }) }));
     expect(r.done).toBe(false);
     expect(r.missing.some((m) => m.includes("type-check-only"))).toBe(true);
+    expect(r.next).toBe("verify-head");
   });
 
   it("FAIL does not map to a passing done", () => {

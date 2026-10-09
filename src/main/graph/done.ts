@@ -66,6 +66,7 @@ export function isChangeGraphDone(input: ChangeGraphDoneInput): ChangeGraphDoneR
 
   const v = input.verdict;
   const cur = input.current;
+  const need = requiredLevel(input.sc);
   if (!v) missing.push("当前 head 没有非作者 verdict");
   else {
     if (v.head_sha !== cur.head_sha) missing.push("verdict 绑定的 head 不是当前 head");
@@ -76,7 +77,6 @@ export function isChangeGraphDone(input: ChangeGraphDoneInput): ChangeGraphDoneR
     } else if (input.author_families.includes(v.by_family)) {
       missing.push(`验证者模型族 ${v.by_family} 属于作者族（${input.author_families.join("、")}）`);
     }
-    const need = requiredLevel(input.sc);
     if (!levelMeets(v.level, need)) missing.push(`verdict 级别 ${v.level} 低于要求的 ${need}`);
     if (!cur.patch_ok || !cur.patch_id) missing.push("当前 base...head 的 patch_id 无法确认");
     else if (v.patch_id !== cur.patch_id) missing.push("记录的 patch_id 与当前补丁不同");
@@ -90,6 +90,7 @@ export function isChangeGraphDone(input: ChangeGraphDoneInput): ChangeGraphDoneR
     const patchDiffers = patchKnown && v.patch_id !== cur.patch_id;
     if (v.head_sha !== cur.head_sha || patchDiffers) next = "verify-head";
     else if (patchKnown && v.patch_id === cur.patch_id && v.base_sha !== cur.base_sha) next = "recheck-ci";
+    else if (patchKnown && v.patch_id === cur.patch_id && v.head_sha === cur.head_sha && !levelMeets(v.level, need)) next = "verify-head";
   } else if (cur.head_sha) {
     next = "verify-head";
   }

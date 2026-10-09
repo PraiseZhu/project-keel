@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_LIMITS } from "../../src/main/config.ts";
 import { makeContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
-import { advance, createRun } from "../../src/main/graph/interpreter.ts";
+import { ASTRA_CONSULT_ID, advance, createRun } from "../../src/main/graph/interpreter.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
+import { cloneManual, DEFAULT_MANUAL, type AgentModel, type ModelManual } from "../../src/shared/manual/schema.ts";
+import { DEFAULT_THRESHOLDS } from "../../src/shared/types.ts";
 import { fakeHost, typesafeAnswering } from "../helpers/fakeHost.ts";
+import { appendixCAgentModels } from "../manual/model-manual.test.ts";
 
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
 
@@ -113,5 +117,92 @@ describe("Astra direction-gate consult", () => {
     }, { spec });
     const st = JSON.parse(h.files.get(graphStatePath("run-fp"))!) as GraphRunState;
     expect(st.fingerprints.some((f) => f.signature === "npx vitest run" && f.count >= 1)).toBe(true);
+  });
+});
+
+function cfg(manual: ModelManual) {
+  return { manual, lanes: [], limits: DEFAULT_LIMITS, thresholds: DEFAULT_THRESHOLDS };
+}
+
+async function dispatchNode(entry: string, manual: ModelManual, models: readonly AgentModel[], profile_id = "sol") {
+  const spec = PSTACK_GRAPHS.feature;
+  const h = fakeHost({ node: nodeOk, agentModels: models });
+  await createRun(h, {
+    run_id: "run-dir",
+    spec_id: spec.id,
+    profile_id,
+    lead_harness: profile_id === "grok" ? "claude-code" : "codex",
+    task_type: "feature",
+    entry,
+    goal: "新增支付功能",
+    worktree: "/repo/.worktrees/x",
+    astra_budget: 4,
+    now: h.now(),
+  });
+  const opts = { spec, config: cfg(manual), models };
+  await advance(h, "run-dir", { type: "tick" }, opts);
+  return advance(h, "run-dir", {
+    type: "report", phase: "setup",
+    outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+    session_id: "s1",
+  }, opts);
+}
+
+describe("astra-consult direction_route dispatch", () => {
+  const models = appendixCAgentModels();
+
+  it("dispatches the explicit direction_route and does not fall back when it is unavailable", async () => {
+    const manual = cloneManual(DEFAULT_MANUAL);
+    (manual.profiles[0] as { direction_gate: string; direction_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).direction_gate = "astra";
+    (manual.profiles[0] as { direction_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).direction_route = {
+      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
+    };
+    const hit = await dispatchNode(ASTRA_CONSULT_ID, manual, models);
+    expect(hit.next.kind).toBe("dispatch");
+    if (hit.next.kind === "dispatch") {
+      expect(hit.next.create_worker).toMatchObject({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    }
+
+    const missing = cloneManual(manual);
+    (missing.profiles[0] as { direction_route: { model: string } }).direction_route.model = "no-such-model";
+    const stopped = await dispatchNode(ASTRA_CONSULT_ID, missing, models);
+    expect(stopped.next.kind).toBe("stop");
+    if (stopped.next.kind === "stop") expect(stopped.next.reason).toMatch(/全部路线不可用/);
+  });
+
+  it("falls back to the architect slot only when direction_route is omitted", async () => {
+    const hit = await dispatchNode(ASTRA_CONSULT_ID, DEFAULT_MANUAL, models);
+    expect(hit.next.kind).toBe("dispatch");
+    if (hit.next.kind === "dispatch") {
+      expect(hit.next.create_worker).toMatchObject({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    }
+
+    const tasked = cloneManual(DEFAULT_MANUAL);
+    (tasked.profiles[0] as { nodes: typeof tasked.profiles[0]["nodes"] }).nodes = {
+      ...tasked.profiles[0]!.nodes,
+      feature: {
+        architect: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" } },
+      },
+    };
+    const feat = await dispatchNode(ASTRA_CONSULT_ID, tasked, models);
+    expect(feat.next.kind).toBe("dispatch");
+    if (feat.next.kind === "dispatch") expect(feat.next.create_worker?.model).toBe("gpt-6-luna");
+  });
+
+  it("does not apply direction_route to architect-plan or astra-final-review", async () => {
+    const manual = cloneManual(DEFAULT_MANUAL);
+    (manual.profiles[0] as { direction_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).direction_route = {
+      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
+    };
+    const plan = await dispatchNode("architect-plan", manual, models);
+    expect(plan.next.kind).toBe("dispatch");
+    if (plan.next.kind === "dispatch") {
+      expect(plan.next.create_worker).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
+    }
+    const review = await dispatchNode("astra-final-review", manual, models);
+    expect(review.next.kind).toBe("dispatch");
+    if (review.next.kind === "dispatch") {
+      expect(review.next.create_worker).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
+    }
   });
 });

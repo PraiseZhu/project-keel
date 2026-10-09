@@ -2,23 +2,18 @@
 import {
   addProfile,
   canDeleteProfile,
-  cellView,
   copyProfile,
   deleteProfile,
   fetchCatalog,
-  filterModels,
   HARNESS_LABELS,
-  leadView,
   loadManualFromKv,
   materializeSlot,
   parseImportedJson,
   prettyExport,
   profileList,
   renameProfile,
-  ROLE_LABELS,
-  routeFromModel,
   saveManual,
-  setDirectionGate,
+  setDirectionRoute,
   setHarnessDefault,
   setInherit,
   setLead,
@@ -28,120 +23,25 @@ import {
   type CatalogState,
   type SettingsIO,
 } from "./manual-editor.ts";
-import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, ROLES, TASK_TYPES, type DirectionGate, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
-import { renderClockStatus, renderStopHookStatus, type StopHookInstall } from "./hooks-status.ts";
+import {
+  acceptCatalogResponse,
+  buildSettingsView,
+  groupModelOptions,
+  routeAfterAgentChange,
+  routeAfterEffortChange,
+  routeAfterModelChange,
+  SETTINGS_ROW_IDS,
+  TASK_SCOPE_TYPES,
+  type SettingsHarness,
+  type SettingsRowId,
+  type SettingsRowView,
+} from "./settings-model.ts";
+import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
+import { clockTone, renderClockStatus, stopHookTone, type StopHookInstall } from "./hooks-status.ts";
 import { readReplyMode, REPLY_MODE_LABELS, saveReplyMode, type ReplyMode } from "./reply-setting.ts";
 import { parseKvResponse } from "../shared/kv-response.ts";
-const input = document.querySelector<HTMLInputElement>("#key")!;
-const statusEl = document.querySelector<HTMLElement>("#status")!;
 
-async function refresh(): Promise<void> {
-  const r = await fetch("/secrets");
-  if (!r.ok) throw new Error("status");
-  const entries = (await r.json()) as { key: string; saved: boolean; tail?: string }[];
-  const key = entries.find((x) => x.key === "api_key");
-  statusEl.textContent = key?.saved ? `凭证已保存${key.tail ? `（尾号 ${key.tail}）` : ""}` : "尚未配置凭证";
-}
-
-document.querySelector("#form")!.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const value = input.value.trim();
-  input.value = "";
-  if (!value) {
-    statusEl.textContent = "请输入 API Key。";
-    return;
-  }
-  try {
-    const r = await fetch("/secrets/api_key", { method: "PUT", body: JSON.stringify({ value }) });
-    if (r.status !== 204) throw new Error("save");
-    await refresh();
-  } catch {
-    statusEl.textContent = "保存失败，请重新输入并重试。";
-  }
-});
-
-document.querySelector("#clear")!.addEventListener("click", async () => {
-  input.value = "";
-  try {
-    const r = await fetch("/secrets/api_key", { method: "DELETE" });
-    if (!r.ok) throw new Error("clear");
-    await refresh();
-  } catch {
-    statusEl.textContent = "清除失败，请重试。";
-  }
-});
-
-// Lanes and paths are injected at build time from the personal profile (read-only here).
-declare const __KEEL_PROFILE__: { lanes?: { repo: string; preset: string; preflight?: string; verifyCheck?: string }[]; routingPath?: string | null; plansDir?: string | null; boardRepos?: string[] };
-const prof = typeof __KEEL_PROFILE__ === "undefined" ? {} : __KEEL_PROFILE__;
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-const lanesEl = document.querySelector<HTMLElement>("#lanes");
-if (lanesEl) {
-  const rows = (prof.lanes ?? []).map((l) => `<tr><td><code>${esc(l.repo)}</code></td><td>${esc(l.preset)}</td><td>${l.preflight ? "有" : "—"}</td><td>${l.verifyCheck ? `<code>${esc(l.verifyCheck)}</code>` : "—"}</td></tr>`).join("") || '<tr><td colspan="4">未配置，所有仓按 personal 车道处理</td></tr>';
-  lanesEl.innerHTML = `<table><thead><tr><th>仓库</th><th>车道</th><th>推送前预检</th><th>验证状态</th></tr></thead><tbody>${rows}</tbody></table>
-<p>派工路由：${prof.routingPath ? "已配置 routing.json" : "未配置（fanout 的 roles / plan 会 fail-closed）"}；计划目录：${prof.plansDir ? "已配置" : "目标仓 docs/"}；看板默认仓：${(prof.boardRepos ?? []).length} 个。</p>`;
-}
-
-// Live roles: ask main.js (same BroadcastChannel as the panel) to re-read routing.json.
-const rolesEl = document.querySelector<HTMLElement>("#roles");
-const rolesBtn = document.querySelector<HTMLButtonElement>("#roles-refresh");
-const leadSel = document.querySelector<HTMLSelectElement>("#roles-lead");
-if (rolesEl && rolesBtn && typeof BroadcastChannel !== "undefined") {
-  const ch = new BroadcastChannel("keel");
-  ch.addEventListener("message", (ev) => {
-    const m = ev.data;
-    if (m?.type !== "roles") return;
-    if (m.message) return void (rolesEl.textContent = `读取失败：${m.message}`);
-    const rows = Object.entries<any>(m.result?.roles ?? m.result ?? {}).filter(([, v]) => v && typeof v === "object" && v.model);
-    rolesEl.innerHTML = rows.length ? `<table><thead><tr><th>角色</th><th>agent / 模型 / 强度</th><th>来源档</th></tr></thead><tbody>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v.agent)} / ${esc(v.model)} / ${esc(v.effort)}</td><td>${esc(v.tier)}</td></tr>`).join("")}</tbody></table>` : esc(JSON.stringify(m.result).slice(0, 400));
-  });
-  rolesBtn.addEventListener("click", async () => {
-    rolesEl.textContent = "读取中…";
-    try { await fetch("cindy-ghost://keel/wake"); } catch { /* already awake */ }
-    const reqId = `roles-${Date.now()}`;
-    for (let i = 0; i < 10; i++) { ch.postMessage({ reqId, op: "roles", lead_agent: leadSel?.value ?? "claude-code" }); await new Promise((r) => setTimeout(r, 400)); if (rolesEl.textContent !== "读取中…") break; }
-  });
-}
-
-refresh().catch(() => {
-  statusEl.textContent = "无法读取配置状态，请重新打开插件详情。";
-});
-
-const hooksEl = document.querySelector<HTMLElement>("#hooks-status");
-const clockEl = document.querySelector<HTMLElement>("#clock-status");
-if (hooksEl && typeof BroadcastChannel !== "undefined") {
-  const ch = new BroadcastChannel("keel");
-  ch.addEventListener("message", (ev) => {
-    const m = ev.data as { type?: string; message?: string; result?: { claude_code?: string; codex?: string } };
-    if (m?.type === "clock-status") {
-      if (clockEl) clockEl.textContent = renderClockStatus(m.result as { state?: string; error?: string } | undefined);
-      return;
-    }
-    if (m?.type !== "hooks-status") return;
-    if (m.message) {
-      hooksEl.textContent = `无法读取：${m.message}`;
-      return;
-    }
-    const claude = m.result?.claude_code;
-    const codex = m.result?.codex;
-    const ok = (s: unknown): s is StopHookInstall => s === "installed" || s === "not_installed" || s === "unreadable";
-    hooksEl.textContent = ok(claude) && ok(codex) ? renderStopHookStatus({ claude_code: claude, codex }) : "无法读取";
-  });
-  void (async () => {
-    try { await fetch("cindy-ghost://keel/wake"); } catch { /* already awake */ }
-    const reqId = `hooks-${Date.now()}`;
-    for (let i = 0; i < 10; i++) {
-      ch.postMessage({ reqId, op: "hooks-status" });
-      ch.postMessage({ reqId: `clock-${reqId}`, op: "clock-status" });
-      await new Promise((r) => setTimeout(r, 400));
-      if (hooksEl.textContent !== "读取中…") break;
-    }
-  })();
-}
-
-const manualRoot = document.querySelector<HTMLElement>("#manual");
-const manualStatus = document.querySelector<HTMLElement>("#manual-status");
-const manualFile = document.querySelector<HTMLInputElement>("#manual-file");
 
 const io: SettingsIO = {
   async getKv() {
@@ -170,9 +70,131 @@ const io: SettingsIO = {
 };
 
 let draft: ModelManual = cloneManual(DEFAULT_MANUAL);
-let selectedId = draft.profiles[0]?.id ?? "";
+let harness: SettingsHarness = "codex";
+let selectedId: string | undefined = draft.defaults_by_harness.codex;
+let taskType: TaskType = "default";
 let catalog: CatalogState = { status: "error", models: [], retry: false, message: "" };
-let showHidden = false;
+let catalogSeq = 0;
+let catalogInflight: Promise<CatalogState> | undefined;
+
+const input = document.querySelector<HTMLInputElement>("#key");
+const statusEl = document.querySelector<HTMLElement>("#status");
+const jevValue = document.querySelector<HTMLElement>("#status-jev-value");
+const jevDot = document.querySelector<HTMLElement>("#status-jev-dot");
+
+function setDot(el: HTMLElement | null, tone: "ok" | "warn" | "unknown"): void {
+  if (!el) return;
+  el.className = `dot ${tone}`;
+}
+
+async function refreshJev(): Promise<void> {
+  if (!input && !jevValue && !statusEl) return;
+  const r = await fetch("/secrets");
+  if (!r.ok) throw new Error("status");
+  const entries = (await r.json()) as { key: string; saved: boolean; tail?: string }[];
+  const key = entries.find((x) => x.key === "api_key");
+  const text = key?.saved ? `已保存${key.tail ? ` · 尾号 ${key.tail}` : ""}` : "尚未配置";
+  if (statusEl) statusEl.textContent = key?.saved ? `凭证已保存${key.tail ? `（尾号 ${key.tail}）` : ""}` : "尚未配置凭证";
+  if (jevValue) jevValue.textContent = text;
+  setDot(jevDot, key?.saved ? "ok" : "warn");
+}
+
+document.querySelector("#form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!input || !statusEl) return;
+  const value = input.value.trim();
+  input.value = "";
+  if (!value) {
+    statusEl.textContent = "请输入 API Key。";
+    return;
+  }
+  try {
+    const r = await fetch("/secrets/api_key", { method: "PUT", body: JSON.stringify({ value }) });
+    if (r.status !== 204) throw new Error("save");
+    await refreshJev();
+  } catch {
+    statusEl.textContent = "保存失败，请重新输入并重试。";
+  }
+});
+
+document.querySelector("#clear")?.addEventListener("click", async () => {
+  if (input) input.value = "";
+  try {
+    const r = await fetch("/secrets/api_key", { method: "DELETE" });
+    if (!r.ok) throw new Error("clear");
+    await refreshJev();
+  } catch {
+    if (statusEl) statusEl.textContent = "清除失败，请重试。";
+  }
+});
+
+declare const __KEEL_PROFILE__: { lanes?: { repo: string; preset: string; preflight?: string; verifyCheck?: string }[]; routingPath?: string | null; plansDir?: string | null; boardRepos?: string[] };
+const prof = typeof __KEEL_PROFILE__ === "undefined" ? {} : __KEEL_PROFILE__;
+const lanesEl = document.querySelector<HTMLElement>("#lanes");
+const lanesSummary = document.querySelector<HTMLElement>("#lanes-summary");
+if (lanesEl) {
+  const n = (prof.lanes ?? []).length;
+  if (lanesSummary) lanesSummary.textContent = `只读 · ${n} 个仓 ›`;
+  const rows = (prof.lanes ?? []).map((l) => `<tr><td><code>${esc(l.repo)}</code></td><td>${esc(l.preset)}</td><td>${l.preflight ? "有" : "—"}</td><td>${l.verifyCheck ? `<code>${esc(l.verifyCheck)}</code>` : "—"}</td></tr>`).join("") || '<tr><td colspan="4">未配置，所有仓按 personal 车道处理</td></tr>';
+  lanesEl.innerHTML = `<table><thead><tr><th>仓库</th><th>车道</th><th>推送前预检</th><th>验证状态</th></tr></thead><tbody>${rows}</tbody></table>
+<p>计划目录：${prof.plansDir ? "已配置" : "目标仓 docs/"}；看板默认仓：${(prof.boardRepos ?? []).length} 个。</p>`;
+}
+
+refreshJev().catch(() => {
+  if (statusEl) statusEl.textContent = "无法读取配置状态，请重新打开插件详情。";
+  if (jevValue) jevValue.textContent = "无法读取";
+  setDot(jevDot, "unknown");
+});
+
+const hooksBox = document.querySelector<HTMLElement>("#status-hooks-value");
+const clockValue = document.querySelector<HTMLElement>("#status-clock-value");
+const clockDot = document.querySelector<HTMLElement>("#status-clock-dot");
+if (hooksBox && typeof BroadcastChannel !== "undefined") {
+  const ch = new BroadcastChannel("keel");
+  ch.addEventListener("message", (ev) => {
+    const m = ev.data as { type?: string; message?: string; result?: { claude_code?: string; codex?: string; state?: string; error?: string; failCount?: number } };
+    if (m?.type === "clock-status") {
+      const tone = clockTone(m.result);
+      if (clockValue) clockValue.textContent = renderClockStatus(m.result).replace(/^常驻时钟：/, "");
+      setDot(clockDot, tone);
+      return;
+    }
+    if (m?.type !== "hooks-status") return;
+    if (m.message) {
+      hooksBox.innerHTML = `<div class="v"><i class="dot unknown"></i>无法读取</div>`;
+      return;
+    }
+    const claude = m.result?.claude_code;
+    const codex = m.result?.codex;
+    const ok = (s: unknown): s is StopHookInstall => s === "installed" || s === "not_installed" || s === "unreadable";
+    if (!ok(claude) || !ok(codex)) {
+      hooksBox.innerHTML = `<div class="v"><i class="dot unknown"></i>无法读取</div>`;
+      return;
+    }
+    const hookLabel = (s: StopHookInstall) => s === "installed" ? "已装" : s === "not_installed" ? "未装" : "无法读取";
+    hooksBox.innerHTML = `<div class="v"><i class="dot ${stopHookTone(codex)}"></i>Codex ${hookLabel(codex)}</div>
+<div class="v"><i class="dot ${stopHookTone(claude)}"></i>Claude Code ${hookLabel(claude)}</div>`;
+  });
+  void (async () => {
+    try { await fetch("cindy-ghost://keel/wake"); } catch { /* already awake */ }
+    const reqId = `hooks-${Date.now()}`;
+    for (let i = 0; i < 10; i++) {
+      ch.postMessage({ reqId, op: "hooks-status" });
+      ch.postMessage({ reqId: `clock-${reqId}`, op: "clock-status" });
+      await new Promise((r) => setTimeout(r, 400));
+      if (!hooksBox.textContent?.includes("读取中")) break;
+    }
+  })();
+}
+
+const manualStatus = document.querySelector<HTMLElement>("#manual-status");
+const manualFile = document.querySelector<HTMLInputElement>("#manual-file");
+const rowsEl = document.querySelector<HTMLElement>("#model-rows");
+const taskbar = document.querySelector<HTMLElement>("#taskbar");
+const hintEl = document.querySelector<HTMLElement>("#model-hint");
+const catalogValue = document.querySelector<HTMLElement>("#status-catalog-value");
+const catalogDot = document.querySelector<HTMLElement>("#status-catalog-dot");
+const advancedBody = document.querySelector<HTMLElement>("#advanced-body");
 
 function setManualStatus(kind: "ok" | "error" | "info", text: string, issues?: { path: string; message: string }[]): void {
   if (!manualStatus) return;
@@ -181,97 +203,143 @@ function setManualStatus(kind: "ok" | "error" | "info", text: string, issues?: {
   manualStatus.textContent = extra ? `${text}\n${extra}` : text;
 }
 
-function routeSelects(prefix: string, route: { agent: Harness; model: string; provider_id: string; effort?: string; stale?: string; modelOptions: readonly { value: string; label: string; hidden: boolean }[]; effortOptions: readonly { value: string; label: string }[] }): string {
-  const agents = HARNESSES.map((h) => `<option value="${h}"${route.agent === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("");
-  const models = route.modelOptions.map((o) => `<option value="${esc(o.value)}"${o.value === `${route.model}\t${route.provider_id}` ? " selected" : ""}>${esc(o.label)}${o.hidden ? "（隐藏）" : ""}</option>`).join("");
-  const efforts = route.effortOptions.map((o) => `<option value="${esc(o.value)}"${(route.effort ?? "") === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("");
-  return `<div class="cell-route${route.stale ? " stale" : ""}" data-prefix="${esc(prefix)}">
-    <select data-act="agent" data-prefix="${esc(prefix)}">${agents}</select>
-    <select data-act="model" data-prefix="${esc(prefix)}"><option value="">选择模型</option>${models}</select>
-    <select data-act="effort" data-prefix="${esc(prefix)}">${efforts}</select>
-    ${route.stale ? `<div class="stale-reason">${esc(route.stale)}</div>` : ""}
-  </div>`;
+function currentView() {
+  return buildSettingsView(draft, { harness, profileId: selectedId, taskType }, catalog.models);
 }
 
-function renderManual(): void {
-  if (!manualRoot) return;
-  const items = profileList(draft, selectedId);
-  const selected = draft.profiles.find((p) => p.id === selectedId);
-  const lead = selected ? leadView(draft, selected.id, catalog.models, showHidden) : undefined;
-  const inheritOpts = draft.profiles.filter((p) => p.id !== selectedId).map((p) => `<option value="${esc(p.id)}"${selected?.inherit === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("");
-  const profileBtns = items.map((p) => `<button type="button" data-act="select" data-id="${esc(p.id)}"${p.selected ? " class=\"on\"" : ""}>${esc(p.name)}${p.defaultOf ? ` · ${HARNESS_LABELS[p.defaultOf]}默认` : ""}</button>`).join("");
-  let grid = "";
-  if (selected) {
-    const head = `<tr><th>节点</th>${TASK_TYPES.map((t) => `<th>${TASK_LABELS[t]}</th>`).join("")}</tr>`;
-    const body = ROLES.map((role) => {
-      const tds = TASK_TYPES.map((taskType) => {
-        const cell = cellView(draft, selected.id, taskType, role, catalog.models, showHidden);
-        const prefix = `slot:${taskType}:${role}`;
-        if (cell.inherit) return `<td><label><input type="checkbox" data-act="cell-inherit" data-task="${taskType}" data-role="${role}" checked> 沿用</label></td>`;
-        const fb = cell.fallbacks.map((f, i) => `<div>备${i + 1} ${routeSelects(`${prefix}:fb:${i}`, f)}<button type="button" data-act="del-fb" data-task="${taskType}" data-role="${role}" data-i="${i}">删备</button></div>`).join("");
-        return `<td><label><input type="checkbox" data-act="cell-inherit" data-task="${taskType}" data-role="${role}"> 沿用</label>${routeSelects(`${prefix}:primary`, cell.primary!)}${fb}${cell.canAddFallback ? `<button type="button" data-act="add-fb" data-task="${taskType}" data-role="${role}">加备路线</button>` : ""}</td>`;
-      }).join("");
-      return `<tr><th>${ROLE_LABELS[role]}</th>${tds}</tr>`;
-    }).join("");
-    grid = `<div class="grid"><table>${head}${body}</table></div>`;
+function optionHtml(o: { value: string; label: string; disabled?: boolean }, selected: string): string {
+  return `<option value="${esc(o.value)}"${o.value === selected ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`;
+}
+
+function selectHtml(ctrl: SettingsRowView["agent"], row: SettingsRowId, act: "agent" | "model" | "effort", cls?: string): string {
+  const groups = ctrl.groups.map((g) => `<optgroup label="${esc(g.label)}">${g.options.map((o) => optionHtml(o, ctrl.value)).join("")}</optgroup>`).join("");
+  const options = ctrl.options.map((o) => optionHtml(o, ctrl.value)).join("");
+  return `<select class="${cls ?? act}" data-act="${act}" data-row="${row}" aria-label="${esc(ctrl.label)}"${ctrl.disabled ? " disabled" : ""}>${options}${groups}</select>`;
+}
+
+function renderRow(row: SettingsRowView): string {
+  const locked = row.locked ? " style=\"opacity:.45\"" : "";
+  const pick = `<div class="pick"${locked}>${selectHtml(row.agent, row.id, "agent")}${selectHtml(row.model, row.id, "model", "model")}${selectHtml(row.effort, row.id, "effort")}</div>`;
+  let sub = row.source ?? "";
+  if (row.stale) sub = (sub ? `${sub} · ` : "") + `<span class="stale-reason">${esc(row.stale)}</span>`;
+  if (row.locked) sub = `沿用所有任务的设置 · <button type="button" class="link" data-act="own" data-row="${row.id}">单独设置</button>`;
+  else if (taskType !== "default" && !row.profileLevel && SETTINGS_ROW_IDS.includes(row.id)) {
+    sub = (sub ? `${sub} · ` : "") + `<button type="button" class="link" data-act="inherit-slot" data-row="${row.id}">沿用所有任务</button>`;
   }
-  const catalogBar = catalog.message
-    ? `<p class="issues">${esc(catalog.message)}${catalog.retry ? ` <button type="button" data-act="retry-catalog">重试</button>` : ""}</p>`
-    : "";
-  manualRoot.innerHTML = `${catalogBar}
-    <div class="row"><label><input type="checkbox" data-act="toggle-hidden"${showHidden ? " checked" : ""}> 显示隐藏模型</label></div>
-    <div class="row">${profileBtns}
+  return `<div class="row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}"><div class="role"><b>${esc(row.label)}</b><span>${esc(row.description)}</span></div>${pick}${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+function renderAdvanced(view: ReturnType<typeof currentView>): void {
+  if (!advancedBody) return;
+  const items = profileList(draft, view.profileId);
+  const selected = draft.profiles.find((p) => p.id === view.profileId);
+  const inheritOpts = draft.profiles.filter((p) => p.id !== view.profileId).map((p) => `<option value="${esc(p.id)}"${selected?.inherit === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("");
+  const profileBtns = items.map((p) => `<button type="button" data-act="select" data-id="${esc(p.id)}"${p.selected ? " class=\"on\"" : ""}>${esc(p.name)}${p.defaultOf ? ` · ${HARNESS_LABELS[p.defaultOf]}默认` : ""}</button>`).join("");
+  let fallbacks = "";
+  if (selected) {
+    const col = selected.nodes[taskType === "default" ? "default" : taskType] ?? selected.nodes.default;
+    const roles: Role[] = ["explorer", "researcher", "worker", "verifier", "architect"];
+    fallbacks = roles.map((role) => {
+      const slot = col?.[role];
+      const fbs = slot?.fallbacks ?? [];
+      const groups = slot ? groupModelOptions(catalog.models, slot.primary.agent) : [];
+      const fbHtml = fbs.map((f, i) => {
+        const g = groupModelOptions(catalog.models, f.agent);
+        const modelOpts = g.map((x) => `<optgroup label="${esc(x.label)}">${x.options.map((o) => `<option value="${esc(o.value)}"${o.value === `${f.model}\t${f.provider_id}` ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</optgroup>`).join("");
+        const efforts = (catalog.models.find((m) => m.agent === f.agent && m.id === f.model && m.providerId === f.provider_id)?.efforts ?? []).map((e) => `<option${e === f.effort ? " selected" : ""}>${esc(e)}</option>`).join("");
+        return `<div class="adv-row">备${i + 1}
+          <select data-act="fb-agent" data-role="${role}" data-i="${i}">${HARNESSES.map((h) => `<option value="${h}"${f.agent === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("")}</select>
+          <select data-act="fb-model" data-role="${role}" data-i="${i}">${modelOpts}</select>
+          <select data-act="fb-effort" data-role="${role}" data-i="${i}">${efforts}</select>
+          <button type="button" data-act="del-fb" data-role="${role}" data-i="${i}">删备</button></div>`;
+      }).join("");
+      return `<p>${role}${groups.length ? "" : ""}</p>${fbHtml}${slot && fbs.length < MAX_FALLBACKS ? `<button type="button" data-act="add-fb" data-role="${role}">加备路线</button>` : ""}`;
+    }).join("");
+  }
+  advancedBody.innerHTML = `<p class="hint">档次表只用于方向裁决分组（比主控强 / 持平 / 未分级），不能在这里增删模型。</p>
+    <div class="adv-row">${profileBtns}
       <button type="button" data-act="add">新增</button>
       <button type="button" data-act="copy">复制</button>
       <button type="button" data-act="delete">删除</button></div>
-    ${selected && lead ? `<div class="row">名称 <input type="text" data-act="rename" value="${esc(selected.name)}">
-      harness <select data-act="harness">${HARNESSES.map((h) => `<option value="${h}"${selected.harness === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("")}</select>
-      方向裁决 <select data-act="direction"><option value="lead"${selected.direction_gate === "lead" ? " selected" : ""}>主控</option><option value="astra"${selected.direction_gate === "astra" ? " selected" : ""}>Astra</option></select>
+    ${selected ? `<div class="adv-row">名称 <input type="text" data-act="rename" value="${esc(selected.name)}">
+      harness <select data-act="adv-harness">${HARNESSES.map((h) => `<option value="${h}"${selected.harness === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("")}</select>
       沿用方案 <select data-act="inherit"><option value="">不沿用</option>${inheritOpts}</select>
-      <label><input type="checkbox" data-act="default"${draft.defaults_by_harness[selected.harness] === selected.id ? " checked" : ""}> 设为${HARNESS_LABELS[selected.harness]}默认</label></div>
-      <p>主控</p>${routeSelects("lead", lead)}${grid}` : ""}
-    <div class="row">
-      <button type="button" data-act="save">保存说明书</button>
+      <label><input type="checkbox" data-act="default"${draft.defaults_by_harness[selected.harness] === selected.id ? " checked" : ""}> 设为${HARNESS_LABELS[selected.harness]}默认</label></div>` : ""}
+    <div class="adv-row">
       <button type="button" data-act="export">导出 JSON</button>
-      <button type="button" data-act="import">导入 JSON</button>
-      <button type="button" data-act="restore">恢复默认方案</button></div>`;
+      <button type="button" data-act="import">导入 JSON</button></div>
+    ${fallbacks}`;
 }
 
-function currentSlot(taskType: TaskType, role: Role): Slot {
-  return draft.profiles.find((p) => p.id === selectedId)?.nodes[taskType]?.[role] ?? materializeSlot(draft, selectedId, taskType, role);
+function renderManual(restore?: { act: string; row: string }): void {
+  const view = currentView();
+  selectedId = view.profileId ?? selectedId;
+  document.querySelectorAll<HTMLButtonElement>("#model-tabs [data-harness]").forEach((b) => {
+    const on = b.dataset.harness === harness;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll<HTMLButtonElement>("#task-scope [data-scope]").forEach((b) => {
+    b.classList.toggle("on", (taskType === "default" ? "all" : "task") === b.dataset.scope);
+  });
+  if (taskbar) {
+    taskbar.hidden = view.taskScope !== "task";
+    if (view.taskScope === "task") {
+      taskbar.innerHTML = `<div class="tabs">${TASK_SCOPE_TYPES.map((t) => `<button type="button" data-act="task" data-task="${t}"${t === taskType ? " class=\"on\"" : ""}>${TASK_LABELS[t]}</button>`).join("")}</div>`;
+    }
+  }
+  if (hintEl) {
+    hintEl.textContent = view.taskScope === "task"
+      ? `只改需要和「所有任务」不同的角色。已有 ${view.overrideCount} 处覆盖。`
+      : (view.notice ?? "改完点保存，下一次派工生效。");
+  }
+  if (catalogValue) {
+    if (catalog.status === "ok") {
+      const n = catalog.models.filter((m) => m.visible === true).length;
+      catalogValue.textContent = catalog.models.length ? `已启用 ${n} 项` : "清单为空";
+      setDot(catalogDot, catalog.models.length ? "ok" : "warn");
+    } else {
+      catalogValue.textContent = catalog.status === "upgrade" ? "需升级 Cindy" : catalog.status === "retry" ? "暂时不可用" : "读取失败";
+      setDot(catalogDot, "warn");
+    }
+  }
+  if (rowsEl) {
+    if (view.empty) rowsEl.innerHTML = `<div class="empty">${esc(view.empty)}</div>`;
+    else rowsEl.innerHTML = view.rows.map(renderRow).join("");
+  }
+  renderAdvanced(view);
+  if (restore) {
+    const el = document.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]`);
+    el?.focus();
+  }
 }
 
-function writeRoute(slot: Slot, which: string, route: Route): Slot {
-  if (which === "primary") return { ...slot, primary: route };
-  const i = Number(which);
-  const fallbacks = [...(slot.fallbacks ?? [])];
-  fallbacks[i] = route;
-  return { ...slot, fallbacks };
+function currentSlot(role: Role): Slot {
+  const id = selectedId ?? "";
+  return draft.profiles.find((p) => p.id === id)?.nodes[taskType]?.[role]
+    ?? draft.profiles.find((p) => p.id === id)?.nodes.default?.[role]
+    ?? materializeSlot(draft, id, taskType, role);
 }
 
-function applyRoute(prefix: string, next: Route): void {
-  if (prefix === "lead") {
+function applyRowRoute(row: SettingsRowId, next: Route): void {
+  if (!selectedId) return;
+  if (row === "lead") {
     draft = setLead(draft, selectedId, next);
     return;
   }
-  const m = /^slot:([^:]+):([^:]+):(primary|fb):?(.*)$/.exec(prefix);
-  if (!m) return;
-  const taskType = m[1] as TaskType;
-  const role = m[2] as Role;
-  const which = m[3] === "primary" ? "primary" : m[4]!;
-  draft = setSlot(draft, selectedId, taskType, role, writeRoute(currentSlot(taskType, role), which, next));
-}
-
-function readPrefixRoute(prefix: string): Route | undefined {
-  if (prefix === "lead") return draft.profiles.find((p) => p.id === selectedId)?.lead;
-  const m = /^slot:([^:]+):([^:]+):(primary|fb):?(.*)$/.exec(prefix);
-  if (!m) return;
-  const slot = currentSlot(m[1] as TaskType, m[2] as Role);
-  return m[3] === "primary" ? slot.primary : slot.fallbacks?.[Number(m[4])];
+  if (row === "direction") {
+    draft = setDirectionRoute(draft, selectedId, next.model && next.provider_id ? next : undefined);
+    return;
+  }
+  const role = row as Role;
+  const target: TaskType = taskType === "default" ? "default" : taskType;
+  const prev = currentSlot(role);
+  draft = setSlot(draft, selectedId, target, role, { primary: next, fallbacks: prev.fallbacks });
 }
 
 async function doSave(next = draft): Promise<void> {
   setManualStatus("info", "正在保存…");
+  await refreshCatalog({ render: false });
   let result: Awaited<ReturnType<typeof saveManual>>;
   try {
     result = await saveManual(io, next, catalog.models);
@@ -281,7 +349,8 @@ async function doSave(next = draft): Promise<void> {
   }
   if (result.ok) {
     draft = next;
-    if (!draft.profiles.some((p) => p.id === selectedId)) selectedId = draft.profiles[0]?.id ?? "";
+    const view = currentView();
+    selectedId = view.profileId ?? draft.profiles[0]?.id;
     setManualStatus("ok", "已保存");
     renderManual();
     return;
@@ -290,40 +359,53 @@ async function doSave(next = draft): Promise<void> {
   else setManualStatus("error", result.message);
 }
 
-async function loadCatalog(): Promise<void> {
-  catalog = await fetchCatalog(io);
-  renderManual();
+async function refreshCatalog(opts?: { render?: boolean }): Promise<void> {
+  const seq = ++catalogSeq;
+  if (!catalogInflight) catalogInflight = fetchCatalog(io).finally(() => { catalogInflight = undefined; });
+  const next = await catalogInflight;
+  if (!acceptCatalogResponse(catalogSeq, seq)) return;
+  catalog = next;
+  if (opts?.render !== false) renderManual();
 }
 
-manualRoot?.addEventListener("click", (ev) => {
+function onCatalogOpen(ev: Event): void {
+  const t = ev.target as HTMLElement;
+  const act = t.getAttribute("data-act");
+  if (act === "model" || act === "effort" || act === "agent") void refreshCatalog();
+}
+
+rowsEl?.addEventListener("focusin", onCatalogOpen);
+rowsEl?.addEventListener("mousedown", onCatalogOpen);
+rowsEl?.addEventListener("pointerdown", onCatalogOpen);
+
+document.querySelector("#model-tabs")?.addEventListener("click", (ev) => {
+  const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-harness]");
+  if (!t?.dataset.harness) return;
+  harness = t.dataset.harness as SettingsHarness;
+  selectedId = draft.defaults_by_harness[harness] ?? draft.profiles.find((p) => p.harness === harness)?.id;
+  renderManual();
+});
+
+document.querySelector("#task-scope")?.addEventListener("click", (ev) => {
+  const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-scope]");
+  if (!t?.dataset.scope) return;
+  taskType = t.dataset.scope === "task" ? (taskType === "default" ? "bug-fix" : taskType) : "default";
+  renderManual();
+});
+
+taskbar?.addEventListener("click", (ev) => {
+  const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-task]");
+  if (!t?.dataset.task) return;
+  taskType = t.dataset.task as TaskType;
+  renderManual();
+});
+
+function onActClick(ev: Event): void {
   const t = (ev.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!t) return;
   const act = t.dataset.act;
-  if (act === "select") { selectedId = t.dataset.id ?? selectedId; renderManual(); }
-  else if (act === "add") { const r = addProfile(draft); draft = r.manual; selectedId = r.id; renderManual(); }
-  else if (act === "copy") { const r = copyProfile(draft, selectedId); draft = r.manual; selectedId = r.id; renderManual(); }
-  else if (act === "delete") {
-    const gate = canDeleteProfile(draft, selectedId);
-    if (!gate.ok) return setManualStatus("error", gate.reason);
-    const r = deleteProfile(draft, selectedId);
-    if ("error" in r) return setManualStatus("error", r.error);
-    draft = r.manual;
-    selectedId = draft.profiles[0]?.id ?? "";
-    renderManual();
-  } else if (act === "add-fb") {
-    const taskType = t.dataset.task as TaskType, role = t.dataset.role as Role;
-    const slot = currentSlot(taskType, role);
-    if ((slot.fallbacks ?? []).length >= MAX_FALLBACKS) return;
-    const blank: Route = { agent: slot.primary.agent, model: "", provider_id: "" };
-    draft = setSlot(draft, selectedId, taskType, role, { ...slot, fallbacks: [...(slot.fallbacks ?? []), blank] });
-    renderManual();
-  } else if (act === "del-fb") {
-    const taskType = t.dataset.task as TaskType, role = t.dataset.role as Role, i = Number(t.dataset.i);
-    const slot = currentSlot(taskType, role);
-    const fallbacks = (slot.fallbacks ?? []).filter((_, idx) => idx !== i);
-    draft = setSlot(draft, selectedId, taskType, role, { primary: slot.primary, fallbacks: fallbacks.length ? fallbacks : undefined });
-    renderManual();
-  } else if (act === "save") void doSave();
+  if (act === "save") void doSave();
+  else if (act === "restore") void doSave(cloneManual(DEFAULT_MANUAL));
   else if (act === "export") {
     const blob = new Blob([prettyExport(draft)], { type: "application/json" });
     const a = document.createElement("a");
@@ -332,44 +414,111 @@ manualRoot?.addEventListener("click", (ev) => {
     a.click();
     setManualStatus("info", "已导出当前说明书 JSON。");
   } else if (act === "import") manualFile?.click();
-  else if (act === "restore") void doSave(cloneManual(DEFAULT_MANUAL));
-  else if (act === "retry-catalog") void loadCatalog();
-});
+  else if (act === "retry-catalog") void refreshCatalog();
+  else if (act === "select") {
+    selectedId = t.dataset.id ?? selectedId;
+    const p = draft.profiles.find((x) => x.id === selectedId);
+    if (p && (p.harness === "codex" || p.harness === "claude-code")) harness = p.harness;
+    renderManual();
+  } else if (act === "add") {
+    const r = addProfile(draft);
+    draft = r.manual;
+    selectedId = r.id;
+    renderManual();
+  } else if (act === "copy") {
+    if (!selectedId) return;
+    const r = copyProfile(draft, selectedId);
+    draft = r.manual;
+    selectedId = r.id;
+    renderManual();
+  } else if (act === "delete") {
+    if (!selectedId) return;
+    const gate = canDeleteProfile(draft, selectedId);
+    if (!gate.ok) return setManualStatus("error", gate.reason);
+    const r = deleteProfile(draft, selectedId);
+    if ("error" in r) return setManualStatus("error", r.error);
+    draft = r.manual;
+    selectedId = draft.defaults_by_harness[harness] ?? draft.profiles[0]?.id;
+    renderManual();
+  } else if (act === "own" && selectedId) {
+    const role = t.dataset.row as Role;
+    draft = setSlot(draft, selectedId, taskType, role, materializeSlot(draft, selectedId, taskType, role));
+    renderManual();
+  } else if (act === "inherit-slot" && selectedId) {
+    const role = t.dataset.row as Role;
+    draft = setSlot(draft, selectedId, taskType, role, undefined);
+    renderManual();
+  } else if (act === "add-fb" && selectedId) {
+    const role = t.dataset.role as Role;
+    const slot = currentSlot(role);
+    if ((slot.fallbacks ?? []).length >= MAX_FALLBACKS) return;
+    const blank: Route = { agent: slot.primary.agent, model: "", provider_id: "" };
+    draft = setSlot(draft, selectedId, taskType === "default" ? "default" : taskType, role, { ...slot, fallbacks: [...(slot.fallbacks ?? []), blank] });
+    renderManual();
+  } else if (act === "del-fb" && selectedId) {
+    const role = t.dataset.role as Role;
+    const i = Number(t.dataset.i);
+    const slot = currentSlot(role);
+    const fallbacks = (slot.fallbacks ?? []).filter((_, idx) => idx !== i);
+    draft = setSlot(draft, selectedId, taskType === "default" ? "default" : taskType, role, { primary: slot.primary, fallbacks: fallbacks.length ? fallbacks : undefined });
+    renderManual();
+  }
+}
 
-manualRoot?.addEventListener("change", (ev) => {
+document.querySelector(".bar")?.addEventListener("click", onActClick);
+advancedBody?.addEventListener("click", onActClick);
+rowsEl?.addEventListener("click", onActClick);
+
+function onControlChange(ev: Event): void {
   const t = ev.target as HTMLInputElement | HTMLSelectElement;
   const act = t.dataset.act;
-  if (act === "toggle-hidden") { showHidden = (t as HTMLInputElement).checked; renderManual(); }
-  else if (act === "rename") { draft = renameProfile(draft, selectedId, t.value); }
-  else if (act === "harness") { draft = setProfileHarness(draft, selectedId, t.value as Harness); renderManual(); }
-  else if (act === "direction") { draft = setDirectionGate(draft, selectedId, t.value as DirectionGate); }
-  else if (act === "inherit") { draft = setInherit(draft, selectedId, t.value || undefined); renderManual(); }
-  else if (act === "default") { draft = setHarnessDefault(draft, selectedId, (t as HTMLInputElement).checked); renderManual(); }
-  else if (act === "cell-inherit") {
-    const taskType = t.dataset.task as TaskType, role = t.dataset.role as Role;
-    if ((t as HTMLInputElement).checked) draft = setSlot(draft, selectedId, taskType, role, undefined);
-    else draft = setSlot(draft, selectedId, taskType, role, materializeSlot(draft, selectedId, taskType, role));
+  const row = t.dataset.row as SettingsRowId | undefined;
+  if (act === "rename" && selectedId) draft = renameProfile(draft, selectedId, t.value);
+  else if (act === "adv-harness" && selectedId) {
+    draft = setProfileHarness(draft, selectedId, t.value as Harness);
     renderManual();
-  } else if (act === "agent" || act === "model" || act === "effort") {
-    const prefix = t.dataset.prefix ?? "";
-    const cur = readPrefixRoute(prefix);
-    if (!cur) return;
-    if (act === "agent") {
-      const agent = t.value as Harness;
-      const first = filterModels(catalog.models, agent, showHidden)[0];
-      applyRoute(prefix, first ? routeFromModel(first, cur.effort) : { agent, model: "", provider_id: "" });
-      renderManual();
-    } else if (act === "model") {
-      const [id, providerId] = t.value.split("\t");
-      const hit = catalog.models.find((m) => m.agent === cur.agent && m.id === id && m.providerId === providerId);
-      applyRoute(prefix, hit ? routeFromModel(hit, cur.effort) : { agent: cur.agent, model: id ?? "", provider_id: providerId ?? "" });
-      renderManual();
-    } else {
-      const hit = catalog.models.find((m) => m.agent === cur.agent && m.id === cur.model && m.providerId === cur.provider_id);
-      applyRoute(prefix, hit ? routeFromModel(hit, t.value || undefined) : { ...cur, ...(t.value ? { effort: t.value } : { effort: undefined }) });
+  } else if (act === "inherit" && selectedId) {
+    draft = setInherit(draft, selectedId, t.value || undefined);
+    renderManual();
+  } else if (act === "default" && selectedId) {
+    draft = setHarnessDefault(draft, selectedId, (t as HTMLInputElement).checked);
+    renderManual();
+  } else if ((act === "agent" || act === "model" || act === "effort") && row) {
+    const view = currentView();
+    const cur = view.rows.find((r) => r.id === row);
+    if (row === "direction" && act === "model" && t.value === "") {
+      if (selectedId) draft = setDirectionRoute(draft, selectedId, undefined);
+      renderManual({ act, row });
+      return;
     }
+    const prev = cur?.route ?? { agent: "codex" as const, model: "", provider_id: "" };
+    let next: Route;
+    if (act === "agent") next = routeAfterAgentChange(catalog.models, t.value as Harness, prev.effort);
+    else if (act === "model") {
+      const [id, providerId] = t.value.split("\t");
+      next = routeAfterModelChange(catalog.models, prev.agent, id ?? "", providerId ?? "", prev.effort);
+    } else next = routeAfterEffortChange(catalog.models, prev, t.value);
+    applyRowRoute(row, next);
+    renderManual({ act, row });
+  } else if ((act === "fb-agent" || act === "fb-model" || act === "fb-effort") && selectedId) {
+    const role = t.dataset.role as Role;
+    const i = Number(t.dataset.i);
+    const slot = currentSlot(role);
+    const fallbacks = [...(slot.fallbacks ?? [])];
+    const cur = fallbacks[i];
+    if (!cur) return;
+    if (act === "fb-agent") fallbacks[i] = routeAfterAgentChange(catalog.models, t.value as Harness, cur.effort);
+    else if (act === "fb-model") {
+      const [id, providerId] = t.value.split("\t");
+      fallbacks[i] = routeAfterModelChange(catalog.models, cur.agent, id ?? "", providerId ?? "", cur.effort);
+    } else fallbacks[i] = routeAfterEffortChange(catalog.models, cur, t.value);
+    draft = setSlot(draft, selectedId, taskType === "default" ? "default" : taskType, role, { ...slot, fallbacks });
+    renderManual();
   }
-});
+}
+
+rowsEl?.addEventListener("change", onControlChange);
+advancedBody?.addEventListener("change", onControlChange);
 
 manualFile?.addEventListener("change", async () => {
   const file = manualFile.files?.[0];
@@ -383,18 +532,27 @@ manualFile?.addEventListener("change", async () => {
 
 const replySelect = document.querySelector<HTMLSelectElement>("#reply-confirm");
 const replyStatus = document.querySelector<HTMLElement>("#reply-status");
+const replySeg = document.querySelector<HTMLElement>("#reply-seg");
+
+function paintReply(mode: ReplyMode): void {
+  if (replySelect) replySelect.value = mode;
+  replySeg?.querySelectorAll<HTMLButtonElement>("[data-reply]").forEach((b) => b.classList.toggle("on", b.dataset.reply === mode));
+}
 
 void (async () => {
-  if (!replySelect || !replyStatus) return;
+  if (!replyStatus) return;
   try {
     const { mode, error } = readReplyMode(await io.getKv());
-    replySelect.value = mode;
+    paintReply(mode);
     replyStatus.textContent = error ?? `当前：${REPLY_MODE_LABELS[mode]}`;
   } catch {
     replyStatus.textContent = "读取 /kv 失败，无法显示当前设置。";
   }
-  replySelect.addEventListener("change", async () => {
-    const mode = replySelect.value as ReplyMode;
+  replySeg?.addEventListener("click", async (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-reply]");
+    if (!btn?.dataset.reply) return;
+    const mode = btn.dataset.reply as ReplyMode;
+    paintReply(mode);
     replyStatus.textContent = "正在保存…";
     try {
       const r = await saveReplyMode(io, mode);
@@ -406,16 +564,16 @@ void (async () => {
 })();
 
 void (async () => {
-  if (!manualRoot) return;
+  if (!rowsEl) return;
   try {
     const loaded = await loadManualFromKv(io);
     draft = loaded.manual;
-    selectedId = draft.profiles[0]?.id ?? "";
+    selectedId = draft.defaults_by_harness[harness] ?? draft.profiles.find((p) => p.harness === harness)?.id;
     if (loaded.error) setManualStatus("error", `已回落到默认方案：${loaded.error}`);
   } catch {
     setManualStatus("error", "读取 /kv 失败，已使用默认方案。");
   }
-  await loadCatalog();
+  await refreshCatalog();
 })();
 
 export {};

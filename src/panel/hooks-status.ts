@@ -17,3 +17,17 @@ export function renderClockStatus(status: { state?: string; error?: string; fail
   if (status?.state === "restart_failed") return `常驻时钟：拉起失败${status.error ? `（${status.error}）` : ""}`;
   return "常驻时钟：未知";
 }
+
+export type StatusTone = "ok" | "warn" | "unknown";
+
+export function stopHookTone(status: StopHookInstall): StatusTone {
+  if (status === "installed") return "ok";
+  if (status === "not_installed") return "warn";
+  return "unknown";
+}
+
+export function clockTone(status: { state?: string } | null | undefined): StatusTone {
+  if (status?.state === "running") return "ok";
+  if (status?.state === "crashed" || status?.state === "restart_failed") return "warn";
+  return "unknown";
+}

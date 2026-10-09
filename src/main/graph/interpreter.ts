@@ -3,13 +3,14 @@
 import { loadRuntimeConfig, type RuntimeConfig } from "../config.ts";
 import { KeelError, type Host } from "../host.ts";
 import { resolve } from "../manual/resolve.ts";
+import { resolveDirection } from "../../shared/manual/resolve.ts";
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief } from "./brief.ts";
 import { crossesFunctionBoundaryOrUnknown, failureFingerprint, shouldSkipFinalReview } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
-import type { AgentModel, ModelManual, Role, Route } from "../../shared/manual/schema.ts";
+import { ManualError, type AgentModel, type ModelManual, type Role, type Route } from "../../shared/manual/schema.ts";
 import {
   ACCEPTED_TIMEOUT_MS,
   dispatchKey,
@@ -214,6 +215,18 @@ function modelsAllow(models: readonly AgentModel[] | undefined, route: Route): b
   return models.some((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id);
 }
 
+function routesForNode(manual: ModelManual, state: GraphRunState, role: Role, nodeId: string) {
+  if (nodeId === ASTRA_CONSULT_ID) {
+    try {
+      return resolveDirection(manual, state.profile_id, state.task_type);
+    } catch (e) {
+      if (e instanceof ManualError) throw new KeelError(e.code, e.message, { path: e.path });
+      throw e;
+    }
+  }
+  return resolve(manual, state.profile_id, state.task_type, role);
+}
+
 function pickRoute(
   manual: ModelManual,
   state: GraphRunState,
@@ -221,9 +234,10 @@ function pickRoute(
   writes: boolean,
   models: readonly AgentModel[] | undefined,
   preferFallback: boolean,
+  nodeId: string,
 ): { route: Route; fallbacks: readonly Route[]; index: number; note?: string } | { stop: string } {
   if (models && models.length === 0) return { stop: "实时模型清单为空，不能把全部路线当可用" };
-  const resolved = resolve(manual, state.profile_id, state.task_type, role);
+  const resolved = routesForNode(manual, state, role, nodeId);
   const chain = [resolved.primary, ...resolved.fallbacks];
   const skipFam = !writes && role === "verifier" ? new Set(state.author_families) : null;
   const start = preferFallback ? 1 : 0;
@@ -268,7 +282,7 @@ async function planOrca(
   host: Host,
 ): Promise<Next> {
   const role = (specNode.role ?? "worker") as Role;
-  const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback);
+  const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback, specNode.id);
   if ("stop" in picked) {
     state.status = "stopped";
     const next: Next = { kind: "stop", reason: picked.stop, needs_user: [picked.stop] };

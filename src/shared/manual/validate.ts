@@ -128,6 +128,7 @@ export function validateManual(manual: ModelManual, agentModels: readonly AgentM
 
   for (const profile of manual.profiles) {
     checkRoute(agentModels, profile.lead, `profiles/${profile.id}/lead`, out);
+    if (profile.direction_route) checkRoute(agentModels, profile.direction_route, `profiles/${profile.id}/direction_route`, out);
     for (const taskType of Object.keys(profile.nodes) as TaskType[]) {
       const col = profile.nodes[taskType];
       if (!col) continue;

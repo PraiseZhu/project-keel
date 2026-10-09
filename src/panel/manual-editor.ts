@@ -160,6 +160,17 @@ export function setDirectionGate(manual: ModelManual, id: string, gate: Directio
   return patchProfile(manual, id, (p) => ({ ...p, direction_gate: gate }));
 }
 
+/** undefined = 主控自己定 (gate=lead, drop direction_route). Route = gate=astra and store the tuple. */
+export function setDirectionRoute(manual: ModelManual, id: string, route?: Route): ModelManual {
+  return patchProfile(manual, id, (p) => {
+    if (!route) {
+      const { direction_route: _drop, ...rest } = p;
+      return { ...rest, direction_gate: "lead" };
+    }
+    return { ...p, direction_gate: "astra", direction_route: route };
+  });
+}
+
 export function setLead(manual: ModelManual, id: string, lead: Route): ModelManual {
   return patchProfile(manual, id, (p) => ({ ...p, lead }));
 }

@@ -2,7 +2,7 @@
 // tests/merge-guard.test.ts asserts the table never grows one.
 
 import { EMPTY_PROFILE, type KeelProfile } from "../shared/types.ts";
-import { ToolError, gh, resolveTool } from "./env.ts";
+import { ToolError, gh, ghJson, resolveTool } from "./env.ts";
 import { contentFingerprint } from "./git/fingerprint.ts";
 import { patchId } from "./git/patch.ts";
 import { failedLog } from "./git/ci.ts";
@@ -66,6 +66,11 @@ const methods: Record<string, Method> = {
     ...(typeof p.claude_config === "string" ? { claude_config: p.claude_config } : {}),
     ...(typeof p.codex_config === "string" ? { codex_config: p.codex_config } : {}),
   }),
+  "gh/rate-limit": async () => {
+    const raw = await ghJson<{ resources?: { graphql?: { used?: number; remaining?: number; limit?: number; reset?: number } } }>(["api", "rate_limit"]);
+    const g = raw.resources?.graphql ?? {};
+    return { used: g.used, remaining: g.remaining, limit: g.limit, reset: g.reset };
+  },
   "gh/commit-status": async (p) => {
     const repo = String(p.repo ?? "");
     const sha = String(p.sha ?? "");

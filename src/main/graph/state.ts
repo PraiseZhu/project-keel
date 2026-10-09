@@ -87,6 +87,8 @@ export interface NodeRunState {
   dispatch_state_at?: number;
   planned_params?: PlannedParams;
   actual_route?: Route;
+  /** Model families from every write attempt on this node. */
+  attempt_families?: string[];
   worker_label?: string;
   worker_id?: string;
   worker_session_id?: string;

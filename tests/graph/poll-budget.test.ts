@@ -130,4 +130,105 @@ describe("poll budget", () => {
     expect(waiting.next.kind).toBe("wait");
     expect(isWaitCiRun(waiting.state)).toBe(true);
   });
+
+  it("estimated snapshot points over the soft cap lengthen keel_wait sleep", async () => {
+    const sleeps: number[] = [];
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "a".repeat(40), gh_repo: "o/r" } };
+        if (method === "pr/snapshot") return {
+          ok: true,
+          result: {
+            preset: "personal", rule: LANE_PRESETS.personal,
+            pr: {
+              repo: "o/r", number: 1, url: "https://github.com/o/r/pull/1", title: "t", state: "OPEN",
+              isDraft: false, headSha: "a".repeat(40), headRef: "feat/x", baseRef: "main",
+              mergeable: "UNSTABLE", mergeStateStatus: "UNSTABLE", reviewDecision: null, labels: [],
+            },
+            decision: { kind: "waiting" },
+            checks: { failed: [], pending: ["ci"], passed: 0 },
+            unresolvedThreads: 0,
+            gate: { applies: false, required: [], passed: [], failing: [], pending: [], missing: [], ok: true, sources: [] },
+            verification: null, mergeReadyLabel: false,
+          },
+        };
+        if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+        return { ok: false, message: method };
+      },
+    });
+    h.files.set("poll-budget.json", JSON.stringify({ hour_start_ms: h.now(), points_used: HOURLY_SOFT_CAP, source: "estimated" }));
+    const origSleep = h.sleep.bind(h);
+    h.sleep = async (ms: number) => { sleeps.push(ms); await origSleep(ms); };
+    const spec = PSTACK_GRAPHS.pr;
+    for (let i = 1; i <= 4; i++) {
+      const id = `run-cap-${i}`;
+      await createRun(h, {
+        run_id: id, spec_id: spec.id, profile_id: "sol", lead_harness: "codex",
+        task_type: "pr", entry: "wait-ci", goal: "等 CI", worktree: "/repo/.worktrees/x", pr: i, now: h.now(),
+      });
+      const raw = JSON.parse(h.files.get(graphStatePath(id))!) as GraphRunState;
+      raw.cursor = "wait-ci";
+      raw.nodes["wait-ci"] = { status: "active", attempts: 1 };
+      raw.pr = i;
+      h.files.set(graphStatePath(id), JSON.stringify(raw));
+    }
+    const r: any = await runTool(makeContext(h, "c1", { lanes: [], routingPath: null, boardRepos: [], plansDir: null }), "keel_wait", {
+      run_id: "run-cap-1", max_minutes: 15,
+    });
+    expect(r.ok).toBe(true);
+    expect(sleeps.length).toBeGreaterThan(0);
+    expect(sleeps[0]).toBeGreaterThan(80_000);
+    const stored = JSON.parse(h.files.get("poll-budget.json")!);
+    expect(stored.source).toBe("estimated");
+    expect(stored.source).not.toBe("github");
+  });
+
+  it("github rate-limit used takes priority over the estimate", async () => {
+    const sleeps: number[] = [];
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "gh/rate-limit") return { ok: true, result: { used: HOURLY_SOFT_CAP, remaining: 1000, limit: 5000 } };
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "a".repeat(40), gh_repo: "o/r" } };
+        if (method === "pr/snapshot") return {
+          ok: true,
+          result: {
+            preset: "personal", rule: LANE_PRESETS.personal,
+            pr: {
+              repo: "o/r", number: 1, url: "https://github.com/o/r/pull/1", title: "t", state: "OPEN",
+              isDraft: false, headSha: "a".repeat(40), headRef: "feat/x", baseRef: "main",
+              mergeable: "UNSTABLE", mergeStateStatus: "UNSTABLE", reviewDecision: null, labels: [],
+            },
+            decision: { kind: "waiting" },
+            checks: { failed: [], pending: ["ci"], passed: 0 },
+            unresolvedThreads: 0,
+            gate: { applies: false, required: [], passed: [], failing: [], pending: [], missing: [], ok: true, sources: [] },
+            verification: null, mergeReadyLabel: false,
+          },
+        };
+        if (method === "pr/threads") return { ok: true, result: { threads: [] } };
+        return { ok: false, message: method };
+      },
+    });
+    h.files.set("poll-budget.json", JSON.stringify({ hour_start_ms: h.now(), points_used: 10, source: "estimated" }));
+    const origSleep = h.sleep.bind(h);
+    h.sleep = async (ms: number) => { sleeps.push(ms); await origSleep(ms); };
+    const spec = PSTACK_GRAPHS.pr;
+    await createRun(h, {
+      run_id: "run-rl", spec_id: spec.id, profile_id: "sol", lead_harness: "codex",
+      task_type: "pr", entry: "wait-ci", goal: "等 CI", worktree: "/repo/.worktrees/x", pr: 1, now: h.now(),
+    });
+    const raw = JSON.parse(h.files.get(graphStatePath("run-rl"))!) as GraphRunState;
+    raw.cursor = "wait-ci";
+    raw.nodes["wait-ci"] = { status: "active", attempts: 1 };
+    raw.pr = 1;
+    h.files.set(graphStatePath("run-rl"), JSON.stringify(raw));
+    const r: any = await runTool(makeContext(h, "c1", { lanes: [], routingPath: null, boardRepos: [], plansDir: null }), "keel_wait", {
+      run_id: "run-rl", max_minutes: 15,
+    });
+    expect(r.ok).toBe(true);
+    expect(sleeps[0]).toBeGreaterThanOrEqual(120_000);
+    const stored = JSON.parse(h.files.get("poll-budget.json")!);
+    expect(stored.source).toBe("github");
+    expect(stored.points_used).toBe(HOURLY_SOFT_CAP);
+  });
 });

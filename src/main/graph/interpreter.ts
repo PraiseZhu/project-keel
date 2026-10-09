@@ -332,6 +332,16 @@ async function worktreeHead(host: Host, dir: string | undefined): Promise<string
   return typeof head === "string" && head ? head : undefined;
 }
 
+function recordWriterFamily(state: GraphRunState, specNode: GraphNode, model: string): void {
+  if (!specNode.writes) return;
+  const fam = family(model);
+  if (!fam) return;
+  const node = ensureNode(state, specNode.id);
+  const prior = node.attempt_families ?? [];
+  if (!prior.includes(fam)) node.attempt_families = [...prior, fam];
+  if (!state.author_families.includes(fam)) state.author_families.push(fam);
+}
+
 async function planOrca(
   state: GraphRunState,
   spec: GraphSpec,
@@ -421,6 +431,7 @@ async function planOrca(
   node.dispatch_state = "planned";
   node.dispatch_state_at = now;
   node.planned_params = params;
+  recordWriterFamily(state, specNode, picked.route.model);
   if (start_sha) node.start_sha = start_sha;
   node.worker_label = label;
   node.expected_recover_action = undefined;
@@ -818,10 +829,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     provider_id: node.planned_params.provider_id,
     effort: node.planned_params.effort,
   };
-  if (node.actual_route && specNode.writes) {
-    const fam = family(node.actual_route.model);
-    if (fam && !state.author_families.includes(fam)) state.author_families.push(fam);
-  }
+  if (node.actual_route && specNode.writes) recordWriterFamily(state, specNode, node.actual_route.model);
   node.worker_id = event.worker_id ?? node.worker_id;
   node.worker_session_id = event.worker_session_id ?? node.worker_session_id;
   node.queued_message_id = event.queued_message_id ?? node.queued_message_id;

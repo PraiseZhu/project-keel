@@ -299,7 +299,7 @@
     },
     {
       "name": "keel_gate",
-      "description": "回答方向门或人工门。传入 run_id、gate_id、answer、reason，返回 next。",
+      "description": "回答方向门或人工门。传入 run_id、gate_id、answer、reason；done 门选 waive 时必须给 authorization_source（用户原话）。返回 next。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -315,6 +315,10 @@
           },
           "reason": {
             "type": "string"
+          },
+          "authorization_source": {
+            "type": "string",
+            "description": "done 门选 waive 时必填：用户同意暂缓该 SC 的原话。"
           }
         },
         "required": [

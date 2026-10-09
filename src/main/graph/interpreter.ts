@@ -7,6 +7,7 @@ import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief } from "./brief.ts";
+import { scIdsFromMissing } from "./done.ts";
 import { GATES } from "./gates.ts";
 import { crossesFunctionBoundaryOrUnknown, failureFingerprint, shouldSkipFinalReview } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
@@ -251,12 +252,21 @@ function reportRank(id: string): number {
   return 2;
 }
 
-function completedKeelReports(state: GraphRunState): string[] {
+function nodeWritesReport(spec: GraphSpec, id: string, extra?: GraphNode): boolean {
+  const n = spec.nodes.find((x) => x.id === id) ?? (extra?.id === id ? extra : undefined);
+  if (!n) return true;
+  return n.kind === "dispatch" || n.kind === "plugin_task";
+}
+
+function completedKeelReports(state: GraphRunState, spec: GraphSpec): string[] {
   const root = state.worktree ?? "<worktree>";
   const items: { id: string; path: string; rank: number }[] = [];
   for (const [id, n] of Object.entries(state.nodes)) {
-    if (!n.report_path && !n.last_report && n.status !== "succeeded" && n.status !== "failed") continue;
     if ((n.attempts ?? 0) < 1) continue;
+    if (!n.report_path && !n.last_report) continue;
+    if (!nodeWritesReport(spec, id, state.consult_node)) continue;
+    const specNode = spec.nodes.find((x) => x.id === id);
+    if (specNode?.kind === "plugin_task" && !n.report_path) continue;
     const path = n.report_path ?? `${root}/.keel/${id}-${n.attempts}.md`;
     items.push({ id, path, rank: reportRank(id) });
   }
@@ -264,8 +274,25 @@ function completedKeelReports(state: GraphRunState): string[] {
   return [...new Set(items.map((x) => x.path))];
 }
 
-function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
-  const priorReports = node.writes && attempt >= 2 ? completedKeelReports(state) : undefined;
+function isReturnedWriter(state: GraphRunState, node: GraphNode): boolean {
+  if (!node.writes) return false;
+  if (node.id === "fix-ci" || node.id === "triage-threads") return true;
+  if (state.nodes["g-accept"]?.status === "succeeded") return true;
+  if (state.nodes["astra-final-review"]?.last_report?.verdict === "FAIL") return true;
+  if (state.facts?.done_revise?.missing_sc?.length) return true;
+  return false;
+}
+
+function brief(state: GraphRunState, spec: GraphSpec, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
+  const attachPrior = node.writes && (attempt >= 2 || isReturnedWriter(state, node));
+  const priorReports = attachPrior ? completedKeelReports(state, spec) : undefined;
+  const revise = node.writes ? state.facts?.done_revise : undefined;
+  const contextBits = [
+    revise?.missing_sc?.length
+      ? `done 门缺证据：${revise.missing_sc.join("、")}${revise.verify_report ? `。先读验证报告：${revise.verify_report}` : ""}`
+      : "",
+  ].filter(Boolean);
+  if (revise && state.facts) delete state.facts.done_revise;
   return buildBrief(
     { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation", plugin_task: node.kind === "plugin_task" },
     { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.gh_repo ?? state.repo, pr: state.pr, taskType: state.task_type },
@@ -274,6 +301,7 @@ function brief(state: GraphRunState, node: GraphNode, dispatchKeyValue: string, 
       dispatch_key: dispatchKeyValue,
       ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}),
       ...(priorReports?.length ? { priorReports } : {}),
+      ...(contextBits.length ? { context: contextBits.join("。") } : {}),
     },
   );
 }
@@ -288,6 +316,7 @@ async function worktreeHead(host: Host, dir: string | undefined): Promise<string
 
 async function planOrca(
   state: GraphRunState,
+  spec: GraphSpec,
   specNode: GraphNode,
   node: ReturnType<typeof ensureNode>,
   manual: ModelManual,
@@ -337,7 +366,7 @@ async function planOrca(
     provider_id: picked.route.provider_id,
     effort: picked.route.effort,
     working_dir: workingDir,
-    initial_task: brief(state, specNode, key, node.attempts),
+    initial_task: brief(state, spec, specNode, key, node.attempts),
     writes: specNode.writes,
     fallbacks: picked.fallbacks,
     route_index: picked.index,
@@ -724,7 +753,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
       task.revision = event.revision;
       task.phase = "send";
       task.send_request_key = `send:${key}`;
-      task.send_text = brief(state, specNode, key, node.attempts);
+      task.send_text = brief(state, spec, specNode, key, node.attempts);
       task.expected_revision = event.revision;
       node.dispatch_state = "planned";
       node.dispatch_state_at = now;
@@ -792,7 +821,7 @@ function applyReconcile(state: GraphRunState, event: Extract<AdvanceEvent, { typ
       node.task.phase = "send";
       node.task.send_request_key = `send:${key}`;
       node.task.expected_revision = run?.revision ?? node.task.revision;
-      if (specNode) node.task.send_text = brief(state, specNode, key, node.attempts);
+      if (spec && specNode) node.task.send_text = brief(state, spec, specNode, key, node.attempts);
       node.dispatch_state = "planned";
       node.dispatch_state_at = now;
       return;
@@ -1075,13 +1104,51 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
   const gid = state.next.gate_id;
   const i = state.sol_decisions.findIndex((d) => d.gate_id === gid);
   if (i < 0) return;
-  const answer = state.sol_decisions[i]!.answer;
+  const rec = state.sol_decisions[i]!;
+  const answer = rec.answer;
+  const missing = Array.isArray((state.next.context as { missing?: unknown } | undefined)?.missing)
+    ? ((state.next.context as { missing: string[] }).missing)
+    : [];
   state.sol_decisions.splice(i, 1);
   if (answer === "stop") {
     nextStop(state, "主控选择停止");
     return;
   }
   state.status = "running";
+  if (gid === "done") {
+    if (answer === "revise") {
+      const to = spec.edges.find((e) => e.from === "g-accept" && e.on === "gate:revise")?.to
+        ?? spec.nodes.find((n) => n.id === "fix-ci" && n.writes)?.id
+        ?? spec.nodes.find((n) => n.id === "implement" && n.writes)?.id;
+      if (!to) {
+        nextDecide(state, "done", "没有可退回的写代码节点", ["stop"], false);
+        return;
+      }
+      const scIds = scIdsFromMissing(missing);
+      const verify = state.nodes["verify-head"]?.report_path ?? state.nodes["astra-final-review"]?.report_path;
+      if (!state.facts) state.facts = {};
+      state.facts.done_revise = { missing_sc: scIds, ...(verify ? { verify_report: verify } : {}) };
+      const node = ensureNode(state, to);
+      node.status = "pending";
+      node.dispatch_state = undefined;
+      node.dispatch_key = undefined;
+      state.cursor = to;
+      state.next = undefined;
+      return;
+    }
+    if (answer === "waive") {
+      const scIds = scIdsFromMissing(missing);
+      const auth = (rec.authorization_source ?? rec.reason ?? "").trim();
+      if (!state.facts) state.facts = {};
+      const existing = state.facts.waived_sc ?? [];
+      const add = scIds.filter((id) => !existing.some((w) => w.id === id)).map((id) => ({ id, authorization_source: auth }));
+      state.facts.waived_sc = [...existing, ...add];
+      state.next = undefined;
+      return;
+    }
+    state.next = undefined;
+    return;
+  }
   if (gid.startsWith("human:")) {
     const nodeId = gid.slice("human:".length);
     const retry = answer === "retry" || answer === "retry_verify" || answer === "retry_reconcile" || answer === "retry_setup";
@@ -1218,7 +1285,7 @@ async function enter(
   if (id === ASTRA_CONSULT_ID) {
     state.consult_node = ASTRA_CONSULT_NODE;
     if (!state.team?.ready) return nextSetup(state);
-    return planOrca(state, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
+    return planOrca(state, spec, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
   const specNode = nodeById(spec, id, state.consult_node);
   const node = ensureNode(state, id);
@@ -1324,7 +1391,7 @@ async function enter(
 
   if (specNode.kind === "dispatch") {
     if (!state.team?.ready) return nextSetup(state);
-    return planOrca(state, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
+    return planOrca(state, spec, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
 
   return nextStop(state, `未知节点 kind ${specNode.kind}`);

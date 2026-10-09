@@ -5,7 +5,7 @@ import { family } from "../../shared/fanout.ts";
 import { loadRuntimeConfig } from "../config.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadGraphStates } from "../graph-snapshot.ts";
-import { isChangeGraphDone, isInvestigationDone, type ChangeGraphDoneInput, type ChangeGraphDoneResult, type ScRow } from "../graph/done.ts";
+import { isChangeGraphDone, isInvestigationDone, scIdsFromMissing, type ChangeGraphDoneInput, type ChangeGraphDoneResult, type ScRow } from "../graph/done.ts";
 import { GATES, type Evidence, type GateId } from "../graph/gates.ts";
 import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending } from "../graph/route-start.ts";
 import { ASTRA_CONSULT_ID, classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
@@ -17,7 +17,7 @@ import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.
 import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
-import { newRunId } from "../ledger.ts";
+import { append, newRunId } from "../ledger.ts";
 import { findProfile, resolveProfileForHarness } from "../manual/resolve.ts";
 import { toActiveIndex, writeActiveIndex } from "../store/active-index.ts";
 import { withRun, writeRunArtifact } from "../store/runs.ts";
@@ -491,7 +491,42 @@ export function asGraphVerdict(state: GraphRunState): GraphVerdict | null {
   };
 }
 
+function requireGateAuth(args: Record<string, unknown>, what: string): string {
+  const a = args.authorization_source;
+  if (typeof a !== "string" || a.trim().length < 4) {
+    throw new KeelError(
+      "AUTHORIZATION_REQUIRED",
+      `${what}需要 authorization_source：写明用户哪句话授权了这个动作（例如“用户 2026-10-09：这条 SC 先不做”）。没有授权就先问用户。`,
+    );
+  }
+  return a.trim();
+}
+
+function reviseToOf(state: GraphRunState): string | undefined {
+  const spec = PSTACK_GRAPHS[state.spec_id as GraphTaskType];
+  return spec?.edges.find((e) => e.from === "g-accept" && e.on === "gate:revise")?.to
+    ?? spec?.nodes.find((n) => n.id === "fix-ci" && n.writes)?.id
+    ?? spec?.nodes.find((n) => n.id === "implement" && n.writes)?.id;
+}
+
 export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDoneResult): Next {
+  const missingSc = scIdsFromMissing(result.missing);
+  if (missingSc.length) {
+    const verify = state.nodes?.["verify-head"]?.report_path ?? state.nodes?.["astra-final-review"]?.report_path;
+    const reviseTo = reviseToOf(state);
+    return {
+      kind: "decide",
+      gate_id: "done",
+      question: `尚未完成：${result.missing.join("；")}`,
+      options: ["revise", "waive", "stop"],
+      context: {
+        missing: result.missing,
+        missing_sc: missingSc,
+        ...(reviseTo ? { revise_to: reviseTo } : {}),
+        ...(verify ? { verify_report: verify } : {}),
+      },
+    };
+  }
   if (result.next === "verify-head") {
     const id = rewindVerifier(state);
     return { kind: "decide", gate_id: `human:${id}`, question: `验证未通过：${result.missing.join("；")}`, options: ["retry_verify", "stop"], context: { missing: result.missing, next: "verify-head" } };
@@ -584,10 +619,12 @@ export function normalizeSc(raw: unknown): SuccessCriterion[] {
 function scRows(state: GraphRunState): ScRow[] {
   const evidence: Record<string, boolean> = {};
   for (const n of Object.values(state.nodes)) Object.assign(evidence, n.last_report?.sc_evidence ?? {});
+  const waived = new Set((state.facts?.waived_sc ?? []).map((w) => w.id));
   return (state.sc ?? []).map((s) => ({
     id: s.id,
     hasEvidence: evidence[s.id] === true,
     ...(s.min_level ? { minLevel: s.min_level } : {}),
+    ...(waived.has(s.id) ? { waived: true } : {}),
   }));
 }
 
@@ -1432,6 +1469,7 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
   const gateId = requireString(args, "gate_id");
   const answer = requireString(args, "answer");
   const reason = typeof args.reason === "string" ? args.reason : undefined;
+  const auth = gateId === "done" && answer === "waive" ? requireGateAuth(args, "豁免 SC") : undefined;
   if (gateId === "G-route" || gateId === "profile") {
     const pendingFile = await ctx.host.fs({ op: "read", root: "data", path: routePendingPath(runId) });
     if (pendingFile.ok && pendingFile.content) {
@@ -1474,9 +1512,28 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
     const s = raw as unknown as GraphRunState;
     if (!Array.isArray(s.sol_decisions)) s.sol_decisions = [];
     const attempt = s.nodes[gateId]?.attempts ?? 0;
-    s.sol_decisions.push({ gate_id: gateId, attempt, answer, ...(reason ? { reason } : {}) } satisfies GateAnswer);
+    s.sol_decisions.push({
+      gate_id: gateId,
+      attempt,
+      answer,
+      ...(reason ? { reason } : {}),
+      ...(auth ? { authorization_source: auth } : {}),
+    } satisfies GateAnswer);
   });
   const { next } = await step(ctx, runId, { type: "tick" });
+  if (auth) {
+    const runs = await loadGraphStates(ctx.host);
+    const s = runs.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
+    if (s?.facts?.waived_sc?.some((w) => w.authorization_source === auth)) {
+      await append(ctx.host, {
+        run_id: runId,
+        kind: "decision",
+        summary: `豁免 SC（授权：${auth}）`,
+        answer: "waive",
+        evidence: { authorization_source: auth, gate_id: gateId },
+      });
+    }
+  }
   return { run_id: runId, next, gate_id: gateId, answer };
 }
 

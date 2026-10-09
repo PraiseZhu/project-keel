@@ -296,7 +296,7 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
       edge("wait-ci", "ci-rerun-once", "ci_red"),
       edge("conflict-human", "wait-ci"),
       edge("conflict-human", "stopped", "fail"),
-      edge("triage-threads", "wait-ci"),
+      edge("triage-threads", "open-pr"),
       edge("triage-threads", "g-retry-threads", "fail"),
       edge("triage-threads", "astra-unstick", "fingerprint_repeat"),
       ...retryThreads.edges,

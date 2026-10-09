@@ -11,6 +11,7 @@ export interface ScRow {
   readonly id: string;
   readonly hasEvidence: boolean;
   readonly minLevel?: OrchLevel;
+  readonly waived?: boolean;
 }
 
 export interface CurrentPatch {
@@ -44,8 +45,17 @@ export interface InvestigationDoneInput {
   readonly current: ContentFingerprint;
 }
 
+const SC_MISSING_RE = /^SC (.+) 没有证据$/;
+
+export function scIdsFromMissing(missing: readonly string[]): string[] {
+  return missing.flatMap((m) => {
+    const x = SC_MISSING_RE.exec(m);
+    return x ? [x[1]!] : [];
+  });
+}
+
 function scMissing(sc: readonly ScRow[]): string[] {
-  return sc.filter((s) => !s.hasEvidence).map((s) => `SC ${s.id} 没有证据`);
+  return sc.filter((s) => !s.hasEvidence && !s.waived).map((s) => `SC ${s.id} 没有证据`);
 }
 
 function requiredLevel(sc: readonly ScRow[]): OrchLevel {

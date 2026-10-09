@@ -184,6 +184,7 @@ describe("isChangeGraphDone", () => {
     expect(isChangeGraphDone(input({ verdict: null })).done).toBe(false);
     expect(isChangeGraphDone(input({ current: { head_sha: "head", base_sha: "base", patch_id: null, patch_ok: false } })).done).toBe(false);
     expect(isChangeGraphDone(input({ sc: [{ id: "SC-1", hasEvidence: false }] })).done).toBe(false);
+    expect(isChangeGraphDone(input({ sc: [{ id: "SC-1", hasEvidence: false, waived: true }] })).done).toBe(true);
     expect(isChangeGraphDone(input({ openHumanGates: 1 })).done).toBe(false);
   });
 

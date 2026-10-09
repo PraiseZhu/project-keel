@@ -15,7 +15,7 @@
 | 开一次图运行 | `keel_run` | 聊清需求后调用；返回 `{run_id, profile, next}`，之后只照 next 做 |
 | 交回节点结果 | `keel_report` | `setup` / `accepted` / `reconcile` / `recover` / `final` |
 | 阻塞等待 | `keel_wait` | CI / 插件任务 / 在途节点，最长 15 分钟 |
-| 回答方向门 | `keel_gate` | `run_id` + `gate_id` + `answer` |
+| 回答方向门 | `keel_gate` | `run_id` + `gate_id` + `answer`；done 门选 `waive` 时还要 `authorization_source` |
 | 看 run 状态 | `keel_status` | 不推进图 |
 | 开始一次 pstack 任务 | `pstack_start` | 迁移入口：`task` 映射为 `goal`，必须传 `repo_dir` |
 | 工作流中的判断点 | `pstack_decide` | 模板 J1–J12，返回 act / reask / minimal / stop |
@@ -74,7 +74,7 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 1. `pstack_start({ task: "<用户原话>", repo_dir })` → 得到 `run_id` 与 `pstack/skills/poteto-mode/playbooks/bug-fix.md`。
 2. 读 playbook，按步骤复现、写失败测试、修复、证明（J9 证据评分、J12 影响面）。
-3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。终审报告 `verdict=FAIL` 时图从 `g-accept` 直接退回写代码节点（不问 Jev；报告 status=failed/blocked 同样适用，且下一轮不能跳过终审）；PASS / PASS+NOTES 才进 verify-head。CI 修完（`fix-ci` 成功）走 `open-pr`：由 `pr_open` 推送并复用已有 PR，不要只提交就回去等 CI（否则等到的是旧提交）。本地验证按工作树 HEAD 比对 `head_sha`，未推送的修复也能过 G-advance。写代码节点第 2 次及以后的派工 brief 会列出本 run 已完成节点的 `.keel/` 报告路径，至少含最近一次终审报告。
+3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。终审报告 `verdict=FAIL` 时图从 `g-accept` 直接退回写代码节点（不问 Jev；报告 status=failed/blocked 同样适用，且下一轮不能跳过终审）；PASS / PASS+NOTES 才进 verify-head。写代码节点成功后走 `open-pr`：`fix-ci` 与 `triage-threads` 都先由 `pr_open` 推送并复用已有 PR，再 `wait-ci`（只提交不推送会等到旧提交）。本地验证按工作树 HEAD 比对 `head_sha`，未推送的修复也能过 G-advance。写代码节点被退回进入（终审 revise、CI 红、评审线程）时，即使该节点是第 1 次派工，brief 也会列出本 run 前序节点的 `.keel/` 报告路径并要求先读；清单只列真实写报告的节点，不含 `open-pr` / `wait-ci` 等工具节点。done 门发现某条 SC 没有证据时给 `revise` / `waive` / `stop`：`revise` 退回该图 `g-accept` 的 revise 目标并在 brief 写明缺哪条 SC；`waive` 必须带用户原话 `authorization_source`，KEEL 记入 decisions 并把该 SC 标为豁免，其余门禁仍须满足才算 done。
 4. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。

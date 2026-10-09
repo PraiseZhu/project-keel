@@ -80,6 +80,28 @@ describe("g-accept FAIL revises without Jev", () => {
     expect(readState(h, "run-pr-fail").cursor).toBe("fix-ci");
   });
 
+  it("pr graph FAIL dispatch of fix-ci:1 lists prior reports and skips tool nodes", async () => {
+    const { h, spec } = await bootAccept("run-pr-fail-brief", "pr", "FAIL");
+    await withRun(h, "run-pr-fail-brief", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.nodes["open-pr"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["wait-ci"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["ci-rerun-once"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["report-ready"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+    });
+    const r = await advance(h, "run-pr-fail-brief", { type: "tick" }, { spec });
+    expect(r.next.kind).toBe("dispatch");
+    if (r.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(r.next.dispatch_key).toBe("run-pr-fail-brief:fix-ci:1");
+    const task = r.next.create_worker?.initial_task ?? "";
+    expect(task).toContain("先读这些已完成报告再动手");
+    expect(task).toContain(`${WT}/.keel/astra-final-review-1.md`);
+    expect(task).not.toContain(`${WT}/.keel/open-pr-1.md`);
+    expect(task).not.toContain(`${WT}/.keel/wait-ci-1.md`);
+    expect(task).not.toContain(`${WT}/.keel/ci-rerun-once-1.md`);
+    expect(task).not.toContain(`${WT}/.keel/report-ready-1.md`);
+  });
+
   it("PASS and PASS+NOTES walk to verify-head", async () => {
     for (const verdict of ["PASS", "PASS+NOTES"] as const) {
       const runId = verdict === "PASS" ? "run-pass" : "run-pass-notes";
@@ -647,6 +669,73 @@ describe("FAIL then small verify report still re-runs final review", () => {
     expect(waited.result.next.dispatch_key).toBe(`${runId}:astra-final-review:2`);
     expect(readState(h, runId).cursor).toBe("astra-final-review");
     expect(readState(h, runId).nodes["astra-final-review"]?.attempts).toBe(2);
+  });
+
+  it("triage-threads success walks to open-pr then wait-ci", async () => {
+    const spec = PSTACK_GRAPHS.pr;
+    const runId = "run-pr-threads-open";
+    const h = fakeHost({
+      node: (method: string) => verifyNode(method, HEAD_B, HEAD_B),
+    });
+    await createRun(h, {
+      run_id: runId,
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "pr",
+      entry: "triage-threads",
+      goal: "修登录报错",
+      worktree: WT,
+      now: h.now(),
+      scopeAllow: ["src/**"],
+    });
+    await withRun(h, runId, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
+      s.cursor = "triage-threads";
+      s.pr = 34;
+      s.repo = "o/r";
+      s.gh_repo = "o/r";
+      s.budget.astra_left = 3;
+      s.pr_binding = { repo: "o/r", number: 34, base_ref: "main", base_sha: BASE_SHA, head_sha: HEAD_A };
+      s.nodes["open-pr"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["wait-ci"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["astra-final-review"] = {
+        status: "succeeded",
+        attempts: 1,
+        dispatch_state: "terminal",
+        report_path: `${WT}/.keel/astra-final-review-1.md`,
+        last_report: { status: "done", summary: "终审通过", verdict: "PASS" },
+      };
+    });
+    const first = await advance(h, runId, { type: "tick" }, { spec });
+    expect(first.next.kind).toBe("dispatch");
+    if (first.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(first.next.dispatch_key).toBe(`${runId}:triage-threads:1`);
+    const task = first.next.create_worker?.initial_task ?? "";
+    expect(task).toContain("先读这些已完成报告再动手");
+    expect(task).toContain(`${WT}/.keel/astra-final-review-1.md`);
+    expect(task).not.toContain(`${WT}/.keel/open-pr-1.md`);
+    expect(task).not.toContain(`${WT}/.keel/wait-ci-1.md`);
+    await withRun(h, runId, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      const node = s.nodes["triage-threads"];
+      if (node) node.dispatch_state = "running";
+    });
+    const fixed = await advance(h, runId, {
+      type: "report",
+      phase: "final",
+      dispatch_key: first.next.dispatch_key,
+      report: { status: "done", summary: "回了评审", head_sha: HEAD_B, files_changed: ["src/review.ts"] },
+    }, { spec });
+    expect(readState(h, runId).cursor).toBe("open-pr");
+    expect(fixed.next.kind).toBe("wait");
+    if (fixed.next.kind !== "wait") throw new Error("wait");
+    if (fixed.next.call.tool !== "pr_open") throw new Error("pr_open");
+    expect(fixed.next.call.args.push).toBe(true);
+    const opened: any = await runTool(makeContext(h, "c-open-threads", profile), "keel_wait", { run_id: runId });
+    expect(opened.ok, opened.message).toBe(true);
+    expect(readState(h, runId).cursor).toBe("wait-ci");
   });
 
   it("pr graph from entry keeps open-pr history through CI repair then final FAIL and still re-reviews", async () => {

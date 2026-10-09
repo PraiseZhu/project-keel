@@ -93,7 +93,7 @@ describe("writing node brief", () => {
     expect(buildBrief({ id: "explore", role: "explorer" }, { run_id: "run-1", goal: "g", worktree: "/w" }, { attempt: 1, dispatch_key: "run-1:explore:1" })).not.toContain("并 commit");
   });
 
-  it("lists completed .keel reports on attempt 2+ and tells the worker to read them first", () => {
+  it("lists completed .keel reports whenever priorReports is set, including attempt 1", () => {
     const reports = [
       "/repo/.worktrees/keel-run-1/.keel/astra-final-review-1.md",
       "/repo/.worktrees/keel-run-1/.keel/implement-1.md",
@@ -103,6 +103,9 @@ describe("writing node brief", () => {
     expect(retry).toContain(reports[0]);
     expect(retry).toContain(reports[1]);
     const first = buildBrief(node, run, { ...ctx, attempt: 1, dispatch_key: "run-1:implement:1", priorReports: reports });
-    expect(first).not.toContain("先读这些已完成报告再动手");
+    expect(first).toContain("先读这些已完成报告再动手");
+    expect(first).toContain(reports[0]);
+    const plain = buildBrief(node, run, { ...ctx, attempt: 1, dispatch_key: "run-1:implement:1" });
+    expect(plain).not.toContain("先读这些已完成报告再动手");
   });
 });

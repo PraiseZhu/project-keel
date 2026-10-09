@@ -66,7 +66,7 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
     : `把完整报告写到 \`${reportPath(node, run, ctx)}\`：先一个 \`\`\`json fence（NodeReport：dispatch_key、status（只能是 done / partial / blocked / failed，做完且验收通过写 done）、summary、branch?、head_sha?、files_changed、functions_touched、changed_lines、ran、sc_evidence、findings?、verdict?（只能是 PASS / PASS+NOTES / FAIL）、next_suggestions?），后面接正文。sc_evidence 写 {SC id: true/false}，ACCEPTANCE 每条都要写，true 只给你本次实际跑过验证并通过的 SC（缺了编排判不了完成）。functions_touched 写实际改到的函数名（缺了编排会按已跨函数处理）；changed_lines 写新增+删除行数（缺了不能跳过最终复核）。ran 每项写 {cmd, exit_code, tests_passed}，tests_passed 照抄测试运行器总结行里“通过”的用例数；ran 里要列测试运行器本身的命令（如 npm test、npx vitest run、pytest），npm run verify 这类聚合脚本 KEEL 认不出测试；只列举、看版本、看帮助、只编译时写 0。给主控的回复只有 ≤20 行摘要和这个路径。`;
   const standing = (run.standing ?? "").trim() || "（无）";
   const prior =
-    node.writes && ctx.attempt >= 2 && ctx.priorReports?.length
+    node.writes && ctx.priorReports?.length
       ? `先读这些已完成报告再动手：${ctx.priorReports.join("；")}`
       : "";
   const ctxLines = [

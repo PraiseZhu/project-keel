@@ -84,6 +84,8 @@ describe("pstack graph compile", () => {
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "wait-ci" && e.on === "ok"), id).toBe(false);
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "g-retry-fix-ci" && e.on === "fail"), id).toBe(true);
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "astra-unstick" && e.on === "fingerprint_repeat"), id).toBe(true);
+      expect(spec.edges.some((e) => e.from === "triage-threads" && e.to === "open-pr" && e.on === "ok"), id).toBe(true);
+      expect(spec.edges.some((e) => e.from === "triage-threads" && e.to === "wait-ci" && e.on === "ok"), id).toBe(false);
       const open = spec.nodes.find((n) => n.id === "open-pr");
       const wait = spec.nodes.find((n) => n.id === "wait-ci");
       const verify = spec.nodes.find((n) => n.id === "verify-head");
@@ -92,6 +94,12 @@ describe("pstack graph compile", () => {
       expect(open?.max_attempts, id).toBe(8);
       expect(report?.max_attempts, id).toBe(verify?.max_attempts);
       expect(report?.max_attempts, id).toBe(3);
+      for (const e of spec.edges) {
+        if (e.to === "wait-ci" && e.on === "ok") {
+          const from = spec.nodes.find((n) => n.id === e.from);
+          expect(from?.writes, `${id} ${e.from} → wait-ci`).not.toBe(true);
+        }
+      }
     }
   });
 

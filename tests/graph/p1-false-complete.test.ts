@@ -16,6 +16,7 @@ import {
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
+import type { GraphSpec } from "../../src/shared/graph/spec.ts";
 import { LANE_PRESETS } from "../../src/shared/types.ts";
 
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
@@ -518,9 +519,10 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
         },
         actual_route: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy" },
       };
-      for (const name of ["open-pr", "wait-ci", "report-ready", "astra-final-review"] as const) {
+      for (const name of ["open-pr", "wait-ci", "astra-final-review"] as const) {
         s.nodes[name] = { status: "succeeded", attempts: afterRevision ? 2 : 1, dispatch_state: "terminal" };
       }
+      s.nodes["report-ready"] = { status: "succeeded", attempts, dispatch_state: "terminal" };
       s.nodes["astra-final-review"]!.last_report = { status: "done", summary: "pass", verdict: "PASS" };
       s.nodes["verify-head"] = {
         status: "succeeded",
@@ -664,6 +666,103 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     expect(report.ok, report.message).toBe(true);
     expect(read(h, id).verdict?.level).toBe("unit-test-verified");
     expect(read(h, id).cursor).toBe("report-ready");
+    const done: any = await runTool(ctx, "keel_wait", { run_id: id });
+    expect(done.ok, done.message).toBe(true);
+    expect(done.result.next.kind).toBe("done");
+  });
+
+  async function retryVerifyReport(
+    h: ReturnType<typeof fakeHost>,
+    id: string,
+    spec: GraphSpec,
+    ctx: ReturnType<typeof makeContext>,
+    ran: { cmd: string; exit_code: number; tests_passed: number }[],
+  ) {
+    const tick = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+    expect(tick.next.kind).toBe("decide");
+    if (tick.next.kind !== "decide") throw new Error("decide");
+    expect(tick.next.gate_id).toBe("human:verify-head");
+    const retry: any = await runTool(ctx, "keel_gate", {
+      run_id: id, gate_id: tick.next.gate_id, answer: "retry_verify",
+    });
+    expect(retry.ok, retry.message).toBe(true);
+    expect(retry.result.next.kind).toBe("dispatch");
+    const key = retry.result.next.dispatch_key as string;
+    const accepted: any = await runTool(ctx, "keel_report", {
+      run_id: id,
+      phase: "accepted",
+      dispatch_key: key,
+      worker_id: "audit-verifier",
+      worker_session_id: "audit-session",
+      dispatch_outcome: { dispatched: true },
+    });
+    expect(accepted.ok, accepted.message).toBe(true);
+    const report: any = await runTool(ctx, "keel_report", {
+      run_id: id,
+      phase: "final",
+      dispatch_key: key,
+      inline_report: {
+        status: "done",
+        summary: "re-verify",
+        head_sha: head,
+        files_changed: [],
+        functions_touched: [],
+        changed_lines: 0,
+        ran,
+        sc_evidence: { "SC-1": true },
+        verdict: "PASS",
+      },
+    });
+    expect(report.ok, report.message).toBe(true);
+    return key;
+  }
+
+  it("attempt 2 still-low then attempt 3 npm test reaches done", async () => {
+    const { h, id, spec, ctx } = await boot("bug-fix", 1);
+    const key2 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm run verify", exit_code: 0, tests_passed: 0 }]);
+    expect(key2).toBe(`${id}:verify-head:2`);
+    expect(read(h, id).verdict?.level).toBe("type-check-only");
+    const mid: any = await runTool(ctx, "keel_wait", { run_id: id });
+    expect(mid.ok, mid.message).toBe(true);
+    expect(mid.result.next.kind).toBe("decide");
+    expect(mid.result.next.gate_id).toBe("human:verify-head");
+    expect(read(h, id).nodes["report-ready"]?.attempts).toBe(2);
+    const key3 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }]);
+    expect(key3).toBe(`${id}:verify-head:3`);
+    expect(read(h, id).verdict?.level).toBe("unit-test-verified");
+    expect(read(h, id).cursor).toBe("report-ready");
+    expect(read(h, id).nodes["report-ready"]?.attempts).toBe(3);
+    const done: any = await runTool(ctx, "keel_wait", { run_id: id });
+    expect(done.ok, done.message).toBe(true);
+    expect(done.result.next.kind).toBe("done");
+  });
+
+  it("attempt 2 npm test re-verify still reaches done after report-ready was already used twice", async () => {
+    const { h, id, spec, ctx } = await boot("bug-fix", 2);
+    const key = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }]);
+    expect(key).toBe(`${id}:verify-head:3`);
+    expect(read(h, id).verdict?.level).toBe("unit-test-verified");
+    expect(read(h, id).nodes["report-ready"]?.attempts).toBe(3);
+    const done: any = await runTool(ctx, "keel_wait", { run_id: id });
+    expect(done.ok, done.message).toBe(true);
+    expect(done.result.next.kind).toBe("done");
+  });
+
+  it("feature two low re-verifies after two final reviews still reach done without extra open-pr", async () => {
+    const { h, id, spec, ctx } = await boot("feature", 1, true, false);
+    const key2 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm run verify", exit_code: 0, tests_passed: 0 }]);
+    expect(key2).toBe(`${id}:verify-head:2`);
+    const mid: any = await runTool(ctx, "keel_wait", { run_id: id });
+    expect(mid.ok, mid.message).toBe(true);
+    expect(mid.result.next.kind).toBe("decide");
+    expect(mid.result.next.gate_id).toBe("human:verify-head");
+    const key3 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }]);
+    expect(key3).toBe(`${id}:verify-head:3`);
+    const st = read(h, id);
+    expect(st.nodes["open-pr"]?.attempts).toBe(2);
+    expect(st.nodes["wait-ci"]?.attempts).toBe(2);
+    expect(st.nodes["astra-final-review"]?.attempts).toBe(2);
+    expect(st.cursor).toBe("report-ready");
     const done: any = await runTool(ctx, "keel_wait", { run_id: id });
     expect(done.ok, done.message).toBe(true);
     expect(done.result.next.kind).toBe("done");

@@ -279,7 +279,7 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         kind: "tool",
         writes: false,
         timebox_min: 15,
-        max_attempts: 2,
+        max_attempts: 3,
         playbook_steps: ["shipping#2", "shipping#5", "shipping#6", "shipping#8", "babysit#9"],
       }),
       ...retryFix.nodes,

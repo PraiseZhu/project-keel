@@ -86,8 +86,12 @@ describe("pstack graph compile", () => {
       expect(spec.edges.some((e) => e.from === "fix-ci" && e.to === "astra-unstick" && e.on === "fingerprint_repeat"), id).toBe(true);
       const open = spec.nodes.find((n) => n.id === "open-pr");
       const wait = spec.nodes.find((n) => n.id === "wait-ci");
+      const verify = spec.nodes.find((n) => n.id === "verify-head");
+      const report = spec.nodes.find((n) => n.id === "report-ready");
       expect(open?.max_attempts, id).toBe(wait?.max_attempts);
       expect(open?.max_attempts, id).toBe(8);
+      expect(report?.max_attempts, id).toBe(verify?.max_attempts);
+      expect(report?.max_attempts, id).toBe(3);
     }
   });
 

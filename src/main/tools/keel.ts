@@ -968,12 +968,20 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     base.outcome = outcome;
   }
   if (phase === "accepted") {
-    const mapped = mapCreateWorkerReceipt(args);
+    // Real run: the lead nested the receipt under `outcome` (as for setup); read both shapes.
+    const receipt = args.outcome && typeof args.outcome === "object" && !Array.isArray(args.outcome)
+      ? { ...(args.outcome as Record<string, unknown>), ...args }
+      : args;
+    const mapped = mapCreateWorkerReceipt(receipt);
+    const task_id = str(receipt.task_id);
+    // Without worker identity the NOT_LEAD guard and reconciliation silently stop working.
+    if (!mapped.worker_id && !mapped.worker_session_id && !task_id && !str(receipt.task_run_id) && !mapped.dispatch_outcome.errorCode) {
+      throw new KeelError("INVALID_INPUT", "accepted 回执缺 worker_id / worker_session_id（或插件任务的 task_id / task_run_id）。把 create_worker 的回执原样传入。");
+    }
     Object.assign(base, mapped);
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;
-    const task_id = str(args.task_id);
-    const revision = pickRevision(args.revision);
-    const task_run_id = str(args.task_run_id);
+    const revision = pickRevision(receipt.revision);
+    const task_run_id = str(receipt.task_run_id);
     if (task_id) base.task_id = task_id;
     if (revision !== undefined) base.revision = revision;
     if (task_run_id) base.task_run_id = task_run_id;

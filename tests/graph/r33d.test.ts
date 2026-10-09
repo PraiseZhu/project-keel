@@ -178,3 +178,44 @@ describe("keel_run base_ref stacks a change on another PR branch", () => {
     expect(r.errorCode).toBe("INVALID_INPUT");
   });
 });
+
+describe("accepted receipt shapes (real run: receipt nested under outcome lost worker_session_id)", () => {
+  async function run() {
+    const h = fakeHost();
+    await createRun(h, {
+      run_id: "acc", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
+      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+    });
+    await withRun(h, "acc", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.cursor = "explore";
+      s.team = { ready: true, team_id: "t", lead_session_id: "lead" };
+      s.nodes.explore = {
+        status: "active", attempts: 1, dispatch_key: "acc:explore:1", dispatch_state: "planned",
+        planned_params: { label: "keel-explore-1", role: "keel-explorer", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", initial_task: "x", writes: false, fallbacks: [], route_index: 0 },
+      };
+    });
+    return h;
+  }
+
+  it("records worker_session_id when the receipt is nested under outcome, so the worker is NOT_LEAD", async () => {
+    const h = await run();
+    const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
+      run_id: "acc", phase: "accepted", dispatch_key: "acc:explore:1",
+      outcome: { worker_id: "w1", worker_session_id: "ws-1", dispatch_outcome: { dispatched: true, wakeKind: "queued" }, queued_message_id: "q1" },
+    });
+    expect(r.ok).toBe(true);
+    const st = JSON.parse(h.files.get(graphStatePath("acc"))!) as GraphRunState;
+    expect(st.nodes.explore.worker_session_id).toBe("ws-1");
+    const w: any = await runTool(makeContext(h, "c2", profile, undefined, "ws-1"), "keel_wait", { run_id: "acc", max_minutes: 1 });
+    expect(w.errorCode).toBe("NOT_LEAD");
+  });
+
+  it("rejects an accepted report with no worker or task identity", async () => {
+    const h = await run();
+    const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
+      run_id: "acc", phase: "accepted", dispatch_key: "acc:explore:1", outcome: { ok: true },
+    });
+    expect(r.errorCode).toBe("INVALID_INPUT");
+  });
+});

@@ -4,8 +4,8 @@ import { resolve, resolveDirection, resolveFinalReview } from "../shared/manual/
 import { directionOptions } from "../shared/manual/model-tiers.ts";
 import {
   HARNESSES,
+  MAX_FALLBACKS,
   ROLES,
-  TASK_TYPES,
   type AgentModel,
   type Harness,
   type ModelManual,
@@ -70,6 +70,20 @@ export interface SelectControl {
   readonly groups: readonly SelectGroup[];
 }
 
+export interface FallbackItemView {
+  readonly index: number;
+  readonly route: Route;
+  readonly stale?: string;
+  readonly agent: SelectControl;
+  readonly model: SelectControl;
+  readonly effort: SelectControl;
+}
+export interface FallbackView {
+  readonly items: readonly FallbackItemView[];
+  readonly canAdd: boolean;
+  readonly disabled: boolean;
+}
+
 export interface SettingsRowView {
   readonly id: SettingsRowId;
   readonly label: string;
@@ -87,6 +101,7 @@ export interface SettingsRowView {
   readonly agent: SelectControl;
   readonly model: SelectControl;
   readonly effort: SelectControl;
+  readonly fallbacks?: FallbackView;
 }
 
 export interface SettingsView {
@@ -155,10 +170,13 @@ export function shouldDeferCatalogRender(interacting: boolean): boolean {
   return interacting;
 }
 
+export const CATALOG_SELECT_ACTS = ["agent", "model", "effort", "fb-agent", "fb-model", "fb-effort"] as const;
+export type CatalogSelectAct = (typeof CATALOG_SELECT_ACTS)[number];
+
 /** Ignore programmatic focus after a rebuild so it cannot restart the catalog refresh loop. */
 export function shouldRefreshCatalogOnOpen(opts: { act: string | null; programmatic: boolean }): boolean {
   if (opts.programmatic) return false;
-  return opts.act === "model" || opts.act === "effort" || opts.act === "agent";
+  return opts.act !== null && (CATALOG_SELECT_ACTS as readonly string[]).includes(opts.act);
 }
 
 export type CatalogArrivalAction = "ignore" | "store" | "defer" | "store-and-render";
@@ -178,13 +196,44 @@ export function renderOptionHtml(o: SelectOption, selected: string): string {
   return `<option value="${escapeHtml(o.value)}"${o.value === selected ? " selected" : ""}${o.disabled ? " disabled" : ""}>${escapeHtml(o.label)}</option>`;
 }
 
-export function renderSelectHtml(ctrl: SelectControl, row: SettingsRowId, act: "agent" | "model" | "effort", cls?: string): string {
+export function renderSelectHtml(ctrl: SelectControl, row: SettingsRowId, act: CatalogSelectAct, cls?: string, index?: number): string {
   const groups = ctrl.groups.map((g) => `<optgroup label="${escapeHtml(g.label)}">${g.options.map((o) => renderOptionHtml(o, ctrl.value)).join("")}</optgroup>`).join("");
   const options = ctrl.options.map((o) => renderOptionHtml(o, ctrl.value)).join("");
-  return `<select class="${cls ?? act}" data-act="${act}" data-row="${escapeHtml(row)}" aria-label="${escapeHtml(ctrl.label)}"${ctrl.disabled ? " disabled" : ""}>${options}${groups}</select>`;
+  const iAttr = index === undefined ? "" : ` data-i="${index}"`;
+  return `<select class="${cls ?? act}" data-act="${act}" data-row="${escapeHtml(row)}"${iAttr} aria-label="${escapeHtml(ctrl.label)}"${ctrl.disabled ? " disabled" : ""}>${options}${groups}</select>`;
 }
 
-export function renderRowHtml(row: SettingsRowView, taskType: TaskType): string {
+function renderFallbackChipHtml(row: SettingsRowView, open: boolean): string {
+  if (!row.fallbacks) return "";
+  const r = escapeHtml(row.id);
+  const attrs = `type="button" data-act="toggle-fb" data-row="${r}" aria-expanded="${open}" aria-controls="fb-panel-${r}"`;
+  const items = row.fallbacks.items;
+  if (!items.length) return `<button ${attrs} class="fb-chip empty">＋ 设置备用</button>`;
+  const n = items.length;
+  const first = items[0]!.route;
+  const label = first.model ? `${first.model} · ${first.provider_id}` : "未选模型";
+  return `<button ${attrs} class="fb-chip"><span class="n">${n}</span>备用 <span class="arrow">· ${escapeHtml(label)}${n > 1 ? " 等" : ""}</span><span class="chev" aria-hidden="true">›</span></button>`;
+}
+
+function renderFallbackPanelHtml(row: SettingsRowId, fallbacks?: FallbackView): string {
+  if (!fallbacks) return "";
+  const r = escapeHtml(row);
+  const { items, canAdd, disabled } = fallbacks;
+  const full = items.length >= MAX_FALLBACKS;
+  const itemHtml = items.map((it) => `<div class="fb-item${it.stale ? " stale" : ""}"${it.stale ? ` title="${escapeHtml(it.stale)}"` : ""}>
+        <span class="ord">第 ${it.index + 1} 备</span>
+        ${renderSelectHtml(it.agent, row, "fb-agent", undefined, it.index)}
+        ${renderSelectHtml(it.model, row, "fb-model", "model", it.index)}
+        ${renderSelectHtml(it.effort, row, "fb-effort", undefined, it.index)}
+        <button type="button" class="icon-btn" data-act="del-fb" data-row="${r}" data-i="${it.index}" title="移除这条备用" aria-label="移除第 ${it.index + 1} 备"${disabled ? " disabled" : ""}>×</button></div>`).join("");
+  return `<div class="fb-panel" id="fb-panel-${r}">
+     <div class="fb-head"><b>备用模型</b><span>${disabled ? "沿用所有任务的设置，点「单独设置」后可改" : "主模型用不了时，按顺序依次换用"}</span></div>
+     ${itemHtml}
+     <button type="button" class="fb-add" data-act="add-fb" data-row="${r}"${canAdd ? "" : " disabled"}>＋ 添加备用${full ? `（已满 ${MAX_FALLBACKS} 条）` : ""}</button>
+   </div>`;
+}
+
+export function renderRowHtml(row: SettingsRowView, taskType: TaskType, open = false): string {
   const locked = row.locked ? " style=\"opacity:.45\"" : "";
   const pick = `<div class="pick"${locked}>${renderSelectHtml(row.agent, row.id, "agent")}${renderSelectHtml(row.model, row.id, "model", "model")}${renderSelectHtml(row.effort, row.id, "effort")}</div>`;
   let sub = row.source ? escapeHtml(row.source) : "";
@@ -193,7 +242,10 @@ export function renderRowHtml(row: SettingsRowView, taskType: TaskType): string 
   else if (taskType !== "default" && !row.profileLevel && SETTINGS_ROW_IDS.includes(row.id)) {
     sub = (sub ? `${sub} · ` : "") + `<button type="button" class="link" data-act="inherit-slot" data-row="${escapeHtml(row.id)}">沿用所有任务</button>`;
   }
-  return `<div class="row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}"><div class="role"><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.description)}</span></div>${pick}${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  const chip = renderFallbackChipHtml(row, open);
+  const subHtml = (sub || chip) ? `<div class="sub">${sub ? `<span class="sub-note">${sub}</span>` : ""}${chip}</div>` : "";
+  const openClass = row.fallbacks && open ? " open" : "";
+  return `<div class="row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}${openClass}"><div class="role"><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.description)}</span></div>${pick}${subHtml}${renderFallbackPanelHtml(row.id, row.fallbacks)}</div>`;
 }
 
 export function renderProfileButtonHtml(p: { id: string; name: string; selected?: boolean; defaultOf?: Harness }): string {
@@ -290,8 +342,10 @@ function modelControl(
   };
 }
 
-function ownSlot(profile: Profile, taskType: TaskType, role: Role): Slot | undefined {
-  return profile.nodes[taskType]?.[role] ?? (taskType === "default" ? undefined : undefined);
+export function editableSlot(manual: ModelManual, profileId: string, taskType: TaskType, role: Role): Slot {
+  return manual.profiles.find((p) => p.id === profileId)?.nodes[taskType]?.[role]
+    ?? manual.profiles.find((p) => p.id === profileId)?.nodes.default?.[role]
+    ?? materializeSlot(manual, profileId, taskType, role);
 }
 
 function overrideCount(profile: Profile): number {
@@ -304,10 +358,32 @@ function overrideCount(profile: Profile): number {
   return n;
 }
 
-function fallbackNote(slot: Slot | undefined): string | undefined {
-  const fbs = slot?.fallbacks ?? [];
-  if (!fbs.length) return undefined;
-  return `备用：${fbs.map((f) => `${HARNESS_LABELS[f.agent]} · ${f.model} · ${f.provider_id}`).join("；")}`;
+function fallbackView(role: Role, slot: Slot, models: readonly AgentModel[], disabled: boolean): FallbackView {
+  const items: FallbackItemView[] = (slot.fallbacks ?? []).map((f, i) => {
+    const empty = !f.model || !f.provider_id;
+    const hit = findModel(models, f.agent, f.model, f.provider_id);
+    const visibleHit = hit?.visible === true ? hit : undefined;
+    const id = `${role}-fb${i}`;
+    const n = i + 1;
+    return {
+      index: i,
+      route: f,
+      stale: staleReason(f, models),
+      agent: { ...agentControl(id, f.agent, disabled), label: `第 ${n} 备运行环境` },
+      model: {
+        ...modelControl(id, f, models, disabled, empty
+          ? { firstOption: { value: "", label: "选择模型", disabled: true } }
+          : undefined),
+        label: `第 ${n} 备模型`,
+      },
+      effort: { ...effortControl(id, f, visibleHit ?? hit, disabled), label: `第 ${n} 备档位` },
+    };
+  });
+  return {
+    items,
+    canAdd: !disabled && items.length < MAX_FALLBACKS,
+    disabled,
+  };
 }
 
 function roleRow(
@@ -325,11 +401,8 @@ function roleRow(
   } catch {
     route = profile.nodes.default?.[id]?.primary;
   }
-  const own = ownSlot(profile, taskType === "default" ? "default" : taskType, id) ?? (taskType === "default" ? profile.nodes.default?.[id] : profile.nodes[taskType]?.[id]);
   if (taskType !== "default" && !profile.nodes[taskType]?.[id]) source = "沿用所有任务的设置";
   else if (taskType === "default" && !profile.nodes.default?.[id] && profile.inherit) source = `继承自 ${profile.inherit}`;
-  const fb = fallbackNote(own ?? (taskType === "default" ? undefined : profile.nodes.default?.[id]));
-  if (fb) source = source ? `${source} · ${fb}` : fb;
   const agent = (route?.agent ?? profile.harness) as Harness;
   const effective: Route | undefined = route ?? (agent ? { agent, model: "", provider_id: "" } : undefined);
   const hit = effective ? findModel(models, effective.agent, effective.model, effective.provider_id) : undefined;
@@ -349,6 +422,7 @@ function roleRow(
     agent: agentControl(id, agent, disabled),
     model: modelControl(id, effective, models, disabled),
     effort: effortControl(id, effective, visibleHit ?? hit, disabled),
+    fallbacks: fallbackView(id, editableSlot(manual, profile.id, taskType, id), models, locked),
   };
 }
 

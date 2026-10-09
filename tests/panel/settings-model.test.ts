@@ -19,7 +19,7 @@ import {
   shouldRefreshCatalogOnOpen,
   visibleModels,
 } from "../../src/panel/settings-model.ts";
-import { cloneManual, DEFAULT_MANUAL, type AgentModel } from "../../src/shared/manual/schema.ts";
+import { cloneManual, DEFAULT_MANUAL, ROLES, type AgentModel } from "../../src/shared/manual/schema.ts";
 import { appendixCAgentModels } from "../manual/model-manual.test.ts";
 import { parseImportedJson, readCatalog, saveManual, type SettingsIO } from "../../src/panel/manual-editor.ts";
 
@@ -234,6 +234,9 @@ describe("catalog interaction lock", () => {
     expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic: false })).toBe(true);
     expect(shouldRefreshCatalogOnOpen({ act: "effort", programmatic: false })).toBe(true);
     expect(shouldRefreshCatalogOnOpen({ act: "agent", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "fb-agent", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "fb-model", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "fb-effort", programmatic: false })).toBe(true);
     expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic: true })).toBe(false);
     expect(shouldRefreshCatalogOnOpen({ act: "save", programmatic: false })).toBe(false);
     expect(catalogArrivalAction({ seqAccepted: true, interacting: true })).toBe("defer");
@@ -356,7 +359,8 @@ describe("settings HTML escaping", () => {
     expect(await saveManual(fakeIo(fbModels), fbParsed.manual, fbModels)).toMatchObject({ ok: true });
     const fbHtml = rowsHtml(buildSettingsView(fbParsed.manual, { harness: "codex", taskType: "default" }, fbModels));
     expect(fbHtml).not.toMatch(/<img/i);
-    expect(fbHtml).toContain(`备用：Codex · ${XSS_ESCAPED} · ${XSS_ESCAPED}`);
+    expect(fbHtml).not.toContain("备用：");
+    expect(fbHtml).toContain(`· ${XSS_ESCAPED} · ${XSS_ESCAPED}`);
 
     const leadJson = JSON.stringify({
       version: 1,
@@ -395,5 +399,111 @@ describe("settings HTML escaping", () => {
     const frHtml = rowsHtml(buildSettingsView(frParsed.manual, { harness: "codex", taskType: "default" }, frModels));
     expect(frHtml).not.toMatch(/<img/i);
     expect(frHtml).toContain(XSS_ESCAPED);
+  });
+});
+
+describe("fallback rows", () => {
+  const models = appendixCAgentModels();
+
+  it("shows fallbacks only on the five role rows", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    for (const id of ROLES) {
+      const row = view.rows.find((r) => r.id === id)!;
+      expect(row.fallbacks?.items).toHaveLength(1);
+      expect(row.fallbacks?.canAdd).toBe(true);
+    }
+    for (const id of ["lead", "direction", "final-review"] as const) {
+      expect(view.rows.find((r) => r.id === id)?.fallbacks).toBeUndefined();
+    }
+    const html = rowsHtml(view);
+    expect(html).not.toMatch(/data-act="toggle-fb" data-row="lead"/);
+    expect(html).not.toMatch(/data-act="toggle-fb" data-row="direction"/);
+    expect(html).not.toMatch(/data-act="toggle-fb" data-row="final-review"/);
+    expect(html).not.toMatch(/id="fb-panel-lead"/);
+    expect(html).not.toMatch(/id="fb-panel-direction"/);
+    expect(html).not.toMatch(/id="fb-panel-final-review"/);
+  });
+
+  it("renders explorer chip with count and first model, without 等", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
+    expect(html).toContain('data-act="toggle-fb" data-row="explorer"');
+    expect(html).toContain('<span class="n">1</span>');
+    expect(html).toContain("openai/gpt-6-luna · xd");
+    expect(html).not.toContain(" 等");
+  });
+
+  it("disables add when two fallbacks are set and shows 等", () => {
+    const two = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", {
+      primary: DEFAULT_MANUAL.profiles[0]!.nodes.default!.explorer!.primary,
+      fallbacks: [
+        { agent: "codex", model: "openai/gpt-6-luna", provider_id: "xd", effort: "medium" },
+        { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" },
+      ],
+    });
+    const row = buildSettingsView(two, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")!;
+    expect(row.fallbacks?.items).toHaveLength(2);
+    expect(row.fallbacks?.canAdd).toBe(false);
+    const html = renderRowHtml(row, "default");
+    expect(html).toContain('<span class="n">2</span>');
+    expect(html).toContain(" 等");
+    expect(html).toMatch(/data-act="add-fb"[^>]*disabled/);
+    expect(html).toContain("已满 2 条");
+  });
+
+  it("shows empty chip on grok explorer with no fallbacks", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
+    const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
+    expect(html).toContain("fb-chip empty");
+    expect(html).toContain("＋ 设置备用");
+  });
+
+  it("marks the row open only when asked", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const row = view.rows.find((r) => r.id === "explorer")!;
+    const open = renderRowHtml(row, "default", true);
+    expect(open).toContain("row open");
+    expect(open).toContain('aria-expanded="true"');
+    const closed = renderRowHtml(row, "default");
+    expect(closed).not.toContain("row open");
+    expect(closed).toContain('aria-expanded="false"');
+  });
+
+  it("renders panel items with fb selects and delete", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
+    expect(html).toContain("第 1 备");
+    expect(html).toContain('data-act="fb-agent" data-row="explorer" data-i="0"');
+    expect(html).toContain('data-act="fb-model" data-row="explorer" data-i="0"');
+    expect(html).toContain('data-act="fb-effort" data-row="explorer" data-i="0"');
+    expect(html).toContain('data-act="del-fb" data-row="explorer" data-i="0"');
+  });
+
+  it("shows 选择模型 and stale on an empty fallback", () => {
+    const empty = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", {
+      primary: DEFAULT_MANUAL.profiles[0]!.nodes.default!.explorer!.primary,
+      fallbacks: [{ agent: "codex", model: "", provider_id: "" }],
+    });
+    const row = buildSettingsView(empty, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")!;
+    expect(row.fallbacks?.items[0]?.stale).toBeTruthy();
+    const html = renderRowHtml(row, "default");
+    expect(html).toContain("fb-item stale");
+    expect(html).toMatch(/<option value="" selected disabled>选择模型<\/option>/);
+  });
+
+  it("keeps inherited fallbacks read-only on locked task-type rows", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "bug-fix" }, models);
+    const worker = view.rows.find((r) => r.id === "worker")!;
+    expect(worker.locked).toBe(true);
+    expect(worker.fallbacks?.items).toHaveLength(1);
+    expect(worker.fallbacks?.disabled).toBe(true);
+    expect(worker.fallbacks?.canAdd).toBe(false);
+    const html = renderRowHtml(worker, "bug-fix");
+    expect(html).toContain('<span class="n">1</span>');
+    expect(html).toMatch(/data-act="fb-agent"[^>]*disabled/);
+    expect(html).toMatch(/data-act="fb-model"[^>]*disabled/);
+    expect(html).toMatch(/data-act="fb-effort"[^>]*disabled/);
+    expect(html).toMatch(/data-act="add-fb"[^>]*disabled/);
+    expect(html).toContain("点「单独设置」后可改");
   });
 });

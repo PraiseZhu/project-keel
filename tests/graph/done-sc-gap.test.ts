@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isChangeGraphDone } from "../../src/main/graph/done.ts";
-import { advance, createRun } from "../../src/main/graph/interpreter.ts";
+import { advance, createRun, workerLabel } from "../../src/main/graph/interpreter.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
 import { makeContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
@@ -283,7 +283,12 @@ describe("done gate SC missing evidence", () => {
     const r = await advance(h, id, { type: "wait_done", on: "ok" }, { spec });
     expect(r.next.kind, `应再派终审，实际 ${JSON.stringify(r.next)}`).toBe("dispatch");
     if (r.next.kind !== "dispatch") throw new Error("dispatch");
-    expect(r.next.dispatch_key).toMatch(new RegExp(`^${id}:astra-final-review:[1-9]\\d*$`));
+    expect(r.next.dispatch_key).toBe(`${id}:astra-final-review:3`);
+    const label1 = await workerLabel("astra-final-review", `${id}:astra-final-review:1`);
+    const label2 = await workerLabel("astra-final-review", `${id}:astra-final-review:2`);
+    expect(r.next.create_worker?.label).not.toBe(label1);
+    expect(r.next.create_worker?.label).not.toBe(label2);
+    expect(r.next.create_worker?.initial_task).toContain("astra-final-review-3.md");
     expect(JSON.stringify(r.next)).not.toMatch(/"kind":"decide"/);
     expect(JSON.stringify(r.next)).not.toMatch(/已达 max_attempts/);
   });

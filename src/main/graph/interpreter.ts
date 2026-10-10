@@ -460,7 +460,7 @@ async function planOrca(
   if (hasLiveWriter(specNode, node) && node.dispatch_key) {
     return requestWriterStop(state, node, node.dispatch_key, "retry", now);
   }
-  if (node.attempts >= specNode.max_attempts) {
+  if (node.attempts - (node.attempt_floor ?? 0) >= specNode.max_attempts) {
     return nextDecide(state, `human:${specNode.id}`, `节点 ${specNode.id} 已达 max_attempts`, ["stop"], true);
   }
   const workingDir = state.worktree ?? state.invocation_dir;
@@ -1274,7 +1274,8 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
       node.dispatch_key = undefined;
       const review = state.nodes["astra-final-review"];
       if (review) {
-        review.attempts = 0;
+        review.attempt_floor = review.attempts;
+        review.consecutive_failures = 0;
         review.status = "pending";
         review.dispatch_state = undefined;
         review.dispatch_key = undefined;

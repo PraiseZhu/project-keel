@@ -11,7 +11,7 @@ import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending 
 import { ASTRA_CONSULT_ID, classifyRetry, createRun, advance, type AdvanceEvent, type AdvanceOpts, type AdvanceResult, type DoneCheckResult, type GateHooks, type ReconcileQueries } from "../graph/interpreter.ts";
 import { readPrFacts, type PrFacts } from "../graph/pr-facts.ts";
 import { NODE_REPORT_STATUSES, parseNodeReport, type NodeReport } from "../graph/report.ts";
-import { checkScope } from "../graph/scope.ts";
+import { checkScope, isNodeModulesPath } from "../graph/scope.ts";
 import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type GraphRunState, type Next, type NodeReportSnap, type SuccessCriterion, type Verdict } from "../graph/state.ts";
 import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
 import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
@@ -1131,7 +1131,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         ...(nodeState.planned_params?.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
       });
       // .keel/ holds KEEL's own node reports, not product changes.
-      const scope = checkScope((changed.files ?? []).filter((f) => !f.replace(/^\.\//, "").startsWith(".keel/")), allow);
+      const scope = checkScope((changed.files ?? []).filter((f) => !f.replace(/^\.\//, "").startsWith(".keel/") && !isNodeModulesPath(f)), allow);
       if (!scope.ok) {
         await step(ctx, runId, { type: "scope_fail", dispatch_key: key });
         throw new KeelError("SCOPE_VIOLATION", `写域越界：${scope.violations.join("、")}`, { violations: scope.violations });
@@ -1146,7 +1146,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         repo_dir: st.worktree,
         ...(nodeState.planned_params.start_sha ? { base: nodeState.planned_params.start_sha } : {}),
       });
-      const touched = (changed.files ?? []).filter((f) => !f.replace(/^\.\//, "").startsWith(".keel/"));
+      const touched = (changed.files ?? []).filter((f) => !f.replace(/^\.\//, "").startsWith(".keel/") && !isNodeModulesPath(f));
       if (touched.length) {
         await step(ctx, runId, { type: "scope_fail", dispatch_key: key });
         throw new KeelError("SCOPE_VIOLATION", `只读节点改了文件：${touched.join("、")}`, { violations: touched });

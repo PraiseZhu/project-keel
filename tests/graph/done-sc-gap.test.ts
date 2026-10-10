@@ -284,7 +284,7 @@ describe("done gate SC missing evidence", () => {
     expect(r.next.kind, `应再派终审，实际 ${JSON.stringify(r.next)}`).toBe("dispatch");
     if (r.next.kind !== "dispatch") throw new Error("dispatch");
     expect(r.next.dispatch_key).toMatch(new RegExp(`^${id}:astra-final-review:[1-9]\\d*$`));
-    expect(r.next.kind === "decide" && Array.isArray(r.next.options) && r.next.options.join() === "stop").toBe(false);
+    expect(JSON.stringify(r.next)).not.toMatch(/"kind":"decide"/);
     expect(JSON.stringify(r.next)).not.toMatch(/已达 max_attempts/);
   });
 });

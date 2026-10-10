@@ -155,10 +155,10 @@ const AFTER_FINAL = "keel_report phase=final";
 const AFTER_SETUP = "keel_report phase=setup";
 const AFTER_RECONCILE = "keel_report phase=reconcile";
 const AFTER_RECOVER = "keel_report phase=recover";
-const CLAUDE_ALIAS = /(?:^|\/)claude-(haiku|sonnet|opus)(?:-|$)/;
+const CLAUDE_ALIAS = /(?:^|\/)claude-(haiku|sonnet)(?:-|$)/;
 /** Direction consult, final review, and adversarial interrogate stay on Orca even though they are read-only. */
 const NO_SUBAGENT = new Set([ASTRA_CONSULT_ID, "astra-final-review", "interrogate", "interrogate-architect"]);
-const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用能写文件的 general-purpose，model 显式传 subagent.model，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的该别名。";
+const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用 keel-node，model 显式传 subagent.model，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的该别名。";
 
 export function classifyRetry(errorMode: ErrorMode | undefined, consecutiveFailures: number): { decision: RetryDecision; note: string } {
   if (consecutiveFailures >= 2) return { decision: "human", note: "连续 2 次失败，放弃该节点" };
@@ -1204,7 +1204,12 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   }
   // Explicit FAIL is a completed review, even when the worker wrote status=failed/blocked.
   if (reviewFail || status === "done" || status === "partial") succeed(state, spec, id, now);
-  else failNode(state, spec, id, now, event.inline_report?.fingerprint ?? failureFingerprint({ findings: event.report?.findings, ran: event.report?.ran, summary: event.report?.summary }));
+  else if (isSubagentChannel(node) && (status === "failed" || status === "blocked")) {
+    node.status = "failed";
+    node.dispatch_state = "terminal";
+    node.ended_at = now;
+    node.consecutive_failures = (node.consecutive_failures ?? 0) + 1;
+  } else failNode(state, spec, id, now, event.inline_report?.fingerprint ?? failureFingerprint({ findings: event.report?.findings, ran: event.report?.ran, summary: event.report?.summary }));
 }
 
 async function applyEvent(state: GraphRunState, spec: GraphSpec, event: AdvanceEvent, gates: GateHooks | undefined, now: number): Promise<void> {
@@ -1267,6 +1272,13 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
       node.status = "pending";
       node.dispatch_state = undefined;
       node.dispatch_key = undefined;
+      const review = state.nodes["astra-final-review"];
+      if (review) {
+        review.attempts = 0;
+        review.status = "pending";
+        review.dispatch_state = undefined;
+        review.dispatch_key = undefined;
+      }
       state.cursor = to;
       state.next = undefined;
       return;

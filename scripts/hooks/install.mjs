@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 export const MARK = "keel-stop-gate.mjs";
 export const ORIGIN_MISSING = "__keel_origin_missing";
+export const KEEL_NODE_AGENT = "keel-node.md";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const GATE_SCRIPT = path.join(SCRIPT_DIR, "keel-stop-gate.mjs");
@@ -25,8 +26,16 @@ export function defaultOwnersRoot() {
   return path.join(os.homedir(), "Library/Application Support/Cindy/owners");
 }
 
+export function defaultAgentsDir() {
+  return path.join(os.homedir(), ".claude", "agents");
+}
+
+export function keelNodeAgentSource() {
+  return path.join(SCRIPT_DIR, KEEL_NODE_AGENT);
+}
+
 export function parseArgs(argv) {
-  const out = { cmd: "", target: "", config: "", dataDir: "", ownersRoot: "", dryRun: false };
+  const out = { cmd: "", target: "", config: "", dataDir: "", ownersRoot: "", agentsDir: "", dryRun: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -35,6 +44,7 @@ export function parseArgs(argv) {
     else if (a === "--config" && next) { out.config = next; i++; }
     else if (a === "--data-dir" && next) { out.dataDir = next; i++; }
     else if (a === "--owners-root" && next) { out.ownersRoot = next; i++; }
+    else if (a === "--agents-dir" && next) { out.agentsDir = next; i++; }
     else if (a === "--dry-run") out.dryRun = true;
     else rest.push(a);
   }
@@ -193,12 +203,18 @@ export async function installHook(opts) {
   const { existed, config } = await readConfig(configPath);
   const next = mergeKeelStop(config, target, indexPath);
   const rendered = `${JSON.stringify(next, null, 2)}\n`;
-  if (opts.dryRun) return { dryRun: true, configPath, existed, content: rendered, next };
+  const agentSrc = keelNodeAgentSource();
+  const agentDest = target === "claude-code" ? path.join(opts.agentsDir || defaultAgentsDir(), KEEL_NODE_AGENT) : undefined;
+  if (opts.dryRun) return { dryRun: true, configPath, existed, content: rendered, next, agent: agentDest };
   const backup = backupName(configPath);
   if (existed) await copyFile(configPath, backup);
   else await writeJson(backup, { [ORIGIN_MISSING]: true });
   await writeJson(configPath, next);
-  return { dryRun: false, configPath, existed, backup, next };
+  if (agentDest) {
+    await mkdir(path.dirname(agentDest), { recursive: true });
+    await copyFile(agentSrc, agentDest);
+  }
+  return { dryRun: false, configPath, existed, backup, next, agent: agentDest };
 }
 
 export async function uninstallHook(opts) {

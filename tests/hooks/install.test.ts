@@ -11,6 +11,7 @@ import {
   hasKeelStop,
   installHook,
   isVacuousConfig,
+  keelNodeAgentSource,
   mergeKeelStop,
   removeKeelStop,
   statusHook,
@@ -77,13 +78,14 @@ describe("install / uninstall against tmp fixtures", () => {
     const dataDir = path.join(dir, "data");
     await mkdir(dataDir, { recursive: true });
     await writeFile(config, `${JSON.stringify(fixture, null, 2)}\n`);
-    const installed = await installHook({ target: "claude-code", config, dataDir });
+    const agentsDir = path.join(dir, "agents");
+    const installed = await installHook({ target: "claude-code", config, dataDir, agentsDir });
     expect(installed.existed).toBe(true);
     expect(existsSync(installed.backup!)).toBe(true);
     const after = JSON.parse(await readFile(config, "utf8"));
     expect(hasKeelStop(after)).toBe(true);
     expect(after.hooks.PreToolUse).toEqual(fixture.hooks.PreToolUse);
-    await installHook({ target: "claude-code", config, dataDir });
+    await installHook({ target: "claude-code", config, dataDir, agentsDir });
     const again = JSON.parse(await readFile(config, "utf8"));
     expect(JSON.stringify(again.hooks.Stop).split(MARK).length - 1).toBe(1);
     const undone = await uninstallHook({ target: "claude-code", config });
@@ -131,6 +133,25 @@ describe("install / uninstall against tmp fixtures", () => {
     await installHook({ target: "codex", config, dataDir });
     expect((await statusHook({ target: "codex", config })).installed).toBe(true);
     expect((await statusHook({ target: "claude-code", config })).note).toBeUndefined();
+  });
+  it("install --target claude-code copies agents/keel-node.md without a hardcoded model", async () => {
+    const dir = await tmp();
+    const config = path.join(dir, "settings.json");
+    const dataDir = path.join(dir, "data");
+    const agentsDir = path.join(dir, "agents");
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(config, `${JSON.stringify(fixture, null, 2)}\n`);
+    const installed = await installHook({ target: "claude-code", config, dataDir, agentsDir });
+    const dest = path.join(agentsDir, "keel-node.md");
+    expect(installed.agent).toBe(dest);
+    expect(existsSync(dest)).toBe(true);
+    const text = await readFile(dest, "utf8");
+    expect(text).toMatch(/^---\nname: keel-node\n/);
+    expect(text).toMatch(/tools: \[Read, Write, Edit, Bash, Grep, Glob\]/);
+    expect(text).not.toMatch(/^model:/m);
+    expect(keelNodeAgentSource()).toMatch(/scripts\/hooks\/keel-node\.md$/);
+    const dry = await installHook({ target: "codex", config, dataDir, agentsDir, dryRun: true });
+    expect(dry.agent).toBeUndefined();
   });
 });
 

@@ -64,6 +64,7 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 | `src/panel/` | 面板与设置页 |
 | `plugin/` | 插件产物：`ghost.json`（由脚本生成）、手册、图标、构建输出 |
 | `plugin/manual/` | 随插件分发的手册（`keel/`、`jev/`，以及工作流手册镜像） |
+| `scripts/hooks/keel-node.md` | Claude Code 主控一次性节点 subagent；`scripts/hooks/install.mjs --target claude-code` 会装到 `~/.claude/agents/` |
 | `overlays/`、`tools/` | 手册镜像的覆盖层与同步脚本 |
 | `config/` | 个人 profile 示例（`profile.example.json`） |
 | `scripts/` | 构建、manifest 生成、手册校验、隐私检查 |

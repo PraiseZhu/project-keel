@@ -138,13 +138,25 @@ describe("keel_run graph types", () => {
 });
 
 describe("pstack_start migration", () => {
-  it("maps task to keel_run when repo_dir is present", async () => {
+  it("maps task to keel_run when repo_dir and a legal lead are present", async () => {
     const h = fakeHost({ node: nodeFake("change") });
     const r: any = await runTool(makeContext(h, "c1", profile), "pstack_start", {
       task: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"], lead: "codex",
     });
     expect(r.ok).toBe(true);
     expect(r.result.next.kind).toBe("setup");
+  });
+  it("rejects a missing or illegal lead instead of defaulting to codex", async () => {
+    const h = fakeHost({ node: nodeFake("change") });
+    const ctx = makeContext(h, "c1", profile);
+    const args = { task: "修登录报错", repo_dir: "/repo", scope: ["src/**", "tests/**"] };
+    for (const lead of [undefined, "claude", "gpt"]) {
+      const r: any = await runTool(ctx, "pstack_start", lead === undefined ? args : { ...args, lead });
+      expect(r).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+      expect(r.message).toContain("keel_run({ goal, sc, repo_dir, lead })");
+      expect(r.message).toContain("codex / claude-code / pi");
+    }
+    expect(h.nodeCalls.some((c) => c.method === "worktree/create")).toBe(false);
   });
 });
 

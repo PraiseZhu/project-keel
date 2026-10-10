@@ -217,11 +217,10 @@ describe("astra-final-review final_review_route dispatch", () => {
     const plan = await dispatchNode("architect-plan", DEFAULT_MANUAL, models, "grok");
     expect(plan.next.kind).toBe("dispatch");
     if (plan.next.kind === "dispatch") {
-      expect(plan.next.subagent).toMatchObject({
-        harness: "claude-code", model: "opus",
-        route: { model: "anthropic/claude-opus-5-5", provider_id: "xd" },
+      expect(plan.next.create_worker).toMatchObject({
+        agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd",
       });
-      expect(plan.next.create_worker).toBeUndefined();
+      expect(plan.next.subagent).toBeUndefined();
     }
     const review = await dispatchNode("astra-final-review", DEFAULT_MANUAL, models, "grok");
     expect(review.next.kind).toBe("dispatch");

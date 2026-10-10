@@ -386,6 +386,48 @@ describe("prior FAIL cannot skip the next astra-final-review", () => {
     expect(r.next.dispatch_key).toBe("run-re-review:astra-final-review:2");
     expect(readState(h, "run-re-review").cursor).toBe("astra-final-review");
   });
+
+  it("ordinary wait-ci re-entry still stops astra-final-review at max_attempts", async () => {
+    const spec = PSTACK_GRAPHS["bug-fix"];
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: HEAD } };
+        return { ok: false, message: method };
+      },
+    });
+    await createRun(h, {
+      run_id: "run-review-cap",
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "bug-fix",
+      entry: "wait-ci",
+      goal: "修登录报错",
+      worktree: WT,
+      now: h.now(),
+      scopeAllow: ["src/**"],
+    });
+    await withRun(h, "run-review-cap", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
+      s.cursor = "wait-ci";
+      s.budget.astra_left = 3;
+      s.nodes["wait-ci"] = { status: "active", attempts: 1 };
+      s.nodes["astra-final-review"] = {
+        status: "succeeded",
+        attempts: 2,
+        dispatch_state: "terminal",
+        report_path: `${WT}/.keel/astra-final-review-2.md`,
+        last_report: { status: "done", verdict: "PASS", summary: "已满次数" },
+      };
+    });
+    const r = await advance(h, "run-review-cap", { type: "wait_done", on: "ok" }, { spec });
+    expect(r.next.kind).toBe("decide");
+    if (r.next.kind !== "decide") throw new Error("decide");
+    expect(r.next.gate_id).toBe("human:astra-final-review");
+    expect(r.next.options).toEqual(["stop"]);
+    expect(r.next.question).toMatch(/已达 max_attempts/);
+  });
 });
 
 describe("astra-final-review always dispatches after wait-ci ok", () => {

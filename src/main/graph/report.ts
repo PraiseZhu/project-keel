@@ -83,7 +83,7 @@ export function parseNodeReport(text: string, expectedDispatchKey: string): Node
   if (!Array.isArray(o.ran) || o.ran.some((x) => !x || typeof x !== "object" || typeof (x as { cmd?: unknown }).cmd !== "string" || typeof (x as { exit_code?: unknown }).exit_code !== "number")) {
     throw new KeelError("REPORT_INVALID", "ran 必须是 {cmd, exit_code} 数组。");
   }
-  if (o.verdict !== undefined && (typeof o.verdict !== "string" || !(NODE_VERDICTS as readonly string[]).includes(o.verdict))) {
+  if (o.verdict != null && (typeof o.verdict !== "string" || !(NODE_VERDICTS as readonly string[]).includes(o.verdict))) {
     throw new KeelError("REPORT_INVALID", "verdict 必须是 PASS、PASS+NOTES 或 FAIL。");
   }
   const ran = (o.ran as { cmd: string; exit_code: number; tests_passed?: unknown }[]).map((x) => ({

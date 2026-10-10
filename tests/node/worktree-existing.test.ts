@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { dispatch } from "../../src/node/rpc.ts";
@@ -115,5 +115,27 @@ describe("git changed-files guards the write scope", () => {
     const files = (out.result as { files: string[] }).files;
     expect(files).toEqual(["src\\outside.txt"]);
     expect(checkScope(files, ["src/**"]).ok).toBe(false);
+  });
+
+  it("ignores a node_modules symlink when gitignore uses node_modules/, and still lists a real out-of-scope file", async () => {
+    const r = repo();
+    writeFileSync(join(r.dir, ".gitignore"), "node_modules/\n");
+    r.g("add", ".gitignore");
+    r.g("commit", "-q", "-m", "ignore");
+    mkdirSync(join(r.dir, "src"));
+    writeFileSync(join(r.dir, "src", "a.ts"), "export {}\n");
+    mkdirSync(join(r.dir, "vendor-deps"));
+    symlinkSync(join(r.dir, "vendor-deps"), join(r.dir, "node_modules"));
+    writeFileSync(join(r.dir, "secret.txt"), "nope\n");
+    const porcelain = r.g("status", "--porcelain");
+    expect(porcelain).toMatch(/(^|\n)\?\? node_modules\n/);
+    const out = await dispatch("git/changed-files", { repo_dir: r.dir, base: "HEAD" });
+    const files = (out.result as { files: string[] }).files;
+    expect(files).toContain("src/a.ts");
+    expect(files).not.toContain("node_modules");
+    expect(checkScope(["src/a.ts"], ["src/**"]).ok).toBe(true);
+    expect(files).toContain("secret.txt");
+    expect(checkScope(files, ["src/**"]).ok).toBe(false);
+    expect(checkScope(files, ["src/**"]).violations).toContain("secret.txt");
   });
 });

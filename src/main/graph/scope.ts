@@ -6,6 +6,12 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${body}$`);
 }
 
+/** Gitignore `node_modules/` does not cover a symlink named `node_modules`. */
+export function isNodeModulesPath(file: string): boolean {
+  const f = file.replace(/^\.\//, "");
+  return f === "node_modules" || f.startsWith("node_modules/");
+}
+
 export function matchScopeGlob(file: string, pattern: string): boolean {
   // Git -z output already uses "/" between directories; a backslash is part of a POSIX file name.
   const f = file.replace(/^\.\//, "");
@@ -19,7 +25,7 @@ export function matchScopeGlob(file: string, pattern: string): boolean {
 }
 
 export function checkScope(changedFiles: readonly string[], scopeGlobs: readonly string[]): { ok: boolean; violations: string[] } {
-  const files = changedFiles.map((f) => f.replace(/^\.\//, ""));
+  const files = changedFiles.map((f) => f.replace(/^\.\//, "")).filter((f) => !isNodeModulesPath(f));
   if (!scopeGlobs.length) return { ok: files.length === 0, violations: [...files] };
   const violations = files.filter((f) => !scopeGlobs.some((g) => matchScopeGlob(f, g)));
   return { ok: violations.length === 0, violations };

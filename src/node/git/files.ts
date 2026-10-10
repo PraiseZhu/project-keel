@@ -3,6 +3,11 @@ import { dirname, join } from "node:path";
 import { ToolError, git, gitRaw } from "../env.ts";
 import { repoRoot } from "./worktree.ts";
 
+function skipNodeModules(name: string): boolean {
+  const f = name.replace(/^\.\//, "");
+  return f === "node_modules" || f.startsWith("node_modules/");
+}
+
 // -z keeps names byte-exact (no trimming, no quoting); --no-renames lists a rename's source too.
 function splitNames(out: string): string[] {
   return out.split("\0").filter(Boolean);
@@ -20,7 +25,7 @@ export async function changedFiles(p: { repo_dir?: string; base?: string }): Pro
     git(["ls-files", "--others", "--exclude-standard", "-z"], { cwd }),
   ]);
   const names = new Set<string>();
-  for (const out of outs) for (const n of splitNames(out)) names.add(n);
+  for (const out of outs) for (const n of splitNames(out)) if (!skipNodeModules(n)) names.add(n);
   return { files: [...names].sort() };
 }
 

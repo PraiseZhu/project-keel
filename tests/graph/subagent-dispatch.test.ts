@@ -105,12 +105,24 @@ describe("SC-1 subagent vs orca dispatch", () => {
     expect(d.create_worker).toBeUndefined();
     expect(d.subagent).toMatchObject({ harness: "claude-code", model: "haiku", role: "keel-explorer" });
     expect(d.subagent?.route).toEqual({ model: "anthropic/claude-haiku-5-5", provider_id: "xd" });
+    expect(d.note).toMatch(/subagent_type 用 keel-node/);
+    expect(d.note).not.toMatch(/general-purpose/);
     expect(d.subagent?.report_path).toMatch(/\.keel\/explore-1\.md$/);
     expect(d.after).toBe("keel_report phase=final");
     expect(out.state.nodes.explore.dispatch_state).toBe("running");
     expect(out.state.nodes.explore.planned_params?.channel).toBe("subagent");
     expect(out.state.nodes.explore.team_id).toBeUndefined();
     expect(out.state.team?.ready).not.toBe(true);
+  });
+
+  it("claude-code sonnet explorer also returns subagent", async () => {
+    const manual = cloneManual(DEFAULT_MANUAL);
+    const grok = manual.profiles.find((p) => p.id === "grok")!;
+    (grok.nodes.default as { explorer: { primary: Route } }).explorer = { primary: { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "medium" } };
+    const { h, opts, runId } = await bootExplore({ run_id: "run-sonnet", manual });
+    const d = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
+    expect(d.subagent).toMatchObject({ harness: "claude-code", model: "sonnet" });
+    expect(d.create_worker).toBeUndefined();
   });
 
   it("default sol + codex explore stays on Orca create_worker", async () => {
@@ -129,6 +141,23 @@ describe("SC-1 subagent vs orca dispatch", () => {
     const { h, opts, runId } = await bootExplore({ manual });
     const first = await advance(h, runId, { type: "tick" }, opts);
     expect(first.next.kind).toBe("setup");
+  });
+
+  it("claude-code opus and fable routes stay on Orca", async () => {
+    for (const model of ["anthropic/claude-opus-5-5", "anthropic/claude-fable-5-1"] as const) {
+      const manual = cloneManual(DEFAULT_MANUAL);
+      const grok = manual.profiles.find((p) => p.id === "grok")!;
+      (grok.nodes.default as { explorer: { primary: Route } }).explorer = { primary: { agent: "claude-code", model, provider_id: "xd", effort: "medium" } };
+      const { h, opts, runId } = await bootExplore({ run_id: `run-${model.split("/").pop()}`, manual });
+      if (!h.agentModelList.some((m) => m.id === model && m.agent === "claude-code" && m.providerId === "xd")) {
+        h.agentModelList.push({ id: model, agent: "claude-code", providerId: "xd" });
+      }
+      const first = await advance(h, runId, { type: "tick" }, opts);
+      expect(first.next.kind, model).toBe("setup");
+      const d = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts)).next);
+      expect(d.create_worker).toBeTruthy();
+      expect(d.subagent).toBeUndefined();
+    }
   });
 
   it("write and verifier nodes stay on create_worker under the same claude-code profile", async () => {
@@ -404,6 +433,32 @@ describe("SC-2 failed subagent retries on Orca", () => {
     expect(failed.state.cursor).toBe("explore");
     expect(failed.next.kind).toBe("setup");
     const attempt2 = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" } }, opts)).next);
+    expect(attempt2.dispatch_key).toBe(`${runId}:explore:2`);
+    expect(attempt2.create_worker).toBeTruthy();
+    expect(attempt2.subagent).toBeUndefined();
+  });
+
+  it("subagent explore failed final retries Orca instead of walking fail to stop", async () => {
+    const { h, opts, runId } = await bootExplore({ manual: claudeXdManual() });
+    const d = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
+    expect(d.subagent).toBeTruthy();
+    expect(d.create_worker).toBeUndefined();
+    const failed = await advance(h, runId, {
+      type: "report",
+      phase: "final",
+      dispatch_key: d.dispatch_key,
+      inline_report: { status: "failed" },
+      report: { status: "failed" },
+    }, opts);
+    expect(failed.next.kind, `unexpected ${failed.next.kind}`).not.toBe("stop");
+    expect(failed.state.cursor).toBe("explore");
+    expect(failed.state.nodes.explore.attempts).toBe(1);
+    expect(failed.next.kind).toBe("setup");
+    const attempt2 = asDispatch((await advance(h, runId, {
+      type: "report",
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+    }, opts)).next);
     expect(attempt2.dispatch_key).toBe(`${runId}:explore:2`);
     expect(attempt2.create_worker).toBeTruthy();
     expect(attempt2.subagent).toBeUndefined();

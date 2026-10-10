@@ -99,6 +99,8 @@ export interface PluginTaskRecord {
 export interface NodeRunState {
   status: "pending" | "active" | "succeeded" | "failed" | "skipped";
   attempts: number;
+  /** After done/revise, budget is counted from this floor. attempts itself stays monotonic so dispatch_key / label / report path stay unique. */
+  attempt_floor?: number;
   dispatch_key?: string;
   dispatch_state?: DispatchState;
   dispatch_state_at?: number;

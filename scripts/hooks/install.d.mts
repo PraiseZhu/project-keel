@@ -1,10 +1,13 @@
 export const MARK: string;
 export const ORIGIN_MISSING: string;
+export const KEEL_NODE_AGENT: string;
 export const GATE_SCRIPT: string;
 export function defaultConfigPath(target: string): string;
 export function defaultOwnersRoot(): string;
+export function defaultAgentsDir(): string;
+export function keelNodeAgentSource(): string;
 export function parseArgs(argv: readonly string[]): {
-  cmd: string; target: string; config: string; dataDir: string; ownersRoot: string; dryRun: boolean;
+  cmd: string; target: string; config: string; dataDir: string; ownersRoot: string; agentsDir: string; dryRun: boolean;
 };
 export function discoverDataDir(ownersRoot?: string): Promise<string>;
 export function keelCommand(target: string, indexPath: string, execPath?: string, script?: string): string;
@@ -15,8 +18,8 @@ export function removeKeelStop(config: unknown): any;
 export function isVacuousConfig(config: unknown): boolean;
 export function originWasMissing(configPath: string): Promise<boolean>;
 export function readConfig(configPath: string): Promise<{ existed: boolean; config: any }>;
-export function installHook(opts: { target: string; config?: string; dataDir?: string; ownersRoot?: string; dryRun?: boolean }): Promise<{
-  dryRun: boolean; configPath: string; existed: boolean; backup?: string; content?: string; next: any;
+export function installHook(opts: { target: string; config?: string; dataDir?: string; ownersRoot?: string; agentsDir?: string; dryRun?: boolean }): Promise<{
+  dryRun: boolean; configPath: string; existed: boolean; backup?: string; content?: string; next: any; agent?: string;
 }>;
 export function uninstallHook(opts: { target: string; config?: string; dryRun?: boolean }): Promise<{
   dryRun: boolean; configPath: string; existed: boolean; deleted: boolean; content?: string; next: any;

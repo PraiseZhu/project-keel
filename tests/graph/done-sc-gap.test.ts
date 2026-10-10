@@ -241,4 +241,50 @@ describe("done gate SC missing evidence", () => {
     expect(task).not.toContain(`${WT}/.keel/open-pr-1.md`);
     expect(read(h, id).cursor).toBe("fix-ci");
   });
+
+  it("done revise after astra-final-review is at max_attempts still re-reviews the new commit", async () => {
+    const { h, id, spec, ctx } = await boot("run-sc-revise-rereview");
+    await withRun(h, id, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.nodes["astra-final-review"] = {
+        ...s.nodes["astra-final-review"]!,
+        attempts: 2,
+        report_path: `${WT}/.keel/astra-final-review-2.md`,
+        last_report: { status: "done", summary: "pass", verdict: "PASS" },
+      };
+      s.budget.astra_left = 3;
+    });
+    const tick = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+    expect(tick.next.kind).toBe("decide");
+    const revised: any = await runTool(ctx, "keel_gate", { run_id: id, gate_id: "done", answer: "revise" });
+    expect(revised.ok, revised.message).toBe(true);
+    expect(revised.result.next.kind).toBe("dispatch");
+    const implKey = revised.result.next.dispatch_key as string;
+    expect(implKey).toBe(`${id}:implement:2`);
+    await advance(h, id, {
+      type: "report",
+      phase: "final",
+      dispatch_key: implKey,
+      report: { status: "done", summary: "补了 SC 证据", files_changed: ["src/login.ts"], head_sha: HEAD },
+    }, { spec });
+    expect(read(h, id).cursor).toBe("verify-same-surface");
+    await withRun(h, id, (raw) => {
+      const s = raw as unknown as GraphRunState;
+      s.status = "running";
+      s.next = undefined;
+      s.cursor = "wait-ci";
+      s.nodes["verify-same-surface"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["open-pr"] = { status: "succeeded", attempts: 2, dispatch_state: "terminal" };
+      s.nodes["wait-ci"] = { status: "pending", attempts: 1 };
+    });
+    const waiting = await advance(h, id, { type: "tick" }, { spec });
+    expect(waiting.next.kind).toBe("wait");
+    expect(read(h, id).cursor).toBe("wait-ci");
+    const r = await advance(h, id, { type: "wait_done", on: "ok" }, { spec });
+    expect(r.next.kind, `应再派终审，实际 ${JSON.stringify(r.next)}`).toBe("dispatch");
+    if (r.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(r.next.dispatch_key).toMatch(new RegExp(`^${id}:astra-final-review:[1-9]\\d*$`));
+    expect(r.next.kind === "decide" && Array.isArray(r.next.options) && r.next.options.join() === "stop").toBe(false);
+    expect(JSON.stringify(r.next)).not.toMatch(/已达 max_attempts/);
+  });
 });

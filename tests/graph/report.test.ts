@@ -49,6 +49,17 @@ describe("parseNodeReport", () => {
     expect(() => parseNodeReport("no json here", "run:node:1")).toThrow(expect.objectContaining({ code: "REPORT_INVALID" }));
     expect(() => parseNodeReport("```json\n{\n```", "run:node:1")).toThrow(KeelError);
   });
+
+  it("treats optional verdict null as omitted and still rejects illegal values", () => {
+    const r = parseNodeReport(JSON.stringify({ ...payload, verdict: null, branch: null, findings: null }), "run:node:1");
+    expect(r.verdict).toBeUndefined();
+    expect(r.branch).toBeUndefined();
+    expect(r.findings).toBeUndefined();
+    expect(r.status).toBe("done");
+    expect(() => parseNodeReport(JSON.stringify({ ...payload, verdict: "OK" }), "run:node:1")).toThrow(
+      expect.objectContaining({ code: "REPORT_INVALID", message: expect.stringMatching(/verdict/) }),
+    );
+  });
 });
 
 describe("ran.tests_passed", () => {

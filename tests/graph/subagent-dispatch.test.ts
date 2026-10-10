@@ -408,6 +408,32 @@ describe("SC-2 failed subagent retries on Orca", () => {
     expect(attempt2.create_worker).toBeTruthy();
     expect(attempt2.subagent).toBeUndefined();
   });
+
+  it("subagent explore failed final retries Orca instead of walking fail to stop", async () => {
+    const { h, opts, runId } = await bootExplore({ manual: claudeXdManual() });
+    const d = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
+    expect(d.subagent).toBeTruthy();
+    expect(d.create_worker).toBeUndefined();
+    const failed = await advance(h, runId, {
+      type: "report",
+      phase: "final",
+      dispatch_key: d.dispatch_key,
+      inline_report: { status: "failed" },
+      report: { status: "failed" },
+    }, opts);
+    expect(failed.next.kind, `unexpected ${failed.next.kind}`).not.toBe("stop");
+    expect(failed.state.cursor).toBe("explore");
+    expect(failed.state.nodes.explore.attempts).toBe(1);
+    expect(failed.next.kind).toBe("setup");
+    const attempt2 = asDispatch((await advance(h, runId, {
+      type: "report",
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+    }, opts)).next);
+    expect(attempt2.dispatch_key).toBe(`${runId}:explore:2`);
+    expect(attempt2.create_worker).toBeTruthy();
+    expect(attempt2.subagent).toBeUndefined();
+  });
 });
 
 describe("nudge maps subagent dispatch to wait", () => {

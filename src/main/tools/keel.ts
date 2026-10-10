@@ -4,7 +4,7 @@
 import { family } from "../../shared/fanout.ts";
 import { loadRuntimeConfig } from "../config.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
-import { loadGraphStates } from "../graph-snapshot.ts";
+import { isPlaceholderRun, loadGraphStates } from "../graph-snapshot.ts";
 import { isChangeGraphDone, isInvestigationDone, scIdsFromMissing, type ChangeGraphDoneInput, type ChangeGraphDoneResult, type ScRow } from "../graph/done.ts";
 import { GATES, type Evidence, type GateId } from "../graph/gates.ts";
 import { isGraphTaskType, resolveGraphTask, routePendingPath, type RoutePending } from "../graph/route-start.ts";
@@ -1566,7 +1566,7 @@ export async function keelStatus(ctx: ToolContext, args: Record<string, unknown>
   const only = typeof args.run_id === "string" ? args.run_id : undefined;
   const runs = (await loadGraphStates(ctx.host))
     .map((r) => r as unknown as GraphRunState)
-    .filter((r) => r.run_id && (!only || r.run_id === only));
+    .filter((r) => r.run_id && (!only || r.run_id === only) && !isPlaceholderRun(r));
   return {
     runs: runs.map((r) => ({
       run_id: r.run_id,

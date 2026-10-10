@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { graphStatePath, withRun } from "../src/main/store/runs.ts";
+import { graphStatePath, withExistingRun, withRun } from "../src/main/store/runs.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 
 describe("withRun", () => {
@@ -47,5 +47,33 @@ describe("withRun", () => {
     ]);
     expect(JSON.parse(h.files.get(graphStatePath("run-a"))!).mark).toBe("a");
     expect(JSON.parse(h.files.get(graphStatePath("run-b"))!).mark).toBe("b");
+  });
+});
+
+describe("withExistingRun", () => {
+  it("does not call fn, write a file, or return a value when the run is missing", async () => {
+    const h = fakeHost();
+    let called = false;
+    const result = await withExistingRun(h, "run-missing", (s) => {
+      called = true;
+      s.n = 1;
+      return "wrote";
+    });
+    expect(called).toBe(false);
+    expect(result).toBeUndefined();
+    expect(h.files.has(graphStatePath("run-missing"))).toBe(false);
+  });
+
+  it("updates an existing run", async () => {
+    const h = fakeHost();
+    await withRun(h, "run-a", (s) => {
+      s.n = 1;
+    });
+    const result = await withExistingRun(h, "run-a", (s) => {
+      s.n = Number(s.n) + 1;
+      return Number(s.n);
+    });
+    expect(result).toBe(2);
+    expect(JSON.parse(h.files.get(graphStatePath("run-a"))!).n).toBe(2);
   });
 });

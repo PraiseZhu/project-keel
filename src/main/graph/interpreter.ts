@@ -7,7 +7,7 @@ import { findProfile, resolveDirection, resolveFinalReview } from "../../shared/
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
-import { buildBrief } from "./brief.ts";
+import { buildBrief, reportPath } from "./brief.ts";
 import { scIdsFromMissing } from "./done.ts";
 import { GATES } from "./gates.ts";
 import { crossesFunctionBoundaryOrUnknown, failureFingerprint } from "./astra-triggers.ts";
@@ -34,6 +34,7 @@ import {
   type NodeRunState,
   type PlannedParams,
   type RecoverAction,
+  type SubagentParams,
 } from "./state.ts";
 
 export type RetryDecision = "retry" | "escalate" | "stop" | "human";
@@ -150,9 +151,14 @@ export interface AdvanceResult {
 }
 
 const AFTER_REPORT = "keel_report";
+const AFTER_FINAL = "keel_report phase=final";
 const AFTER_SETUP = "keel_report phase=setup";
 const AFTER_RECONCILE = "keel_report phase=reconcile";
 const AFTER_RECOVER = "keel_report phase=recover";
+const CLAUDE_ALIAS = /(?:^|\/)claude-(haiku|sonnet|opus)(?:-|$)/;
+/** Direction consult and final review stay on Orca even though they are read-only. */
+const NO_SUBAGENT = new Set([ASTRA_CONSULT_ID, "astra-final-review"]);
+const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用能写文件的 general-purpose，model 显式传 subagent.model，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的该别名。";
 
 export function classifyRetry(errorMode: ErrorMode | undefined, consecutiveFailures: number): { decision: RetryDecision; note: string } {
   if (consecutiveFailures >= 2) return { decision: "human", note: "连续 2 次失败，放弃该节点" };
@@ -264,6 +270,64 @@ function pickRoute(
   return { stop: "全部路线不可用" };
 }
 
+/** Native-subagent model for a read-only one-shot node, or undefined when it must stay on Orca. */
+function subagentModel(state: GraphRunState, specNode: GraphNode, route: Route, manual: ModelManual): { model?: string } | undefined {
+  if (specNode.writes || specNode.role === "verifier" || NO_SUBAGENT.has(specNode.id)) return undefined;
+  if (route.agent !== state.lead_harness) return undefined;
+  let lead: Route;
+  try { lead = findProfile(manual, state.profile_id).lead; } catch { return undefined; }
+  if (route.agent === "claude-code") {
+    const alias = CLAUDE_ALIAS.exec(route.model)?.[1];
+    return alias ? { model: alias } : undefined;
+  }
+  if (route.agent === "codex") return route.model === lead.model ? {} : undefined;
+  return undefined;
+}
+
+function subagentEligible(state: GraphRunState, specNode: GraphNode, manual: ModelManual, models: readonly AgentModel[] | undefined, preferFallback: boolean): boolean {
+  try {
+    if ((state.nodes[specNode.id]?.attempts ?? 0) >= 1) return false;
+    const picked = pickRoute(manual, state, (specNode.role ?? "worker") as Role, specNode.writes, models, preferFallback, specNode.id);
+    return !("stop" in picked) && subagentModel(state, specNode, picked.route, manual) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+function isSubagentChannel(node: NodeRunState | undefined): boolean {
+  return node?.planned_params?.channel === "subagent";
+}
+
+function subagentDispatch(state: GraphRunState, specNode: GraphNode, node: NodeRunState, picked: { route: Route; note?: string }, alias: { model?: string }, leadProvider: string, now: number): Next {
+  const key = node.dispatch_key!;
+  const params = node.planned_params!;
+  const investigation = state.task_type === "investigation";
+  const subagent: SubagentParams = {
+    harness: picked.route.agent,
+    role: params.role,
+    working_dir: params.working_dir,
+    task: params.initial_task,
+    route: { model: picked.route.model, provider_id: picked.route.provider_id },
+    ...(params.effort ? { effort: params.effort } : {}),
+    ...(alias.model ? { model: alias.model } : {}),
+    ...(investigation ? {} : { report_path: reportPath({ id: specNode.id }, { run_id: state.run_id, goal: state.goal, worktree: state.worktree, taskType: state.task_type }, { attempt: node.attempts, dispatch_key: key }) }),
+  };
+  const note = [picked.note, SUBAGENT_NOTE].filter(Boolean).join(" ");
+  const next: Next = { kind: "dispatch", dispatch_key: key, subagent, after: AFTER_FINAL, note };
+  node.dispatch_state = "running";
+  node.dispatch_state_at = now;
+  node.started_at = now;
+  node.actual_route = {
+    agent: picked.route.agent,
+    model: alias.model ?? picked.route.model,
+    provider_id: leadProvider,
+    ...(picked.route.effort ? { effort: picked.route.effort } : {}),
+  };
+  state.status = "running";
+  state.next = next;
+  return next;
+}
+
 function reportRank(id: string): number {
   if (id === "astra-final-review") return 0;
   if (id.startsWith("verify") || id.includes("review")) return 1;
@@ -284,7 +348,7 @@ function completedKeelReports(state: GraphRunState, spec: GraphSpec): string[] {
     if (!n.report_path && !n.last_report) continue;
     if (!nodeWritesReport(spec, id, state.consult_node)) continue;
     const specNode = spec.nodes.find((x) => x.id === id);
-    if (specNode?.kind === "plugin_task" && !n.report_path) continue;
+    if ((specNode?.kind === "plugin_task" || n.task) && !n.report_path) continue;
     const path = n.report_path ?? `${root}/.keel/${id}-${n.attempts}.md`;
     items.push({ id, path, rank: reportRank(id) });
   }
@@ -312,7 +376,7 @@ function brief(state: GraphRunState, spec: GraphSpec, node: GraphNode, dispatchK
   ].filter(Boolean);
   if (revise && state.facts) delete state.facts.done_revise;
   return buildBrief(
-    { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation", plugin_task: node.kind === "plugin_task" },
+    { id: node.id, role: node.role, writes: node.writes, timebox_min: node.timebox_min, inline_report: state.task_type === "investigation", plugin_task: node.kind === "plugin_task" || Boolean(state.nodes[node.id]?.task) },
     { run_id: state.run_id, goal: state.goal, sc: state.sc, worktree: state.worktree, repo: state.gh_repo ?? state.repo, pr: state.pr, taskType: state.task_type },
     {
       attempt,
@@ -408,6 +472,7 @@ async function planOrca(
       return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
     }
   }
+  const sub = node.attempts === 0 ? subagentModel(state, specNode, picked.route, manual) : undefined;
   node.attempts += 1;
   const key = dispatchKey(state.run_id, specNode.id, node.attempts);
   const label = await workerLabel(specNode.id, key);
@@ -433,10 +498,20 @@ async function planOrca(
   node.planned_params = params;
   recordWriterFamily(state, specNode, picked.route.model);
   if (start_sha) node.start_sha = start_sha;
-  node.worker_label = label;
   node.expected_recover_action = undefined;
-  node.team_id = state.team?.team_id;
   node.writer_stopped = false;
+  if (sub) {
+    params.channel = "subagent";
+    node.planned_params = params;
+    node.team_id = undefined;
+    node.worker_label = undefined;
+    node.worker_id = undefined;
+    let leadProvider = picked.route.provider_id;
+    try { leadProvider = findProfile(manual, state.profile_id).lead.provider_id; } catch { /* keep route provider */ }
+    return subagentDispatch(state, specNode, node, picked, sub, leadProvider, now);
+  }
+  node.worker_label = label;
+  node.team_id = state.team?.team_id;
   const create_worker: CreateWorkerParams = {
     label: params.label,
     role: params.role,
@@ -795,7 +870,10 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     return;
   }
   const specNode = nodeById(spec, id, state.consult_node);
-  if (specNode.kind === "plugin_task") {
+  if (isSubagentChannel(node)) {
+    throw new KeelError("REPORT_INVALID", "subagent 派工不报 accepted：交回报告后直接 keel_report phase=final；不要伪造 worker 回执");
+  }
+  if (specNode.kind === "plugin_task" || node.task) {
     const task = node.task;
     if (!task) throw new KeelError("REPORT_INVALID", "plugin_task 缺少 task 记录");
     if (task.phase === "create") {
@@ -1090,6 +1168,10 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   node.report_path = event.report_path;
   if (event.report) node.last_report = { ...event.report, fresh: true };
   if (event.verdict) state.verdict = event.verdict;
+  if (isSubagentChannel(node) && state.next?.kind === "decide" && state.next.gate_id === `human:${id}`) {
+    state.next = undefined;
+    state.status = "running";
+  }
   const status = event.inline_report?.status ?? event.report?.status ?? "done";
   const files = event.report?.files_changed ?? [];
   if (!state.facts) state.facts = {};
@@ -1280,6 +1362,10 @@ function applyTimeouts(state: GraphRunState, spec: GraphSpec, now: number, event
       const start = node.started_at ?? since;
       if (now - start >= box) {
         node.error_mode = "too_long";
+        if (isSubagentChannel(node)) {
+          nextDecide(state, `human:${id}`, "subagent 超过 timebox 仍未交回报告：先停掉它，再选 retry 重派或 stop", ["retry", "stop"], true);
+          return;
+        }
         nextRecover(state, node, node.dispatch_key, "diagnose", "worker_status", { worker_id: node.worker_id }, now);
         return;
       }
@@ -1334,7 +1420,7 @@ async function enter(
   const id = state.cursor;
   if (id === ASTRA_CONSULT_ID) {
     state.consult_node = ASTRA_CONSULT_NODE;
-    if (!state.team?.ready) return nextSetup(state);
+    if (!state.team?.ready && !subagentEligible(state, ASTRA_CONSULT_NODE, opts.manual, opts.models, opts.preferFallback === true)) return nextSetup(state);
     return planOrca(state, spec, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
   const specNode = nodeById(spec, id, state.consult_node);
@@ -1440,7 +1526,7 @@ async function enter(
   }
 
   if (specNode.kind === "dispatch") {
-    if (!state.team?.ready) return nextSetup(state);
+    if (!state.team?.ready && !subagentEligible(state, specNode, opts.manual, opts.models, opts.preferFallback === true)) return nextSetup(state);
     return planOrca(state, spec, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
 
@@ -1493,7 +1579,7 @@ async function computeNext(
   if (active && active.node.team_id && state.team?.team_id && active.node.team_id !== state.team.team_id && !active.node.writer_stopped) {
     return nextDecide(state, "human:team", "主控或团队已变，旧写入者状态未知，不能重派", ["stop"], true);
   }
-  if (active && !state.team?.ready && active.node.planned_params) return nextSetup(state);
+  if (active && !state.team?.ready && active.node.planned_params && !isSubagentChannel(active.node)) return nextSetup(state);
   if (active) {
     const { node } = active;
     if (node.task && node.dispatch_state === "planned") {
@@ -1524,7 +1610,7 @@ async function computeNext(
         state.next = next;
         return next;
       }
-      if (node.planned_params) {
+      if (node.planned_params && !isSubagentChannel(node)) {
         const p = node.planned_params;
         const next: Next = {
           kind: "dispatch",
@@ -1545,7 +1631,18 @@ async function computeNext(
         return next;
       }
     }
-    if (node.dispatch_state === "accepted" || node.dispatch_state === "running") return nextWait(state);
+    if (node.dispatch_state === "accepted" || node.dispatch_state === "running") {
+      if (isSubagentChannel(node) && node.dispatch_state === "running") {
+        const next: Next = {
+          kind: "wait",
+          call: { tool: "keel_wait", args: { run_id: state.run_id, max_minutes: 15 } },
+          note: `subagent 在途（${node.dispatch_key}）：交回后 keel_report phase=final；不要重派、不要报 accepted`,
+        };
+        state.next = next;
+        return next;
+      }
+      return nextWait(state);
+    }
   }
 
   return enter(state, spec, opts, now);

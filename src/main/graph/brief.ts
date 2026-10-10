@@ -39,7 +39,7 @@ function isInvestigation(node: BriefNode, run: BriefRun): boolean {
   return node.inline_report === true || run.taskType === "investigation";
 }
 
-function reportPath(node: BriefNode, run: BriefRun, ctx: BriefCtx): string {
+export function reportPath(node: BriefNode, run: BriefRun, ctx: BriefCtx): string {
   return `${run.worktree ?? "<worktree>"}/.keel/${node.id}-${ctx.attempt}.md`;
 }
 

@@ -28,6 +28,21 @@ export interface CreateWorkerParams {
   initial_task: string;
 }
 
+export interface SubagentParams {
+  /** claude-code → Agent tool; codex → its own sub-agent. */
+  harness: Harness;
+  /** claude-code: haiku | sonnet | opus (pass explicitly). codex: omitted, inherits the lead model. */
+  model?: string;
+  effort?: string;
+  role: KeelRole;
+  working_dir?: string;
+  task: string;
+  /** Where the subagent writes its NodeReport; absent = investigation inline report. */
+  report_path?: string;
+  /** Original route id; the native tool actually runs the lead's alias / lead model. */
+  route: { model: string; provider_id: string };
+}
+
 export interface PlannedParams extends CreateWorkerParams {
   writes: boolean;
   manual_revision?: string;
@@ -38,6 +53,8 @@ export interface PlannedParams extends CreateWorkerParams {
   scopeAllow?: readonly string[];
   /** Worktree HEAD at plan time. Frozen for the attempt; final scope uses it as git/changed-files base. */
   start_sha?: string;
+  /** Absent = Orca worker. */
+  channel?: "subagent";
 }
 
 export interface NodeReportSnap {
@@ -172,6 +189,7 @@ export type Next =
       kind: "dispatch";
       dispatch_key: string;
       create_worker?: CreateWorkerParams;
+      subagent?: SubagentParams;
       plugin_task?: {
         phase: "create" | "send";
         request_key: string;

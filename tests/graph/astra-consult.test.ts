@@ -45,7 +45,9 @@ describe("Astra direction-gate consult", () => {
     expect(first.astra_calls).toBe(1);
     expect(first.budget.astra_left).toBe(3);
     expect(first.next?.kind).toBe("dispatch");
-    if (first.next?.kind === "dispatch") expect(first.next.create_worker?.role).toBe("keel-architect");
+    if (first.next?.kind === "dispatch") {
+      expect(first.next.subagent?.role ?? first.next.create_worker?.role).toBe("keel-architect");
+    }
 
     const h2 = fakeHost({ fetch: typesafeAnswering(0.9), node: nodeOk });
     await createRun(h2, {
@@ -79,7 +81,7 @@ describe("Astra direction-gate consult", () => {
     });
     expect(r.ok).toBe(true);
     // investigation with explicit playbook starts; no G-route decide.
-    expect(r.result.next.kind).not.toBe("dispatch");
+    expect(r.result.next.kind).not.toBe("decide");
     const st = JSON.parse(h.files.get(graphStatePath(r.result.run_id))!) as GraphRunState;
     expect(st.task_type).toBe("investigation");
   });
@@ -140,7 +142,8 @@ async function dispatchNode(entry: string, manual: ModelManual, models: readonly
     now: h.now(),
   });
   const opts = { spec, config: cfg(manual), models };
-  await advance(h, "run-dir", { type: "tick" }, opts);
+  const first = await advance(h, "run-dir", { type: "tick" }, opts);
+  if (first.next.kind === "dispatch") return first;
   return advance(h, "run-dir", {
     type: "report", phase: "setup",
     outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
@@ -214,9 +217,11 @@ describe("astra-final-review final_review_route dispatch", () => {
     const plan = await dispatchNode("architect-plan", DEFAULT_MANUAL, models, "grok");
     expect(plan.next.kind).toBe("dispatch");
     if (plan.next.kind === "dispatch") {
-      expect(plan.next.create_worker).toMatchObject({
-        agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh",
+      expect(plan.next.subagent).toMatchObject({
+        harness: "claude-code", model: "opus",
+        route: { model: "anthropic/claude-opus-5-5", provider_id: "xd" },
       });
+      expect(plan.next.create_worker).toBeUndefined();
     }
     const review = await dispatchNode("astra-final-review", DEFAULT_MANUAL, models, "grok");
     expect(review.next.kind).toBe("dispatch");

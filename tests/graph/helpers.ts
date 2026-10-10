@@ -1,7 +1,9 @@
+import { afterAll, beforeAll } from "vitest";
 import { advance, createRun, type AdvanceOpts } from "../../src/main/graph/interpreter.ts";
 import type { InitRunOpts } from "../../src/main/graph/state.ts";
 import { graphStatePath } from "../../src/main/store/runs.ts";
-import type { GraphSpec } from "../../src/shared/graph/spec.ts";
+import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
+import type { GraphSpec, NodeKind } from "../../src/shared/graph/spec.ts";
 import { fakeHost, type FakeHost } from "../helpers/fakeHost.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 
@@ -73,4 +75,24 @@ export function readState(h: FakeHost, runId = "run1"): GraphRunState {
 export async function setupOk(h: FakeHost, spec: GraphSpec, runId = "run1") {
   await advance(h, runId, { type: "tick" }, { spec });
   return advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "team-1" }, session_id: "sol-1" }, { spec });
+}
+
+/** Restore plugin_task research for plugin-channel regression tests. Isolated per file. */
+export function usePluginResearch(): void {
+  const prev = new Map<string, NodeKind>();
+  beforeAll(() => {
+    for (const id of ["bug-fix", "investigation"] as const) {
+      const n = PSTACK_GRAPHS[id].nodes.find((x) => x.id === "research");
+      if (!n) continue;
+      prev.set(id, n.kind);
+      n.kind = "plugin_task";
+    }
+  });
+  afterAll(() => {
+    for (const id of ["bug-fix", "investigation"] as const) {
+      const n = PSTACK_GRAPHS[id].nodes.find((x) => x.id === "research");
+      const kind = prev.get(id);
+      if (n && kind) n.kind = kind;
+    }
+  });
 }

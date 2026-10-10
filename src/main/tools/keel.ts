@@ -1036,7 +1036,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const task_id = str(receipt.task_id);
     // Without worker identity the NOT_LEAD guard and reconciliation silently stop working.
     if (!mapped.worker_id && !mapped.worker_session_id && !task_id && !str(receipt.task_run_id) && !mapped.dispatch_outcome.errorCode) {
-      throw new KeelError("INVALID_INPUT", "accepted 回执缺 worker_id / worker_session_id（或插件任务的 task_id / task_run_id）。把 create_worker 的回执原样传入。");
+      throw new KeelError("INVALID_INPUT", "accepted 回执缺 worker_id / worker_session_id（或插件任务的 task_id / task_run_id）。把 create_worker 的回执原样传入。subagent 派工不报 accepted，交回后直接 final。");
     }
     Object.assign(base, mapped);
     if (typeof args.dispatch_key === "string") base.dispatch_key = args.dispatch_key;

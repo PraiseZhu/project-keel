@@ -355,7 +355,7 @@ function bugFixGraph(): GraphSpec {
         playbook_steps: ["bug-fix#2"],
       }),
       node("research", {
-        kind: "plugin_task",
+        kind: "dispatch",
         role: "researcher",
         writes: false,
         timebox_min: 25,
@@ -659,7 +659,7 @@ function investigationGraph(): GraphSpec {
         playbook_steps: ["investigation#1", "investigation#2"],
       }),
       node("research", {
-        kind: "plugin_task",
+        kind: "dispatch",
         role: "researcher",
         writes: false,
         timebox_min: 25,

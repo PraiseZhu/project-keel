@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { collectTaskMessages, type CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
+import { usePluginResearch } from "./helpers.ts";
 
 afterEach(cleanupRepos);
 
 describe("R29-04 paged messages", () => {
+  usePluginResearch();
   it("reads every page and uses the last report, not an earlier partial", async () => {
     const calls: Record<string, unknown>[] = [];
     const api: CindyTasksApi = {

@@ -92,8 +92,8 @@ describe("R30-01 reconcile-only write attempts still register author families", 
     const explore = out.next.dispatch_key; await accepted(explore); out = await final(explore);
     if (out.next.kind !== "dispatch") throw new Error("research create");
     const research = out.next.dispatch_key;
-    out = await advance(h, "run-author", { type: "report", phase: "accepted", dispatch_key: research, task_id: "task", revision: 1 }, opts);
-    out = await advance(h, "run-author", { type: "report", phase: "accepted", dispatch_key: research, task_run_id: "input" }, opts);
+    await accepted(research);
+    out = await final(research);
     (manual.profiles[0]!.nodes.default as { worker: unknown }).worker = { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } };
     out = await final(research);
     if (out.state.cursor === "architect-plan") {

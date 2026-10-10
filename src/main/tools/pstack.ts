@@ -51,12 +51,18 @@ export function explicitFanout(task: string): { interrogate: boolean; arena: boo
   };
 }
 
+const LEADS = new Set(["codex", "claude-code", "pi"]);
+
 export async function pstackStart(ctx: ToolContext, args: Record<string, unknown>) {
   if (typeof args.repo_dir !== "string" || !args.repo_dir.trim()) {
     throw new KeelError("INVALID_INPUT", "迁移入口 pstack_start 需要 repo_dir。请改用 keel_run({ goal, sc, repo_dir, lead })。");
   }
+  const lead = typeof args.lead === "string" ? args.lead : undefined;
+  if (!lead || !LEADS.has(lead)) {
+    throw new KeelError("INVALID_INPUT", "迁移入口 pstack_start 需要合法 lead（codex / claude-code / pi）。请改用 keel_run({ goal, sc, repo_dir, lead })。");
+  }
   const { keelRun } = await import("./keel.ts");
-  return keelRun(ctx, { ...args, goal: typeof args.goal === "string" ? args.goal : requireString(args, "task"), lead: typeof args.lead === "string" ? args.lead : "codex" });
+  return keelRun(ctx, { ...args, goal: typeof args.goal === "string" ? args.goal : requireString(args, "task"), lead });
 }
 
 /** pstack_decide tool: op "decide" (default) asks Jev; "log" / "read" are the former pstack_ledger. */

@@ -25,7 +25,7 @@ describe("R33D-01 pstack_start can pass scope", () => {
       },
     });
     const r: any = await runTool(makeContext(h, "c1", profile), "pstack_start", {
-      task: "修复报错", repo_dir: "/repo", playbook: "bug-fix", scope: ["src/**"],
+      task: "修复报错", repo_dir: "/repo", playbook: "bug-fix", scope: ["src/**"], lead: "codex",
     });
     expect(r.ok).toBe(true);
     expect(r.result.next.kind).toBe("setup");

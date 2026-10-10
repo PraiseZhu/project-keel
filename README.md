@@ -26,7 +26,8 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 | 场景 | 工具 | 说明 |
 | --- | --- | --- |
 | 日常问 Jev | `jev` | 选项选择、评分、是非概率；只联网，不碰仓库 |
-| 开始一次工作流 | `pstack_start` | 选 playbook 和深度，返回 run_id、手册路径与步骤 |
+| 开一次图运行 | `keel_run` | 聊清需求后调用，必须带 `lead`（codex / claude-code / pi） |
+| 开始一次 pstack 任务 | `pstack_start` | 迁移入口：必须带 `lead`；`task` 映射为 `goal` |
 | 工作流中的判断点 | `pstack_decide` | 按阈值返回 act / reask / minimal / stop，并写台账 |
 | 留痕与回看 | `pstack_decide`（op=log / read） | 读写运行台账（插件私有数据目录） |
 | 看 PR | `pr_status`（board:true 出看板）、`pr_wait` | 只读；用本机 `gh` / `git` |

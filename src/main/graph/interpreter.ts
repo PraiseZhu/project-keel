@@ -156,8 +156,8 @@ const AFTER_SETUP = "keel_report phase=setup";
 const AFTER_RECONCILE = "keel_report phase=reconcile";
 const AFTER_RECOVER = "keel_report phase=recover";
 const CLAUDE_ALIAS = /(?:^|\/)claude-(haiku|sonnet|opus)(?:-|$)/;
-/** Direction consult and final review stay on Orca even though they are read-only. */
-const NO_SUBAGENT = new Set([ASTRA_CONSULT_ID, "astra-final-review"]);
+/** Direction consult, final review, and adversarial interrogate stay on Orca even though they are read-only. */
+const NO_SUBAGENT = new Set([ASTRA_CONSULT_ID, "astra-final-review", "interrogate", "interrogate-architect"]);
 const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用能写文件的 general-purpose，model 显式传 subagent.model，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的该别名。";
 
 export function classifyRetry(errorMode: ErrorMode | undefined, consecutiveFailures: number): { decision: RetryDecision; note: string } {

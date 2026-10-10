@@ -146,6 +146,41 @@ describe("SC-1 subagent vs orca dispatch", () => {
     expect(verify.subagent).toBeUndefined();
   });
 
+  it("interrogate-architect stays on create_worker under the same claude-code profile", async () => {
+    const spec = PSTACK_GRAPHS.feature;
+    const manual = claudeXdManual();
+    const h = fakeHost({
+      kv: { manual },
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: HEAD } };
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
+        return { ok: false, message: method };
+      },
+    });
+    const runId = "run-ia";
+    await createRun(h, {
+      run_id: runId,
+      spec_id: spec.id,
+      profile_id: "grok",
+      lead_harness: "claude-code",
+      task_type: "feature",
+      entry: "interrogate-architect",
+      goal: "新增支付功能",
+      worktree: "/repo/.worktrees/keel-run-ia",
+      facts: { design_contested: true },
+      astra_budget: 4,
+      now: h.now(),
+    });
+    const opts = { spec, config: cfg(manual) };
+    const first = await advance(h, runId, { type: "tick" }, opts);
+    expect(first.next.kind).toBe("setup");
+    const d = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts)).next);
+    expect(d.dispatch_key).toContain(":interrogate-architect:");
+    expect(d.create_worker?.role).toBe("keel-architect");
+    expect(d.create_worker?.agent).toBe("claude-code");
+    expect(d.subagent).toBeUndefined();
+  });
+
   it("codex lead with explorer equal to lead model returns subagent without model", async () => {
     const manual = cloneManual(DEFAULT_MANUAL);
     const sol = manual.profiles.find((p) => p.id === "sol")!;

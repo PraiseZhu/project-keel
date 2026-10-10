@@ -4,9 +4,11 @@ import { runTool } from "../../src/main/dispatch.ts";
 import { asNudgeRun } from "../../src/main/host-bridge.ts";
 import { advance, createRun, type AdvanceOpts } from "../../src/main/graph/interpreter.ts";
 import { shouldNudge } from "../../src/main/graph/nudge.ts";
-import { ACCEPTED_TIMEOUT_MS, PLANNED_TIMEOUT_MS, type Next } from "../../src/main/graph/state.ts";
+import { ACCEPTED_TIMEOUT_MS, PLANNED_TIMEOUT_MS, type GraphRunState, type Next } from "../../src/main/graph/state.ts";
 import { cloneManual, DEFAULT_MANUAL, type ModelManual, type Route } from "../../src/shared/manual/schema.ts";
+import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import type { GraphSpec } from "../../src/shared/graph/spec.ts";
+import { graphStatePath } from "../../src/main/store/runs.ts";
 import {
   cleanupRepos,
   leadLoop,
@@ -211,6 +213,139 @@ describe("SC-2 subagent in-flight and retry", () => {
     expect(waited.ok).toBe(true);
     expect(waited.result.next.kind).toBe("wait");
     expect(JSON.stringify(waited.result)).not.toMatch(/reconcile|list_workers/);
+  });
+});
+
+describe("R43-01 subagent timeout retry must not inherit started_at", () => {
+  it("queued Orca attempt after subagent timeout starts its own timebox", async () => {
+    const { h, opts, runId } = await bootExplore({ run_id: "r-timeout-queue", manual: claudeXdManual() });
+    const t0 = h.now();
+    asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
+    h.clock.t += 20 * 60 * 1000;
+    const timed = await advance(h, runId, { type: "tick" }, opts);
+    expect(timed.next.kind).toBe("decide");
+    const afterRetry: any = await runTool(makeContext(h, "c-r43-01", { lanes: [], routingPath: null, boardRepos: [], plansDir: null }), "keel_gate", {
+      run_id: runId, gate_id: "human:explore", answer: "retry",
+    });
+    expect(afterRetry.ok, afterRetry.message).toBe(true);
+    const attempt2 = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts)).next);
+    expect(attempt2.dispatch_key).toBe("r-timeout-queue:explore:2");
+    expect(attempt2.create_worker).toBeTruthy();
+    await advance(h, runId, {
+      type: "report",
+      phase: "accepted",
+      dispatch_key: attempt2.dispatch_key,
+      worker_id: "w2",
+      worker_session_id: "s2",
+      queued_message_id: "q2",
+      dispatch_outcome: { created: true, delivered: false, queued: true },
+    }, opts);
+    h.clock.t += ACCEPTED_TIMEOUT_MS;
+    const rec = await advance(h, runId, { type: "tick" }, opts);
+    expect(rec.next.kind).toBe("reconcile");
+    const label = rec.state.nodes.explore.worker_label!;
+    const runningAt = h.now();
+    const recDone = await advance(h, runId, {
+      type: "report",
+      phase: "reconcile",
+      dispatch_key: attempt2.dispatch_key,
+      queries_result: {
+        list_workers: {
+          ok: true,
+          complete: true,
+          team_id: "t1",
+          workers: [{ label, worker_id: "w2", worker_session_id: "s2", status: "running" }],
+        },
+        get_worker_queue_status: { ok: true, pending: [], consuming: true },
+      },
+    }, opts);
+    expect(recDone.next.kind, `unexpected ${recDone.next.kind}`).toBe("wait");
+    expect(recDone.state.nodes.explore.dispatch_state).toBe("running");
+    expect(recDone.state.nodes.explore.started_at).toBe(runningAt);
+    expect(recDone.state.nodes.explore.started_at).not.toBe(t0);
+    expect(recDone.next.kind).not.toBe("recover");
+  });
+});
+
+describe("R43-02 leftover plugin_task must not hijack a new Orca research attempt", () => {
+  it("stay after completed plugin research clears task before create_worker", async () => {
+    const spec = structuredClone(PSTACK_GRAPHS["bug-fix"]);
+    const researchNode = spec.nodes.find((n) => n.id === "research");
+    if (!researchNode) throw new Error("research");
+    researchNode.kind = "plugin_task";
+    const h = fakeHost({
+      kv: { manual: DEFAULT_MANUAL },
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: HEAD } };
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
+        return { ok: false, message: method };
+      },
+    });
+    const runId = "r-legacy-research-loop";
+    await createRun(h, {
+      run_id: runId,
+      spec_id: "bug-fix",
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "bug-fix",
+      entry: "research",
+      goal: "fix the bug",
+      worktree: "/repo/.worktrees/keel-run-sa",
+      scopeAllow: ["src/**"],
+      now: h.now(),
+    });
+    const opts: AdvanceOpts = {
+      spec,
+      config: cfg(DEFAULT_MANUAL),
+      gates: { advance: () => "stay" },
+    };
+    const create = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
+    expect(create.plugin_task?.phase).toBe("create");
+    const send = asDispatch((await advance(h, runId, {
+      type: "report", phase: "accepted", dispatch_key: create.dispatch_key, task_id: "old-task", revision: 1,
+    }, opts)).next);
+    expect(send.plugin_task?.phase).toBe("send");
+    await advance(h, runId, {
+      type: "report", phase: "accepted", dispatch_key: send.dispatch_key, task_run_id: "old-task-run",
+    }, opts);
+    const afterResearch = await advance(h, runId, {
+      type: "report", phase: "final", dispatch_key: send.dispatch_key,
+      inline_report: { status: "done" }, report: { status: "done", files_changed: [], functions_touched: ["one"] },
+    }, opts);
+    expect(afterResearch.state.cursor).toBe("explore");
+    researchNode.kind = "dispatch";
+    expect(afterResearch.next.kind).toBe("setup");
+    const explore = asDispatch((await advance(h, runId, {
+      type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1",
+    }, opts)).next);
+    expect(explore.create_worker).toBeTruthy();
+    await advance(h, runId, {
+      type: "report", phase: "accepted", dispatch_key: explore.dispatch_key,
+      worker_id: "we", worker_session_id: "se", dispatch_outcome: { created: true, delivered: true, queued: false },
+    }, opts);
+    const afterExplore = await advance(h, runId, {
+      type: "report", phase: "final", dispatch_key: explore.dispatch_key,
+      inline_report: { status: "done" }, report: { status: "done", files_changed: [], functions_touched: ["one"] },
+    }, opts);
+    const research2 = asDispatch(afterExplore.next);
+    expect(research2.dispatch_key).toBe(`${runId}:research:2`);
+    expect(research2.create_worker).toBeTruthy();
+    expect(research2.plugin_task).toBeUndefined();
+    expect(research2.create_worker?.initial_task).not.toMatch(/不要写 \.keel/);
+    const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
+    expect(st.nodes.research?.task).toBeUndefined();
+    const acc2 = await advance(h, runId, {
+      type: "report",
+      phase: "accepted",
+      dispatch_key: research2.dispatch_key,
+      worker_id: "w-research-2",
+      worker_session_id: "s-research-2",
+      dispatch_outcome: { created: true, delivered: true, queued: false },
+    }, opts);
+    expect(acc2.next.kind, `hijacked: ${JSON.stringify(acc2.next)}`).toBe("wait");
+    expect(JSON.stringify(acc2.next)).not.toMatch(/getRun|old-task-run|old-task/);
+    expect(acc2.state.nodes.research?.dispatch_state).toBe("running");
+    expect(acc2.state.nodes.research?.worker_id).toBe("w-research-2");
   });
 });
 

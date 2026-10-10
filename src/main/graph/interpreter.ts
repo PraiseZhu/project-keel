@@ -472,6 +472,9 @@ async function planOrca(
       return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
     }
   }
+  node.task = undefined;
+  node.started_at = undefined;
+  node.error_mode = undefined;
   const sub = node.attempts === 0 ? subagentModel(state, specNode, picked.route, manual) : undefined;
   node.attempts += 1;
   const key = dispatchKey(state.run_id, specNode.id, node.attempts);
@@ -1291,6 +1294,8 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
         node.dispatch_state = undefined;
         node.dispatch_key = undefined;
         node.task = undefined;
+        node.started_at = undefined;
+        node.error_mode = undefined;
         node.expected_recover_action = undefined;
         state.cursor = nodeId;
       }

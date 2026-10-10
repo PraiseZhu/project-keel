@@ -270,5 +270,7 @@ describe("settings.html structure", () => {
     expect(html).not.toContain("roles-refresh");
     expect(html).not.toContain("id=\"roles\"");
     expect(html).not.toContain("5×6");
+    expect(html).toContain("方案管理 · 导入导出 ›");
+    expect(html).not.toContain("模型档次表");
   });
 });

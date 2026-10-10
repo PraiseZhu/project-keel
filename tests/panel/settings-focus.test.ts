@@ -362,6 +362,8 @@ async function boot(opts: { holdAfter?: number } = {}) {
     Blob,
     Promise,
     queueMicrotask,
+    TextEncoder,
+    TextDecoder,
   };
   const ctx = createContext(sandbox);
   runInContext(await bundleSettings(), ctx);
@@ -369,13 +371,15 @@ async function boot(opts: { holdAfter?: number } = {}) {
   return {
     doc,
     models,
+    kv,
     catalogCalls: () => catalogCalls,
     release() {
       const payload = jsonResponse(200, { ok: true, models });
       for (const r of held.splice(0)) r(payload);
     },
-    select(row: string, act: string) {
-      return doc.querySelector(`[data-row="${row}"][data-act="${act}"]`);
+    select(row: string, act: string, i?: number) {
+      const iSel = i === undefined ? "" : `[data-i="${i}"]`;
+      return doc.querySelector(`[data-row="${row}"][data-act="${act}"]${iSel}`);
     },
   };
 }
@@ -462,8 +466,163 @@ describe("settings catalog focus restore", () => {
     const keep = savePage.select("lead", "model")!;
     savePage.doc.querySelector("[data-act=\"save\"]")!.click();
     await flush();
+    expect(keep.isConnected).toBe(true);
     savePage.release();
     await flush();
-    expect(keep.isConnected).toBe(true);
+    expect(savePage.select("lead", "model")!.isConnected).toBe(true);
+  });
+});
+
+describe("inline fallback panel", () => {
+  it("toggles the worker row and hides chips on lead/direction/final-review", async () => {
+    const page = await boot();
+    const chip = page.select("worker", "toggle-fb")!;
+    expect(chip).toBeTruthy();
+    chip.click();
+    const row = chip.closest(".row")!;
+    expect(row.classList.contains("open")).toBe(true);
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+    chip.click();
+    expect(row.classList.contains("open")).toBe(false);
+    expect(chip.getAttribute("aria-expanded")).toBe("false");
+    expect(page.select("lead", "toggle-fb")).toBeNull();
+    expect(page.select("direction", "toggle-fb")).toBeNull();
+    expect(page.select("final-review", "toggle-fb")).toBeNull();
+  });
+
+  it("keeps an expanded worker panel open after another row redraws", async () => {
+    const page = await boot();
+    page.select("worker", "toggle-fb")!.click();
+    expect(page.select("worker", "toggle-fb")!.closest(".row")!.classList.contains("open")).toBe(true);
+    const explorer = page.select("explorer", "model")!;
+    explorer.value = "openai/gpt-6-luna\txd";
+    explorer.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+    await flush();
+    expect(page.select("worker", "toggle-fb")!.closest(".row")!.classList.contains("open")).toBe(true);
+  });
+
+  it("does not destroy an open fallback select when a late catalog arrives", async () => {
+    const page = await boot({ holdAfter: 1 });
+    page.select("worker", "toggle-fb")!.click();
+    const live = page.select("worker", "fb-model", 0)!;
+    live.focus();
+    expect(page.doc.activeElement).toBe(live);
+    page.release();
+    await flush();
+    expect(live.isConnected).toBe(true);
+    expect(page.doc.activeElement).toBe(live);
+    expect(page.select("worker", "toggle-fb")!.closest(".row")!.classList.contains("open")).toBe(true);
+  });
+
+  it("keeps focus on the same fallback control when a late catalog response redraws after change", async () => {
+    for (const act of ["fb-agent", "fb-model", "fb-effort"] as const) {
+      const page = await boot({ holdAfter: 1 });
+      page.select("worker", "toggle-fb")!.click();
+      const before = page.select("worker", act, 0)!;
+      expect(before).toBeTruthy();
+      before.focus();
+      expect(page.doc.activeElement).toBe(before);
+      const nextValue = act === "fb-agent"
+        ? "claude-code"
+        : act === "fb-model"
+          ? "grok-4.6\tart-cindy"
+          : "medium";
+      before.value = nextValue;
+      before.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+      await flush();
+      const restored = page.select("worker", act, 0)!;
+      expect(page.doc.activeElement).toBe(restored);
+      expect(restored.value).toBe(nextValue);
+      const callsAfterChange = page.catalogCalls();
+      page.release();
+      await flush();
+      expect(before.isConnected).toBe(false);
+      const after = page.select("worker", act, 0)!;
+      expect(after.isConnected).toBe(true);
+      expect(page.doc.activeElement).toBe(after);
+      expect(after.getAttribute("data-row")).toBe("worker");
+      expect(after.getAttribute("data-act")).toBe(act);
+      expect(after.getAttribute("data-i")).toBe("0");
+      expect(after.value).toBe(nextValue);
+      expect(page.catalogCalls()).toBe(callsAfterChange);
+    }
+  });
+
+  it("adds a second fallback then deletes it", async () => {
+    const page = await boot();
+    page.select("verifier", "toggle-fb")!.click();
+    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="verifier"]')).toHaveLength(1);
+    const add = page.select("verifier", "add-fb")!;
+    expect(add.disabled).toBe(false);
+    add.click();
+    await flush();
+    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="verifier"]')).toHaveLength(2);
+    expect(page.select("verifier", "add-fb")!.disabled).toBe(true);
+    page.select("verifier", "del-fb", 1)!.click();
+    await flush();
+    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="verifier"]')).toHaveLength(1);
+    expect(page.select("verifier", "add-fb")!.disabled).toBe(false);
+  });
+
+  it("saves an edited worker fallback into the default slot", async () => {
+    const page = await boot();
+    page.select("worker", "toggle-fb")!.click();
+    const model = page.select("worker", "fb-model", 0)!;
+    model.value = "grok-4.6\tart-cindy";
+    model.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+    await flush();
+    page.doc.querySelector('[data-act="save"]')!.click();
+    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
+    expect(page.doc.getElementById("manual-status")?.textContent).toBe("已保存");
+    const manual = page.kv.manual as { profiles: Array<{ id: string; nodes: { default?: { worker?: { fallbacks?: Array<{ model: string; provider_id: string }> } } } }> };
+    const sol = manual.profiles.find((p) => p.id === "sol")!;
+    expect(sol.nodes.default?.worker?.fallbacks?.[0]).toMatchObject({ model: "grok-4.6", provider_id: "art-cindy" });
+  });
+
+  it("writes task-type fallbacks without changing the default slot", async () => {
+    const page = await boot();
+    page.doc.querySelector('[data-scope="task"]')!.click();
+    await flush();
+    page.select("worker", "own")!.click();
+    await flush();
+    page.select("worker", "add-fb")!.click();
+    await flush();
+    const added = page.select("worker", "fb-model", 1)!;
+    added.value = "grok-4.6\tart-cindy";
+    added.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+    await flush();
+    page.doc.querySelector('[data-act="save"]')!.click();
+    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
+    expect(page.doc.getElementById("manual-status")?.textContent).toBe("已保存");
+    const manual = page.kv.manual as {
+      profiles: Array<{
+        id: string;
+        nodes: {
+          default?: { worker?: { fallbacks?: unknown[] } };
+          "bug-fix"?: { worker?: { fallbacks?: unknown[] } };
+        };
+      }>;
+    };
+    const sol = manual.profiles.find((p) => p.id === "sol")!;
+    expect(sol.nodes["bug-fix"]?.worker?.fallbacks).toHaveLength(2);
+    expect(sol.nodes.default?.worker?.fallbacks).toHaveLength(1);
+  });
+
+  it("keeps advanced limited to profiles and import/export", async () => {
+    const page = await boot();
+    const adv = page.doc.getElementById("advanced-body")!;
+    expect(adv.querySelector("[data-act=\"fb-agent\"]")).toBeNull();
+    expect(adv.querySelector("[data-act=\"fb-model\"]")).toBeNull();
+    expect(adv.querySelector("[data-act=\"fb-effort\"]")).toBeNull();
+    expect(adv.querySelector("[data-act=\"add-fb\"]")).toBeNull();
+    expect(adv.querySelector("[data-act=\"del-fb\"]")).toBeNull();
+    expect(adv.textContent).not.toContain("档次表");
+    expect(adv.textContent).toContain("平时不用动");
+    expect(adv.textContent).toContain("主控环境");
+    expect(adv.querySelector("[data-act=\"export\"]")).toBeTruthy();
+    expect(adv.querySelector("[data-act=\"import\"]")).toBeTruthy();
+    expect(adv.querySelector("[data-act=\"add\"]")).toBeTruthy();
+    expect(adv.querySelector("[data-act=\"copy\"]")).toBeTruthy();
+    expect(adv.querySelector("[data-act=\"delete\"]")).toBeTruthy();
   });
 });

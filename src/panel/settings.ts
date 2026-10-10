@@ -28,8 +28,9 @@ import {
   acceptCatalogResponse,
   buildSettingsView,
   catalogArrivalAction,
+  CATALOG_SELECT_ACTS,
+  editableSlot,
   escapeHtml as esc,
-  groupModelOptions,
   renderInheritOptionHtml,
   renderProfileButtonHtml,
   renderRowHtml,
@@ -42,7 +43,7 @@ import {
   type SettingsHarness,
   type SettingsRowId,
 } from "./settings-model.ts";
-import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
+import { cloneManual, DEFAULT_MANUAL, HARNESSES, MAX_FALLBACKS, ROLES, type Harness, type ModelManual, type Role, type Route, type Slot, type TaskType } from "../shared/manual/schema.ts";
 import { clockTone, renderClockStatus, stopHookTone, type StopHookInstall } from "./hooks-status.ts";
 import { readReplyMode, REPLY_MODE_LABELS, saveReplyMode, type ReplyMode } from "./reply-setting.ts";
 import { parseKvResponse } from "../shared/kv-response.ts";
@@ -83,6 +84,7 @@ let catalogInflight: Promise<CatalogState> | undefined;
 let catalogInteracting = false;
 let catalogProgrammaticFocus = false;
 let pendingCatalog: CatalogState | undefined;
+const expandedFallbackRows = new Set<SettingsRowId>();
 
 const input = document.querySelector<HTMLInputElement>("#key");
 const statusEl = document.querySelector<HTMLElement>("#status");
@@ -220,43 +222,21 @@ function renderAdvanced(view: ReturnType<typeof currentView>): void {
   const selected = draft.profiles.find((p) => p.id === view.profileId);
   const inheritOpts = draft.profiles.filter((p) => p.id !== view.profileId).map((p) => renderInheritOptionHtml(p, selected?.inherit)).join("");
   const profileBtns = items.map((p) => renderProfileButtonHtml(p)).join("");
-  let fallbacks = "";
-  if (selected) {
-    const col = selected.nodes[taskType === "default" ? "default" : taskType] ?? selected.nodes.default;
-    const roles: Role[] = ["explorer", "researcher", "worker", "verifier", "architect"];
-    fallbacks = roles.map((role) => {
-      const slot = col?.[role];
-      const fbs = slot?.fallbacks ?? [];
-      const groups = slot ? groupModelOptions(catalog.models, slot.primary.agent) : [];
-      const fbHtml = fbs.map((f, i) => {
-        const g = groupModelOptions(catalog.models, f.agent);
-        const modelOpts = g.map((x) => `<optgroup label="${esc(x.label)}">${x.options.map((o) => `<option value="${esc(o.value)}"${o.value === `${f.model}\t${f.provider_id}` ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</optgroup>`).join("");
-        const efforts = (catalog.models.find((m) => m.agent === f.agent && m.id === f.model && m.providerId === f.provider_id)?.efforts ?? []).map((e) => `<option${e === f.effort ? " selected" : ""}>${esc(e)}</option>`).join("");
-        return `<div class="adv-row">备${i + 1}
-          <select data-act="fb-agent" data-role="${role}" data-i="${i}">${HARNESSES.map((h) => `<option value="${h}"${f.agent === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("")}</select>
-          <select data-act="fb-model" data-role="${role}" data-i="${i}">${modelOpts}</select>
-          <select data-act="fb-effort" data-role="${role}" data-i="${i}">${efforts}</select>
-          <button type="button" data-act="del-fb" data-role="${role}" data-i="${i}">删备</button></div>`;
-      }).join("");
-      return `<p>${role}${groups.length ? "" : ""}</p>${fbHtml}${slot && fbs.length < MAX_FALLBACKS ? `<button type="button" data-act="add-fb" data-role="${role}">加备路线</button>` : ""}`;
-    }).join("");
-  }
-  advancedBody.innerHTML = `<p class="hint">档次表只用于方向裁决分组（比主控强 / 持平 / 未分级），不能在这里增删模型。</p>
+  advancedBody.innerHTML = `<p class="hint">平时不用动。这里切换、新增或复制整套方案，或把设置导出备份。</p>
     <div class="adv-row">${profileBtns}
       <button type="button" data-act="add">新增</button>
       <button type="button" data-act="copy">复制</button>
       <button type="button" data-act="delete">删除</button></div>
     ${selected ? `<div class="adv-row">名称 <input type="text" data-act="rename" value="${esc(selected.name)}">
-      harness <select data-act="adv-harness">${HARNESSES.map((h) => `<option value="${h}"${selected.harness === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("")}</select>
+      主控环境 <select data-act="adv-harness">${HARNESSES.map((h) => `<option value="${h}"${selected.harness === h ? " selected" : ""}>${HARNESS_LABELS[h]}</option>`).join("")}</select>
       沿用方案 <select data-act="inherit"><option value="">不沿用</option>${inheritOpts}</select>
       <label><input type="checkbox" data-act="default"${draft.defaults_by_harness[selected.harness] === selected.id ? " checked" : ""}> 设为${HARNESS_LABELS[selected.harness]}默认</label></div>` : ""}
     <div class="adv-row">
       <button type="button" data-act="export">导出 JSON</button>
-      <button type="button" data-act="import">导入 JSON</button></div>
-    ${fallbacks}`;
+      <button type="button" data-act="import">导入 JSON</button></div>`;
 }
 
-function renderManual(restore?: { act: string; row: string }): void {
+function renderManual(restore?: { act: string; row: string; i?: number }): void {
   const view = currentView();
   selectedId = view.profileId ?? selectedId;
   document.querySelectorAll<HTMLButtonElement>("#model-tabs [data-harness]").forEach((b) => {
@@ -276,7 +256,7 @@ function renderManual(restore?: { act: string; row: string }): void {
   if (hintEl) {
     hintEl.textContent = view.taskScope === "task"
       ? `只改需要和「所有任务」不同的角色。已有 ${view.overrideCount} 处覆盖。`
-      : (view.notice ?? "改完点保存，下一次派工生效。");
+      : (view.notice ?? "改完点保存，下一次派工生效。主模型和备用一起保存。");
   }
   if (catalogValue) {
     if (catalog.status === "ok") {
@@ -290,13 +270,14 @@ function renderManual(restore?: { act: string; row: string }): void {
   }
   if (rowsEl) {
     if (view.empty) rowsEl.innerHTML = `<div class="empty">${esc(view.empty)}</div>`;
-    else rowsEl.innerHTML = view.rows.map((row) => renderRowHtml(row, taskType)).join("");
+    else rowsEl.innerHTML = view.rows.map((row) => renderRowHtml(row, taskType, expandedFallbackRows.has(row.id))).join("");
   }
   renderAdvanced(view);
   if (restore && rowsEl) {
     catalogProgrammaticFocus = true;
     try {
-      const el = rowsEl.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]`);
+      const iSel = restore.i === undefined ? "" : `[data-i="${restore.i}"]`;
+      const el = rowsEl.querySelector<HTMLElement>(`[data-act="${restore.act}"][data-row="${restore.row}"]${iSel}`);
       if (el && typeof el.focus === "function" && !(el as HTMLSelectElement).disabled) el.focus();
     } finally {
       catalogProgrammaticFocus = false;
@@ -304,22 +285,21 @@ function renderManual(restore?: { act: string; row: string }): void {
   }
 }
 
-function focusedModelControl(): { act: string; row: string } | undefined {
+function focusedModelControl(): { act: string; row: string; i?: number } | undefined {
   const el = document.activeElement;
   if (!el || !rowsEl?.contains(el)) return undefined;
   if (el.tagName !== "SELECT") return undefined;
   const act = el.getAttribute("data-act");
   const row = el.getAttribute("data-row");
-  if (act !== "agent" && act !== "model" && act !== "effort") return undefined;
+  if (!act || !(CATALOG_SELECT_ACTS as readonly string[]).includes(act)) return undefined;
   if (!row || !(SETTINGS_ROW_IDS as readonly string[]).includes(row)) return undefined;
-  return { act, row };
+  const iRaw = el.getAttribute("data-i");
+  const i = iRaw === null ? undefined : Number(iRaw);
+  return i === undefined || Number.isNaN(i) ? { act, row } : { act, row, i };
 }
 
 function currentSlot(role: Role): Slot {
-  const id = selectedId ?? "";
-  return draft.profiles.find((p) => p.id === id)?.nodes[taskType]?.[role]
-    ?? draft.profiles.find((p) => p.id === id)?.nodes.default?.[role]
-    ?? materializeSlot(draft, id, taskType, role);
+  return editableSlot(draft, selectedId ?? "", taskType, role);
 }
 
 function applyRowRoute(row: SettingsRowId, next: Route): void {
@@ -483,20 +463,34 @@ function onActClick(ev: Event): void {
     const role = t.dataset.row as Role;
     draft = setSlot(draft, selectedId, taskType, role, undefined);
     renderManual();
+  } else if (act === "toggle-fb") {
+    const row = t.dataset.row as SettingsRowId | undefined;
+    if (!row || !(ROLES as readonly string[]).includes(row)) return;
+    const open = !expandedFallbackRows.has(row);
+    if (open) expandedFallbackRows.add(row);
+    else expandedFallbackRows.delete(row);
+    t.closest(".row")?.classList.toggle("open", open);
+    t.setAttribute("aria-expanded", String(open));
   } else if (act === "add-fb" && selectedId) {
-    const role = t.dataset.role as Role;
+    const row = t.dataset.row;
+    if (!row || !(ROLES as readonly string[]).includes(row)) return;
+    const role = row as Role;
     const slot = currentSlot(role);
     if ((slot.fallbacks ?? []).length >= MAX_FALLBACKS) return;
     const blank: Route = { agent: slot.primary.agent, model: "", provider_id: "" };
-    draft = setSlot(draft, selectedId, taskType === "default" ? "default" : taskType, role, { ...slot, fallbacks: [...(slot.fallbacks ?? []), blank] });
-    renderManual();
+    const next = [...(slot.fallbacks ?? []), blank];
+    draft = setSlot(draft, selectedId, taskType, role, { ...slot, fallbacks: next });
+    expandedFallbackRows.add(role);
+    renderManual({ act: "fb-model", row, i: next.length - 1 });
   } else if (act === "del-fb" && selectedId) {
-    const role = t.dataset.role as Role;
+    const row = t.dataset.row;
+    if (!row || !(ROLES as readonly string[]).includes(row)) return;
+    const role = row as Role;
     const i = Number(t.dataset.i);
     const slot = currentSlot(role);
     const fallbacks = (slot.fallbacks ?? []).filter((_, idx) => idx !== i);
-    draft = setSlot(draft, selectedId, taskType === "default" ? "default" : taskType, role, { primary: slot.primary, fallbacks: fallbacks.length ? fallbacks : undefined });
-    renderManual();
+    draft = setSlot(draft, selectedId, taskType, role, { primary: slot.primary, fallbacks: fallbacks.length ? fallbacks : undefined });
+    renderManual({ act: "add-fb", row });
   }
 }
 
@@ -547,7 +541,11 @@ function onControlChange(ev: Event): void {
     applyRowRoute(row, next);
     renderManual({ act, row });
   } else if ((act === "fb-agent" || act === "fb-model" || act === "fb-effort") && selectedId) {
-    const role = t.dataset.role as Role;
+    catalogInteracting = false;
+    takePendingCatalog();
+    const row = t.dataset.row;
+    if (!row || !(ROLES as readonly string[]).includes(row)) return;
+    const role = row as Role;
     const i = Number(t.dataset.i);
     const slot = currentSlot(role);
     const fallbacks = [...(slot.fallbacks ?? [])];
@@ -558,8 +556,8 @@ function onControlChange(ev: Event): void {
       const [id, providerId] = t.value.split("\t");
       fallbacks[i] = routeAfterModelChange(catalog.models, cur.agent, id ?? "", providerId ?? "", cur.effort);
     } else fallbacks[i] = routeAfterEffortChange(catalog.models, cur, t.value);
-    draft = setSlot(draft, selectedId, taskType === "default" ? "default" : taskType, role, { ...slot, fallbacks });
-    renderManual();
+    draft = setSlot(draft, selectedId, taskType, role, { ...slot, fallbacks });
+    renderManual({ act, row, i });
   }
 }
 

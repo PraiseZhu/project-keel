@@ -10,7 +10,7 @@ export const HOURLY_SOFT_CAP = 4000;
 
 export function isWaitCiRun(state: GraphRunState): boolean {
   if (state.status === "done" || state.status === "stopped") return false;
-  const node = state.nodes["wait-ci"];
+  const node = state.nodes?.["wait-ci"];
   if (!node) return state.cursor === "wait-ci";
   if (node.status === "succeeded" || node.status === "failed" || node.status === "skipped") return false;
   if (node.dispatch_state === "terminal") return false;

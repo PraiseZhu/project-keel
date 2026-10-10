@@ -22,15 +22,15 @@ export function graphStatePath(runId: string): string {
   return `runs/${runId}/graph-state.json`;
 }
 
-async function load(host: Host, runId: string): Promise<GraphState> {
+async function load(host: Host, runId: string): Promise<GraphState | null> {
   const path = graphStatePath(runId);
   const r = await host.fs({ op: "read", root: "data", path });
   if (!r.ok) {
     // Cindy reports a missing data file as "文件不存在:<path>" (no error code), older hosts as "not found".
-    if (!r.message || /not found|ENOENT|文件不存在/i.test(r.message)) return {};
+    if (!r.message || /not found|ENOENT|文件不存在/i.test(r.message)) return null;
     throw new KeelError("RUN_STATE_READ_FAILED", `读取 graph-state 失败：${r.message}`);
   }
-  if (!r.content) return {};
+  if (!r.content) return null;
   try {
     const parsed = JSON.parse(r.content) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -46,16 +46,19 @@ async function save(host: Host, runId: string, state: GraphState): Promise<void>
   if (!w.ok) throw new KeelError("RUN_STATE_WRITE_FAILED", `写入 graph-state 失败：${w.message ?? "未知原因"}`);
 }
 
-/**
- * Serialize the read → fn mutate → write of one run's graph-state.json.
- * Concurrent withRun calls on the same host+runId never drop updates.
- */
-export function withRun<T>(host: Host, runId: string, fn: (state: GraphState) => T | Promise<T>): Promise<T> {
+function transact<T>(
+  host: Host,
+  runId: string,
+  fn: (state: GraphState) => T | Promise<T>,
+  mustExist: boolean,
+): Promise<T | undefined> {
   graphStatePath(runId);
   const chains = chainOf(host);
   const prev = chains.get(runId) ?? Promise.resolve();
   const run = prev.then(async () => {
-    const state = await load(host, runId);
+    const loaded = await load(host, runId);
+    if (mustExist && loaded === null) return undefined;
+    const state = loaded ?? {};
     if (!state.run_id) state.run_id = runId;
     const result = await fn(state);
     await save(host, runId, state);
@@ -69,6 +72,24 @@ export function withRun<T>(host: Host, runId: string, fn: (state: GraphState) =>
     ),
   );
   return run;
+}
+
+/**
+ * Serialize the read → fn mutate → write of one run's graph-state.json.
+ * Concurrent withRun calls on the same host+runId never drop updates.
+ * Missing files are created (create-on-write).
+ */
+export function withRun<T>(host: Host, runId: string, fn: (state: GraphState) => T | Promise<T>): Promise<T> {
+  return transact(host, runId, fn, false) as Promise<T>;
+}
+
+/** Same serial chain as withRun, but a missing run skips fn, does not write, and returns undefined. */
+export function withExistingRun<T>(
+  host: Host,
+  runId: string,
+  fn: (state: GraphState) => T | Promise<T>,
+): Promise<T | undefined> {
+  return transact(host, runId, fn, true);
 }
 
 export function artifactPath(runId: string, rel: string): string {

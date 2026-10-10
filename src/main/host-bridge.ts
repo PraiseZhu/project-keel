@@ -6,7 +6,7 @@ import { loadGraphStates } from "./graph-snapshot.ts";
 import { NudgeController, drivenNudgeRuns, scanNudgeClock, type NudgeOutcome, type NudgeRun } from "./graph/nudge.ts";
 import type { Host } from "./host.ts";
 import { PSTACK_GRAPHS, type GraphTaskType } from "../shared/graph/pstack.ts";
-import { withRun } from "./store/runs.ts";
+import { withExistingRun } from "./store/runs.ts";
 
 export const NUDGE_CARD_TOOLS = new Set(["keel_run", "keel_status", "keel_wait"]);
 
@@ -43,19 +43,19 @@ export function scannableNudgeRuns(runs: readonly NudgeRun[]): NudgeRun[] {
 }
 
 export async function persistRunStatus(host: Host, runId: string, status: "paused" | "stalled"): Promise<void> {
-  await withRun(host, runId, (state) => {
+  await withExistingRun(host, runId, (state) => {
     state.status = status;
   });
 }
 
 export async function markPendingCard(host: Host, runId: string): Promise<void> {
-  await withRun(host, runId, (state) => {
+  await withExistingRun(host, runId, (state) => {
     state.nudge_pending_card = true;
   });
 }
 
 export async function rememberCardCallId(host: Host, runId: string, callId: string): Promise<void> {
-  await withRun(host, runId, (state) => {
+  await withExistingRun(host, runId, (state) => {
     const ids = Array.isArray(state.nudge_card_call_ids) ? [...(state.nudge_card_call_ids as string[])] : [];
     if (!ids.includes(callId)) ids.push(callId);
     state.nudge_card_call_ids = ids;
@@ -102,13 +102,11 @@ export async function flushNudgeCardOnToolCall(opts: {
   if (!NUDGE_CARD_TOOLS.has(opts.tool) || !opts.callId) return false;
   const runId = runIdFromToolIo(opts.args, opts.result);
   if (!runId) return false;
-  let pending = false;
-  let unseen = true;
-  await withRun(opts.host, runId, (state) => {
-    pending = state.nudge_pending_card === true;
-    unseen = !Array.isArray(state.nudge_card_call_ids) || (state.nudge_card_call_ids as unknown[]).length === 0;
-  });
-  if (!pending && !unseen) return false;
+  const seen = await withExistingRun(opts.host, runId, (s) => ({
+    pending: s.nudge_pending_card === true,
+    unseen: !Array.isArray(s.nudge_card_call_ids) || (s.nudge_card_call_ids as unknown[]).length === 0,
+  }));
+  if (!seen || (!seen.pending && !seen.unseen)) return false;
   const shown = presentNudgeCard(opts.send, renderNudgeCard(runId), opts.callId);
   if (shown) await rememberCardCallId(opts.host, runId, opts.callId);
   return shown;

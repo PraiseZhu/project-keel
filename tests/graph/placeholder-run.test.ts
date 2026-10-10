@@ -71,4 +71,38 @@ describe("nodeless placeholder must be skipped, not crash wait/status/poll", () 
     const runs = (r.result as { runs: { run_id: string }[] }).runs;
     expect(runs.some((x) => x.run_id === UNKNOWN_RUN_ID)).toBe(false);
   });
+
+  it("flush on an unknown run returns false and does not send", async () => {
+    const h = fakeHost();
+    const sent: unknown[] = [];
+    const shown = await flushNudgeCardOnToolCall({
+      host: h,
+      send: (m) => sent.push(m),
+      tool: "keel_status",
+      callId: "tc_status-unknown",
+      args: { run_id: UNKNOWN_RUN_ID },
+      result: { runs: [] },
+    });
+    expect(shown).toBe(false);
+    expect(sent).toEqual([]);
+    expect(h.files.has(graphStatePath(UNKNOWN_RUN_ID))).toBe(false);
+  });
+
+  it("isWaitCiRun/countWaitCiRuns do not throw on await_sol without nodes", () => {
+    const awaitSol = { run_id: "run-await", goal: "pick profile", status: "await_sol" } as unknown as GraphRunState;
+    expect(() => isWaitCiRun(awaitSol)).not.toThrow();
+    expect(isWaitCiRun(awaitSol)).toBe(false);
+    expect(() => countWaitCiRuns([awaitSol])).not.toThrow();
+    expect(countWaitCiRuns([awaitSol])).toBe(0);
+  });
+
+  it("keel_status still lists await_sol runs that have no nodes", async () => {
+    const h = fakeHost();
+    h.files.set(graphStatePath("run-await"), JSON.stringify({ run_id: "run-await", goal: "pick profile", status: "await_sol" }));
+    const r = await runTool(makeContext(h, "c-list-await"), "keel_status", {});
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const runs = (r.result as { runs: { run_id: string }[] }).runs;
+    expect(runs.some((x) => x.run_id === "run-await")).toBe(true);
+  });
 });

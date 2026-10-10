@@ -384,7 +384,7 @@ function commitOutOfScope(world: World): void {
 }
 
 function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): Record<string, unknown> {
-  const role = next.create_worker?.role;
+  const role = next.create_worker?.role ?? next.subagent?.role;
   const head = world.worktree ? localHead(world) : world.prHead;
   const report: Record<string, unknown> = {
     status: "done",
@@ -404,7 +404,7 @@ function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): 
 function writeKeelReport(pending: Extract<Next, { kind: "dispatch" }>, world: World): void {
   const parsed = parseDispatchKey(pending.dispatch_key);
   if (!parsed) throw new Error(`bad dispatch_key ${pending.dispatch_key}`);
-  const dir = pending.create_worker?.working_dir ?? world.worktree ?? world.repoDir;
+  const dir = pending.create_worker?.working_dir ?? pending.subagent?.working_dir ?? world.worktree ?? world.repoDir;
   mkdirSync(join(dir, ".keel"), { recursive: true });
   const body = { dispatch_key: pending.dispatch_key, ...inlineReport(pending, world) };
   writeFileSync(join(dir, ".keel", `${parsed.nodeId}-${parsed.attempt}.md`), `\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\`\n`);
@@ -469,6 +469,22 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
         throw new Error(`产品缺陷：假主控看到 plugin_task dispatch（${next.plugin_task.phase}），应在 host.tasks 内完成`);
       }
       pending = next;
+      if (next.subagent) {
+        models.push({ role: next.subagent.role, model: next.subagent.model ?? next.subagent.route.model });
+        if (next.subagent.report_path) writeKeelReport(next, world);
+        last = await call(c, "keel_report", {
+          run_id: runId,
+          phase: "final",
+          dispatch_key: next.dispatch_key,
+          ...(next.subagent.report_path ? {} : { inline_report: inlineReport(next, world) }),
+        });
+        pending = undefined;
+        if (!last.ok) {
+          return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
+        }
+        next = nextOf(last);
+        continue;
+      }
       if (next.create_worker) {
         models.push({ role: next.create_worker.role, model: next.create_worker.model });
         if (next.create_worker.role === "keel-worker" && world.outOfScopeBeforeAccepted) {
@@ -523,15 +539,19 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
         if (next.kind !== "wait") {
           pending = undefined;
         } else if ((waitRounds.get(key) ?? 0) >= WORKER_WAIT_ROUNDS) {
-          if (pending.create_worker?.role === "keel-worker") {
+          const nodeId = parseDispatchKey(pending.dispatch_key)?.nodeId;
+          const writes = nodeId ? Boolean(readGraph(host, runId).nodes[nodeId]?.planned_params?.writes) : false;
+          if (pending.create_worker?.role === "keel-worker" && writes) {
             if (world.outOfScope) writeOutOfScope(world);
             else if (!world.committedFix && !world.outOfScopeBeforeAccepted) commitFix(world);
           }
-          writeKeelReport(pending, world);
+          const investigation = readGraph(host, runId).task_type === "investigation";
+          if (!investigation) writeKeelReport(pending, world);
           last = await call(c, "keel_report", {
             run_id: runId,
             phase: "final",
             dispatch_key: pending.dispatch_key,
+            ...(investigation ? { inline_report: inlineReport(pending, world) } : {}),
           });
           pending = undefined;
           if (!last.ok) {

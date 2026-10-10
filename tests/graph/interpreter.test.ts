@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { advance } from "../../src/main/graph/interpreter.ts";
 import { KeelError } from "../../src/main/host.ts";
 import { family } from "../../src/shared/fanout.ts";
-import { boot, readState, setupOk } from "./helpers.ts";
+import { boot, readState, setupOk, usePluginResearch } from "./helpers.ts";
 
 describe("interpreter next kinds", () => {
+  usePluginResearch();
   it("emits setup then dispatch with keel-* role and deterministic label", async () => {
     const { h, spec } = await boot();
     const first = await advance(h, "run1", { type: "tick" }, { spec });

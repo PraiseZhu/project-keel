@@ -6,6 +6,7 @@ import type { GraphRunState } from "../../src/main/graph/state.ts";
 import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
+import { usePluginResearch } from "./helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
@@ -50,6 +51,7 @@ async function plantResearch(h: ReturnType<typeof fakeHost>) {
 }
 
 describe("plugin_task executes inside KEEL", () => {
+  usePluginResearch();
   it("research goes create → send internally, then final reports", async () => {
     const { api, calls } = recordingTasks();
     const h = fakeHost({

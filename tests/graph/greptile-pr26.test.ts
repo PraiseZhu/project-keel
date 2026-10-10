@@ -12,6 +12,7 @@ import {
   makeWorld,
   startRun,
 } from "../e2e/helpers.ts";
+import { usePluginResearch } from "./helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
 afterEach(cleanupRepos);
@@ -26,6 +27,7 @@ function nextOf(r: { ok: boolean; result?: unknown; errorCode?: string; message?
 }
 
 describe("Greptile PR26 threads on 93d19dc", () => {
+  usePluginResearch();
   it("1 验证基准：变更 run 不预先写 verdict.base_sha，verifier final 仍能建 verdict 并 done", async () => {
     const world = makeWorld();
     const host = makeE2eHost(world);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
+import { usePluginResearch } from "./helpers.ts";
 
 afterEach(cleanupRepos);
 
@@ -29,6 +30,7 @@ async function investigation(messages: (key: string) => unknown[]) {
 }
 
 describe("R29-R03 last assistant message only", () => {
+  usePluginResearch();
   it("UNCLOSED_FENCE_FALSE_DONE cannot be done", async () => {
     const run = await investigation((key) => [
       { role: "assistant", text: JSON.stringify(body(key, "partial")) },

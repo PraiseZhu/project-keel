@@ -113,7 +113,7 @@
     },
     {
       "name": "keel_run",
-      "description": "开一次 KEEL 图运行。主控方案顺序：profile 点名 → lead 对应 harness 的默认方案 → 没有默认则 next.kind=decide 让你选。变更类在 <仓>/.worktrees/keel-<run> 建 worktree；pr 类型检出已有分支（被占用则 next.stop）；investigation 不建 worktree，只记起始指纹。返回 {run_id, profile, next}。之后只照 next 做。永不合并。传入 program 时走多 PR 节目（init/add/tick/restore），不另开工具。",
+      "description": "开一次 KEEL 图运行。主控方案顺序：profile 点名 → lead 对应 harness 的默认方案 → 没有默认则 next.kind=decide 让你选。变更类在 <仓>/.worktrees/keel-<run> 建 worktree；pr 类型检出已有分支（被占用则 next.stop）；investigation 不建 worktree，只记起始指纹。返回 {run_id, profile, next}。之后只照 next 做。next.dispatch 带 create_worker 开 Orca Worker，带 subagent 由主控自带 subagent 跑一次。永不合并。传入 program 时走多 PR 节目（init/add/tick/restore），不另开工具。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -248,7 +248,7 @@
     },
     {
       "name": "keel_report",
-      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report。写代码节点越域返回 SCOPE_VIOLATION。返回 next。",
+      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样（subagent 派工不报 accepted）；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report（subagent 交回后直接 final）。写代码节点越域返回 SCOPE_VIOLATION。返回 next。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,

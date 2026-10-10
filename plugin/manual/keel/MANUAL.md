@@ -1,6 +1,6 @@
 # KEEL：中文入口
 
-主控协议：聊清需求后调 `keel_run({goal, sc, repo_dir, lead, scope, profile?, pr?, base_ref?})`；会改代码的 run 必须给 scope（可写文件或 glob），缺了直接 SCOPE_REQUIRED；要叠在别的 PR 分支上做就传 base_ref（分支名）。之后只照 `next` 做：`setup` 就 `start_team({worker_permission_mode:"bypassPermissions"})`，`keel_report({phase:"setup", outcome:{worker_permission_mode, team_id}})` 的 team_id 先取 start_team 回执，没有就用主控会话 `get_workspace_info` 的真实结构 `{ok:true, workflow:{workflow_id, lead_session_id, status}, workers}` 里的 `workflow.workflow_id`（主控还可取 `workflow.lead_session_id`）；`workflow` 为 null（worker 会话）则 human:setup。`dispatch` 就把 `create_worker` 参数原样传入（不按 routing.json 换档），并立刻 `keel_report({phase:"accepted", ...回执})`。插件任务走内部 `cindy.tasks`：`getRun` 只传 `runId`；`revision` / `expectedRevision` 必须是安全整数；create 回执丢失用 `list` 按 `requestKey` 找回，找不到开人工门，禁止重放 create；任务 running 时 `keel_wait` 内部 `getRun` 轮询，completed 后 `readMessages` 当 final。`reconcile` / `verify_stopped` 时主控在调用 `list_workers` 的同一时刻再调 `get_workspace_info`，把 `workflow.workflow_id` 作为 team_id 附进结果，不要抄 run 状态里记着的值。start_team 回执、setup、对账必须用同一种 ID。worker 回报后 `keel_report({phase:"final"})`；调查类节点的 worker 只在最后回复里交 NodeReport JSON，主控把它原样作 `inline_report` 传进去。只有 `next.kind=done` 才算完成；KEEL 永不合并。`decide` 时自己裁决，拿不准才问用户。pstack 手册是深读材料。
+主控协议：聊清需求后调 `keel_run({goal, sc, repo_dir, lead, scope, profile?, pr?, base_ref?})`；会改代码的 run 必须给 scope（可写文件或 glob），缺了直接 SCOPE_REQUIRED；要叠在别的 PR 分支上做就传 base_ref（分支名）。之后只照 `next` 做：`setup` 就 `start_team({worker_permission_mode:"bypassPermissions"})`，`keel_report({phase:"setup", outcome:{worker_permission_mode, team_id}})` 的 team_id 先取 start_team 回执，没有就用主控会话 `get_workspace_info` 的真实结构 `{ok:true, workflow:{workflow_id, lead_session_id, status}, workers}` 里的 `workflow.workflow_id`（主控还可取 `workflow.lead_session_id`）；`workflow` 为 null（worker 会话）则 human:setup。`dispatch` 带 `create_worker` 就原样传入并立刻报 accepted；带 `subagent` 就用自带 subagent 跑一次，不开 Worker、不报 accepted，完成后直接 final（见「subagent 派工」）。`reconcile` / `verify_stopped` 时主控在调用 `list_workers` 的同一时刻再调 `get_workspace_info`，把 `workflow.workflow_id` 作为 team_id 附进结果，不要抄 run 状态里记着的值。start_team 回执、setup、对账必须用同一种 ID。worker 回报后 `keel_report({phase:"final"})`；调查类节点的 worker 只在最后回复里交 NodeReport JSON，主控把它原样作 `inline_report` 传进去。只有 `next.kind=done` 才算完成；KEEL 永不合并。`decide` 时自己裁决，拿不准才问用户。pstack 手册是深读材料。
 
 - 本机车道表与路径：`ghost_manual({ ghost_id: "keel", path: "keel/profile.md" })`
 - pstack 上游镜像与路由表：`ghost_manual({ ghost_id: "keel", path: "pstack/MANUAL.md" })`
@@ -46,7 +46,7 @@
 
 | pstack（Cursor） | Keel（Cindy） |
 |---|---|
-| `Task` / subagent | 当前 harness 原生只读 subagent；多模型并行经 `fanout({ op: "plan" })` 开 Orca Worker |
+| `Task` / subagent | KEEL 判定的只读一次性节点由主控自带 subagent 跑（`next.subagent`）；多模型并行经 `fanout` 开 Orca Worker |
 | `~/.cursor/rules/pstack-models.mdc` | `fanout({ op: "roles" })`（routing.json） |
 | `/loop` | 短等待用 `pr_wait`（心跳轮询 ≤25 分钟）；长周期用 Cindy 定时任务 `schedule_create`（需用户同意） |
 | `scripts/watch-pr/watch-pr` | `pr_status` / `pr_wait` |
@@ -80,3 +80,9 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 4. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。
+
+## subagent 派工
+
+KEEL 判定只读、非终审/复核/验证/质询、且路由 agent 等于主控 harness 的一次性节点走 `next.subagent`，主控不自选。Claude Code 用 Agent 工具：`subagent_type` 用能写文件的 general-purpose，`model` 显式传 `next.subagent.model`（haiku / sonnet / opus 别名），prompt 为 `task`，前台运行；不能设 effort。实际跑的是主控环境的该别名，不是路由里的 provider。Codex 用自带子代理，任务内容为 `task`，不传模型（只有路由模型等于主控模型才走这条）。pi 一律 Orca。完成后有 `report_path` 就 `keel_report({phase:"final", dispatch_key})`，没有就把最后回复的 NodeReport 原样作 `inline_report`。禁止开 Orca worker、禁止报 accepted、禁止伪造 worker 回执，同一 dispatch_key 只派一次。subagent 失败（工具报错、拿不到报告）时照实 `phase=final` 交 `status=failed`；同一节点下一次 attempt 改走 Orca `create_worker`。超时会出 `human:<节点>` 门，先停掉 subagent 再选 retry/stop。
+
+插件任务（旧通道）走内部 `cindy.tasks`：`getRun` 只传 `runId`；`revision` / `expectedRevision` 必须是安全整数；create 回执丢失用 `list` 按 `requestKey` 找回，找不到开人工门，禁止重放 create；任务 running 时 `keel_wait` 内部 `getRun` 轮询，completed 后 `readMessages` 当 final。当前图不再引用该通道。

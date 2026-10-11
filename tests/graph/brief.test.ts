@@ -147,3 +147,14 @@ describe("node task line", () => {
     expect(text).toMatch(/VERIFY\s+没有指定时用仓库自带的测试命令/);
   });
 });
+
+describe("VERIFY line", () => {
+  it("lists a shared verify command once", () => {
+    const text = buildBrief(
+      { id: "implement", role: "worker", writes: true },
+      { run_id: "run-1", goal: "g", worktree: "/w", taskType: "bug-fix", sc: [{ id: "SC-1", text: "a", verify: "npm test" }, { id: "SC-2", text: "b", verify: "npm test" }] },
+      { attempt: 1, dispatch_key: "run-1:implement:1" },
+    );
+    expect(text).toMatch(/^VERIFY\s+npm test$/m);
+  });
+});

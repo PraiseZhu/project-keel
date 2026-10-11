@@ -99,7 +99,7 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
     ? `只读：不得修改任何文件（只写下面 REPORT 指定的 .keel/ 报告）；发现要改的写进 findings / next_suggestions，交给写代码节点。工作树：${run.worktree ?? "（无）"}。`
     : `可写：${allow}${deny}。工作树：${run.worktree ?? "（无）"}。只改 SCOPE 内文件。${node.writes ? "改完后只 git add 你改过的 SCOPE 内文件并 commit（不要 add .keel/），没有改动就不提交；不要 push。报告里的 head_sha 写 commit 之后的 HEAD。" : ""}`;
   const acceptance = (run.sc ?? []).map((s) => `${s.id}: ${s.text}`).join("\n             ") || "（无单独 SC，以 GOAL 为准）";
-  const verify = [...(ctx.verify ?? []), ...(run.sc ?? []).map((s) => s.verify).filter((x): x is string => Boolean(x))].join("；")
+  const verify = [...new Set([...(ctx.verify ?? []), ...(run.sc ?? []).map((s) => s.verify).filter((x): x is string => Boolean(x))])].join("；")
     || "没有指定时用仓库自带的测试命令（如 package.json 的 test 脚本、pytest、go test ./...），实际跑的命令写进 ran";
   const forbidden = [...BRIEF_FORBIDDEN, ...(ctx.extraForbidden ?? [])].join("；");
   const report = node.plugin_task

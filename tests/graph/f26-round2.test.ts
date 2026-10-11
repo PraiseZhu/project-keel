@@ -138,7 +138,16 @@ describe("F26-02 investigation create_worker.working_dir", () => {
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "调查超时原理", repo_dir: "/invoked/path", lead: "codex", playbook: "investigation",
     });
-    const setup: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+    // Explore tries the lead's subagent first; its failure falls back to an Orca worker in the same dir.
+    expect(started.result.next.subagent.working_dir).toBe("/invoked/path");
+    const failed: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
+      run_id: started.result.run_id,
+      phase: "final",
+      dispatch_key: started.result.next.dispatch_key,
+      inline_report: { status: "failed", summary: "subagent 不可用" },
+    });
+    expect(failed.result.next.kind).toBe("setup");
+    const setup: any = await runTool(makeContext(h, "c3", profile), "keel_report", {
       run_id: started.result.run_id,
       phase: "setup",
       outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },

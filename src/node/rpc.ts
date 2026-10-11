@@ -13,6 +13,7 @@ import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
 import { inspectVigil } from "./pr/vigil-handoff.ts";
 import { bothStopHookStatuses } from "./hooks-status.ts";
+import { defaultHookPaths, ensureHooks } from "./hooks-install.ts";
 import { roles } from "./routes/routing.ts";
 import { CLOCK_PING_METHOD } from "../shared/clock.ts";
 
@@ -66,6 +67,8 @@ const methods: Record<string, Method> = {
     ...(typeof p.claude_config === "string" ? { claude_config: p.claude_config } : {}),
     ...(typeof p.codex_config === "string" ? { codex_config: p.codex_config } : {}),
   }),
+  // The bundled worker is CommonJS, so __dirname is <plugin>/node; tests call ensureHooks with explicit paths.
+  "hooks/ensure": () => ensureHooks(typeof __dirname === "string" ? defaultHookPaths(__dirname) : null),
   "gh/rate-limit": async () => {
     const raw = await ghJson<{ resources?: { graphql?: { used?: number; remaining?: number; limit?: number; reset?: number } } }>(["api", "rate_limit"]);
     const g = raw.resources?.graphql ?? {};

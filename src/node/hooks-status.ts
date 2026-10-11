@@ -1,17 +1,18 @@
-// Read-only Stop-hook detection. Recognition matches scripts/hooks/install.mjs (MARK / hasKeelStop).
+// Read-only Stop-hook detection. src/node/hooks-install.ts and the self-cleanup in the hook command use the same mark.
 
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export const KEEL_STOP_MARK = "keel-stop-gate.mjs";
+/** Matches the current gate (keel-stop-gate.js) and older manual installs (keel-stop-gate.mjs). */
+export const KEEL_STOP_MARK = "keel-stop-gate";
 export type StopHookInstall = "installed" | "not_installed" | "unreadable";
 
 function isKeelCommand(cmd: unknown): boolean {
   return typeof cmd === "string" && cmd.includes(KEEL_STOP_MARK);
 }
 
-function isKeelHook(h: unknown): boolean {
+export function isKeelHook(h: unknown): boolean {
   return Boolean(h && typeof h === "object" && isKeelCommand((h as { command?: unknown }).command));
 }
 
@@ -22,14 +23,12 @@ function isKeelGroup(g: unknown): boolean {
   return Array.isArray(hooks) && hooks.some(isKeelHook);
 }
 
-/** Same rule as scripts/hooks/install.mjs hasKeelStop. */
 export function hasKeelStop(config: unknown): boolean {
   const stop = (config as { hooks?: { Stop?: unknown } } | null)?.hooks?.Stop;
   return Array.isArray(stop) && stop.some(isKeelGroup);
 }
 
-export function defaultHookConfigPath(target: "claude-code" | "codex"): string {
-  const home = os.homedir();
+export function defaultHookConfigPath(target: "claude-code" | "codex", home = os.homedir()): string {
   if (target === "codex") return path.join(home, "Library/Application Support/Cindy/codex-home/hooks.json");
   return path.join(home, ".claude/settings.json");
 }

@@ -1,26 +1,28 @@
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  GATE_SCRIPT,
-  MARK,
-  hasKeelStop,
-  installHook,
-  isVacuousConfig,
-  keelNodeAgentSource,
-  mergeKeelStop,
-  removeKeelStop,
-  statusHook,
-  uninstallHook,
-} from "../../scripts/hooks/install.mjs";
+  AGENT_FILE,
+  CLEANUP_JXA,
+  GATE_FILE,
+  defaultHookPaths,
+  ensureHook,
+  ensureHooks,
+  hookCommand,
+  quote,
+  withKeelStop,
+  type HookPaths,
+} from "../../src/node/hooks-install.ts";
+import { hasKeelStop, KEEL_STOP_MARK } from "../../src/node/hooks-status.ts";
 import { toActiveIndex, writeActiveIndex } from "../../src/main/store/active-index.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
-const installer = fileURLToPath(new URL("../../scripts/hooks/install.mjs", import.meta.url));
+const repoPlugin = fileURLToPath(new URL("../../plugin/", import.meta.url));
 const dirs: string[] = [];
 
 async function tmp() {
@@ -33,6 +35,20 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
+/** A Cindy-shaped tree in a temp dir: owners/o/cindy-brain/keel with the shipped hook files, plus both harness homes. */
+async function world(opts: { claude?: boolean; codex?: boolean } = {}): Promise<HookPaths> {
+  const home = await tmp();
+  const pluginDir = path.join(home, "owners/o/cindy-brain/keel");
+  await mkdir(path.join(pluginDir, "hooks"), { recursive: true });
+  await mkdir(path.join(pluginDir, "node"), { recursive: true });
+  await copyFile(path.join(repoPlugin, GATE_FILE), path.join(pluginDir, GATE_FILE));
+  await copyFile(path.join(repoPlugin, AGENT_FILE), path.join(pluginDir, AGENT_FILE));
+  const paths = defaultHookPaths(path.join(pluginDir, "node"), home)!;
+  if (opts.claude !== false) await mkdir(path.dirname(paths.claudeConfig), { recursive: true });
+  if (opts.codex !== false) await mkdir(path.dirname(paths.codexConfig), { recursive: true });
+  return paths;
+}
+
 const otherStop = { matcher: "conclusion-first", hooks: [{ type: "command", command: "conclusion-first-gate" }] };
 const fixture = {
   keep: true,
@@ -41,160 +57,166 @@ const fixture = {
     Stop: [otherStop],
   },
 };
+const PATHS: HookPaths = {
+  pluginDir: "/p/cindy-brain/keel",
+  dataDir: "/p/ghost-fs/keel",
+  claudeConfig: "/h/.claude/settings.json",
+  codexConfig: "/h/codex-home/hooks.json",
+  agentsDir: "/h/.claude/agents",
+};
+const keelCount = (cfg: unknown) => JSON.stringify((cfg as { hooks: { Stop: unknown[] } }).hooks.Stop).split(GATE_FILE.split("/")[1]!).length - 1;
 
-async function ownersTree(root: string, owners: string[]) {
-  for (const o of owners) await mkdir(path.join(root, o, "ghost-fs", "keel"), { recursive: true });
-}
-
-describe("merge / strip preserve foreign entries", () => {
-  it("inserts a KEEL Stop group and leaves every other field alone", () => {
-    const next = mergeKeelStop(fixture, "claude-code", "/data/runs/active.json");
+describe("withKeelStop keeps foreign entries and leaves exactly one KEEL hook", () => {
+  it("inserts one group and leaves every other field and Stop group alone", () => {
+    const { next, changed } = withKeelStop(fixture, hookCommand("claude-code", PATHS));
+    expect(changed).toBe(true);
     expect(next.keep).toBe(true);
-    expect(next.hooks.PreToolUse).toEqual(fixture.hooks.PreToolUse);
-    expect(next.hooks.Stop.some((g: { matcher?: string }) => g.matcher === "conclusion-first")).toBe(true);
+    expect((next.hooks as typeof fixture.hooks).PreToolUse).toEqual(fixture.hooks.PreToolUse);
+    expect((next.hooks as typeof fixture.hooks).Stop[0]).toEqual(otherStop);
     expect(hasKeelStop(next)).toBe(true);
-    expect(JSON.stringify(next)).toContain(MARK);
+    expect(keelCount(next)).toBe(1);
   });
   it("is idempotent", () => {
-    const once = mergeKeelStop(fixture, "codex", "/data/runs/active.json");
-    const twice = mergeKeelStop(once, "codex", "/data/runs/active.json");
-    const cmds = JSON.stringify(twice.hooks.Stop).split(MARK).length - 1;
-    expect(cmds).toBe(1);
+    const cmd = hookCommand("codex", PATHS);
+    const once = withKeelStop(fixture, cmd).next;
+    const twice = withKeelStop(once, cmd);
+    expect(twice.changed).toBe(false);
+    expect(twice.next).toBe(once);
   });
-  it("uninstall removes only KEEL and can restore a file that did not exist", () => {
-    const next = removeKeelStop(mergeKeelStop(fixture, "codex", "/i"));
-    expect(next.keep).toBe(true);
-    expect(next.hooks.PreToolUse).toEqual(fixture.hooks.PreToolUse);
-    expect(hasKeelStop(next)).toBe(false);
-    expect(next.hooks.Stop).toEqual([otherStop]);
-    expect(isVacuousConfig(removeKeelStop(mergeKeelStop({}, "codex", "/i")))).toBe(true);
-  });
-});
-
-describe("install / uninstall against tmp fixtures", () => {
-  it("backs up, merges, and uninstalls back to the original others", async () => {
-    const dir = await tmp();
-    const config = path.join(dir, "settings.json");
-    const dataDir = path.join(dir, "data");
-    await mkdir(dataDir, { recursive: true });
-    await writeFile(config, `${JSON.stringify(fixture, null, 2)}\n`);
-    const agentsDir = path.join(dir, "agents");
-    const installed = await installHook({ target: "claude-code", config, dataDir, agentsDir });
-    expect(installed.existed).toBe(true);
-    expect(existsSync(installed.backup!)).toBe(true);
-    const after = JSON.parse(await readFile(config, "utf8"));
-    expect(hasKeelStop(after)).toBe(true);
-    expect(after.hooks.PreToolUse).toEqual(fixture.hooks.PreToolUse);
-    await installHook({ target: "claude-code", config, dataDir, agentsDir });
-    const again = JSON.parse(await readFile(config, "utf8"));
-    expect(JSON.stringify(again.hooks.Stop).split(MARK).length - 1).toBe(1);
-    const undone = await uninstallHook({ target: "claude-code", config });
-    expect(undone.deleted).toBe(false);
-    const restored = JSON.parse(await readFile(config, "utf8"));
-    expect(hasKeelStop(restored)).toBe(false);
-    expect(restored.hooks.Stop).toEqual([otherStop]);
-    expect(restored.keep).toBe(true);
-  });
-  it("records a missing origin and deletes the file on uninstall when it is empty", async () => {
-    const dir = await tmp();
-    const config = path.join(dir, "hooks.json");
-    const dataDir = path.join(dir, "data");
-    await mkdir(dataDir, { recursive: true });
-    expect(existsSync(config)).toBe(false);
-    await installHook({ target: "codex", config, dataDir });
-    expect(existsSync(config)).toBe(true);
-    const backups = (await readdir(dir)).filter((n) => n.includes(".keel-backup-"));
-    expect(backups.length).toBeGreaterThan(0);
-    const marker = JSON.parse(await readFile(path.join(dir, backups[0]!), "utf8"));
-    expect(marker.__keel_origin_missing).toBe(true);
-    const undone = await uninstallHook({ target: "codex", config });
-    expect(undone.deleted).toBe(true);
-    expect(existsSync(config)).toBe(false);
-  });
-  it("dry-run prints the would-be file and writes nothing", async () => {
-    const dir = await tmp();
-    const config = path.join(dir, "hooks.json");
-    const dataDir = path.join(dir, "data");
-    await mkdir(dataDir, { recursive: true });
-    const r = await installHook({ target: "codex", config, dataDir, dryRun: true });
-    expect(r.dryRun).toBe(true);
-    expect(r.content).toContain(MARK);
-    expect(existsSync(config)).toBe(false);
-    expect((await readdir(dir)).some((n) => n.includes(".keel-backup-"))).toBe(false);
-  });
-  it("status reports installed vs not, and Codex adds the trust hint", async () => {
-    const dir = await tmp();
-    const config = path.join(dir, "hooks.json");
-    const dataDir = path.join(dir, "data");
-    await mkdir(dataDir, { recursive: true });
-    const before = await statusHook({ target: "codex", config });
-    expect(before.installed).toBe(false);
-    expect(before.note).toContain("信任");
-    await installHook({ target: "codex", config, dataDir });
-    expect((await statusHook({ target: "codex", config })).installed).toBe(true);
-    expect((await statusHook({ target: "claude-code", config })).note).toBeUndefined();
-  });
-  it("install --target claude-code copies agents/keel-node.md without a hardcoded model", async () => {
-    const dir = await tmp();
-    const config = path.join(dir, "settings.json");
-    const dataDir = path.join(dir, "data");
-    const agentsDir = path.join(dir, "agents");
-    await mkdir(dataDir, { recursive: true });
-    await writeFile(config, `${JSON.stringify(fixture, null, 2)}\n`);
-    const installed = await installHook({ target: "claude-code", config, dataDir, agentsDir });
-    const dest = path.join(agentsDir, "keel-node.md");
-    expect(installed.agent).toBe(dest);
-    expect(existsSync(dest)).toBe(true);
-    const text = await readFile(dest, "utf8");
-    expect(text).toMatch(/^---\nname: keel-node\n/);
-    expect(text).toMatch(/tools: \[Read, Write, Edit, Bash, Grep, Glob\]/);
-    expect(text).not.toMatch(/^model:/m);
-    expect(keelNodeAgentSource()).toMatch(/scripts\/hooks\/keel-node\.md$/);
-    const dry = await installHook({ target: "codex", config, dataDir, agentsDir, dryRun: true });
-    expect(dry.agent).toBeUndefined();
+  it("replaces older manual installs, including one shared with a foreign hook", () => {
+    const old = { type: "command", command: "'/usr/local/bin/node' '/repo/scripts/hooks/keel-stop-gate.mjs' --harness codex --index '/i'", timeout: 5 };
+    const cfg = { hooks: { Stop: [{ hooks: [old] }, { hooks: [{ type: "command", command: "x" }, old] }] } };
+    const { next, changed } = withKeelStop(cfg, hookCommand("codex", PATHS));
+    expect(changed).toBe(true);
+    const stop = (next.hooks as { Stop: { hooks: { command: string }[] }[] }).Stop;
+    expect(stop).toHaveLength(2);
+    expect(stop[0]!.hooks).toEqual([{ type: "command", command: "x" }]);
+    expect(JSON.stringify(next)).not.toContain("keel-stop-gate.mjs");
   });
 });
 
-describe("data-dir auto-discovery", () => {
-  it("uses the only owners/*/ghost-fs/keel directory", async () => {
-    const dir = await tmp();
-    const owners = path.join(dir, "owners");
-    await ownersTree(owners, ["abc"]);
-    const config = path.join(dir, "hooks.json");
-    const r = await installHook({ target: "codex", config, ownersRoot: owners });
-    expect(r.next.hooks.Stop[0].hooks[0].command).toContain(path.join(owners, "abc", "ghost-fs", "keel", "runs", "active.json"));
+describe("cleanup script strips only KEEL entries", () => {
+  const strip = (() => {
+    const ctx: Record<string, unknown> = {};
+    runInNewContext(CLEANUP_JXA, ctx);
+    return ctx.stripKeel as (j: unknown) => unknown;
+  })();
+  it("removes KEEL hooks and empty containers, keeps the rest", () => {
+    const installed = withKeelStop(fixture, hookCommand("claude-code", PATHS)).next;
+    expect(JSON.parse(JSON.stringify(strip(structuredClone(installed))))).toEqual(fixture);
+    const onlyKeel = withKeelStop({}, hookCommand("codex", PATHS)).next;
+    expect(JSON.parse(JSON.stringify(strip(structuredClone(onlyKeel))))).toEqual({});
   });
-  it("errors when zero or several data dirs exist", async () => {
-    const dir = await tmp();
-    const none = path.join(dir, "owners-none");
-    await mkdir(none, { recursive: true });
-    const many = path.join(dir, "owners-many");
-    await ownersTree(many, ["a", "b"]);
-    const config = path.join(dir, "hooks.json");
-    await expect(installHook({ target: "codex", config, ownersRoot: none })).rejects.toThrow(/找不到 KEEL 数据目录/);
-    await expect(installHook({ target: "codex", config, ownersRoot: many })).rejects.toThrow(/找到 2 个/);
-    expect(existsSync(config)).toBe(false);
+  it("has no single quote, so it survives shell quoting unchanged", () => {
+    expect(CLEANUP_JXA).not.toContain("'");
+    expect(CLEANUP_JXA).toContain(KEEL_STOP_MARK);
   });
 });
 
-describe("CLI dry-run does not write", () => {
-  it("install --dry-run leaves the fixture directory empty of configs", async () => {
-    const dir = await tmp();
-    const config = path.join(dir, "hooks.json");
-    const dataDir = path.join(dir, "data");
-    await mkdir(dataDir, { recursive: true });
-    const out = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, [installer, "install", "--target", "codex", "--config", config, "--data-dir", dataDir, "--dry-run"], { stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "";
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (c) => { stdout += c; });
-      child.on("error", reject);
-      child.on("close", (code) => resolve({ code, stdout }));
-    });
-    expect(out.code).toBe(0);
-    expect(out.stdout).toContain(MARK);
-    expect(out.stdout).toContain(GATE_SCRIPT);
-    expect(existsSync(config)).toBe(false);
+describe("ensureHook against a temp Cindy tree", () => {
+  it("installs both harnesses, backs up an existing config once, and copies the agent for Claude Code only", async () => {
+    const paths = await world();
+    await writeFile(paths.claudeConfig, `${JSON.stringify(fixture, null, 2)}\n`);
+    const out = await ensureHooks(paths, "darwin");
+    expect(out.claude_code.outcome).toBe("installed");
+    expect(out.codex.outcome).toBe("installed");
+    const claude = JSON.parse(await readFile(paths.claudeConfig, "utf8"));
+    expect(claude.keep).toBe(true);
+    expect(keelCount(claude)).toBe(1);
+    expect(JSON.parse(await readFile(`${paths.claudeConfig}.keel-backup`, "utf8"))).toEqual(fixture);
+    expect(existsSync(`${paths.codexConfig}.keel-backup`)).toBe(false);
+    const agent = await readFile(path.join(paths.agentsDir, "keel-node.md"), "utf8");
+    expect(agent).toMatch(/^---\nname: keel-node\n/);
+    expect(agent).not.toMatch(/^model:/m);
+    expect(JSON.stringify(JSON.parse(await readFile(paths.codexConfig, "utf8")))).toContain("--harness codex");
+    expect(JSON.stringify(claude)).toContain(path.join(paths.dataDir, "runs/active.json"));
+
+    const again = await ensureHooks(paths, "darwin");
+    expect(again.claude_code.outcome).toBe("unchanged");
+    expect(again.codex.outcome).toBe("unchanged");
+  });
+
+  it("keeps a symlinked 0600 settings file a symlink and private; the backup is private too", async () => {
+    const paths = await world({ codex: false });
+    const real = path.join(path.dirname(paths.claudeConfig), "dotfiles-settings.json");
+    await writeFile(real, JSON.stringify(fixture), { mode: 0o600 });
+    await symlink(real, paths.claudeConfig);
+    expect((await ensureHook("claude-code", paths)).outcome).toBe("installed");
+    expect((await lstat(paths.claudeConfig)).isSymbolicLink()).toBe(true);
+    expect((await stat(real)).mode & 0o777).toBe(0o600);
+    expect(hasKeelStop(JSON.parse(await readFile(real, "utf8")))).toBe(true);
+    expect((await stat(`${paths.claudeConfig}.keel-backup`)).mode & 0o777).toBe(0o600);
+  });
+
+  it("reports updated when it replaces an older KEEL entry", async () => {
+    const paths = await world({ codex: false });
+    await writeFile(paths.claudeConfig, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "node /x/keel-stop-gate.mjs" }] }] } }));
+    expect((await ensureHook("claude-code", paths)).outcome).toBe("updated");
+  });
+
+  it("skips a harness whose config directory does not exist and never writes there", async () => {
+    const paths = await world({ codex: false });
+    const out = await ensureHook("codex", paths);
+    expect(out.outcome).toBe("skipped");
+    expect(existsSync(path.dirname(paths.codexConfig))).toBe(false);
+  });
+
+  it("leaves an unparseable config untouched", async () => {
+    const paths = await world();
+    await writeFile(paths.claudeConfig, "{ not json");
+    expect((await ensureHook("claude-code", paths)).outcome).toBe("unreadable");
+    expect(await readFile(paths.claudeConfig, "utf8")).toBe("{ not json");
+  });
+
+  it("does nothing off macOS or outside the Cindy plugin layout", async () => {
+    const paths = await world();
+    expect((await ensureHooks(paths, "linux")).claude_code.outcome).toBe("skipped");
+    expect((await ensureHooks(null, "darwin")).codex.outcome).toBe("skipped");
+    expect(existsSync(paths.claudeConfig)).toBe(false);
+    expect(defaultHookPaths("/somewhere/else/node")).toBeNull();
+  });
+
+  it("derives the data dir from the installed plugin dir", () => {
+    const p = defaultHookPaths("/U/owners/abc/cindy-brain/keel/node", "/U")!;
+    expect(p.pluginDir).toBe("/U/owners/abc/cindy-brain/keel");
+    expect(p.dataDir).toBe("/U/owners/abc/ghost-fs/keel");
+    expect(p.claudeConfig).toBe("/U/.claude/settings.json");
+    expect(p.codexConfig).toBe("/U/Library/Application Support/Cindy/codex-home/hooks.json");
+  });
+});
+
+describe("hook command quoting (review F16-01 / CodeQL)", () => {
+  it("passes paths with shell metacharacters through as exact argv", () => {
+    const nasty = [
+      "/tmp/data/$(printf SUBSTITUTED)/runs/active.json",
+      "/tmp/data/`printf TICKED`/active.json",
+      "/tmp/it's here/\\back\\slash/\"dq\"/active.json",
+      "/opt/Application Support/Cindy/owners/x/ghost-fs/keel/runs/active.json",
+    ];
+    for (const p of nasty) {
+      const out = execFileSync("/bin/sh", ["-c", `printf '%s\\n' ${quote(p)}`], { encoding: "utf8" });
+      expect(out).toBe(`${p}\n`);
+    }
+  });
+});
+
+describe.runIf(process.platform === "darwin")("installed command end to end (macOS only)", () => {
+  const sh = (cmd: string, stdin: string) => execFileSync("/bin/sh", ["-c", cmd], { input: stdin, encoding: "utf8" });
+
+  it("runs the gate while the plugin is installed and removes itself once the plugin is gone", async () => {
+    const paths = await world();
+    await writeFile(paths.claudeConfig, `${JSON.stringify(fixture, null, 2)}\n`, { mode: 0o600 });
+    await ensureHooks(paths, "darwin");
+    await mkdir(path.join(paths.dataDir, "runs"), { recursive: true });
+    await writeFile(path.join(paths.dataDir, "runs/active.json"), JSON.stringify({ "/w": { run_id: "r1", status: "running", current_node: "n" } }));
+    const cmd = (JSON.parse(await readFile(paths.claudeConfig, "utf8")).hooks.Stop as { hooks: { command: string }[] }[]).at(-1)!.hooks[0]!.command;
+    expect(JSON.parse(sh(cmd, JSON.stringify({ cwd: "/w", stop_hook_active: false })))).toMatchObject({ decision: "block" });
+
+    await rm(path.join(paths.pluginDir), { recursive: true, force: true });
+    expect(JSON.parse(sh(cmd, JSON.stringify({ cwd: "/w", stop_hook_active: false })))).toEqual({});
+    expect(JSON.parse(await readFile(paths.claudeConfig, "utf8"))).toEqual(fixture);
+    expect((await stat(paths.claudeConfig)).mode & 0o777).toBe(0o600);
+    expect(existsSync(path.join(paths.agentsDir, "keel-node.md"))).toBe(false);
   });
 });
 
@@ -221,24 +243,5 @@ describe("active index helper", () => {
     ]);
     const stored = JSON.parse(h.files.get("runs/active.json")!);
     expect(["a", "b"]).toContain(stored["/r"].run_id);
-  });
-});
-
-describe("keelCommand shell quoting (review F16-01 / CodeQL)", () => {
-  it("passes paths with shell metacharacters to the hook as exact argv", async () => {
-    const { execFileSync } = await import("node:child_process");
-    const { keelCommand } = await import("../../scripts/hooks/install.mjs");
-    const nasty = [
-      "/tmp/data/$(printf SUBSTITUTED)/runs/active.json",
-      "/tmp/data/`printf TICKED`/active.json",
-      "/tmp/it's here/\\back\\slash/\"dq\"/active.json",
-      "/opt/Application Support/Cindy/owners/x/ghost-fs/keel/runs/active.json",
-    ];
-    for (const path of nasty) {
-      // printf '%s\n' prints each argv element on its own line; the last one is the --index value.
-      const cmd = keelCommand("codex", path, "/usr/bin/printf", "%s\\n");
-      const out = execFileSync("/bin/sh", ["-c", cmd], { encoding: "utf8" }).split("\n").filter(Boolean);
-      expect(out.at(-1)).toBe(path);
-    }
   });
 });

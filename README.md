@@ -65,7 +65,7 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 | `src/panel/` | 面板与设置页 |
 | `plugin/` | 插件产物：`ghost.json`（由脚本生成）、手册、图标、构建输出 |
 | `plugin/manual/` | 随插件分发的手册（`keel/`、`jev/`，以及工作流手册镜像） |
-| `scripts/hooks/keel-node.md` | Claude Code 主控一次性节点 subagent；`scripts/hooks/install.mjs --target claude-code` 会装到 `~/.claude/agents/` |
+| `plugin/hooks/` | 收工钩子（`keel-stop-gate.js`，用 macOS 自带的 `osascript -l JavaScript` 运行，不需要装 Node）和 Claude Code 一次性节点 subagent（`keel-node.md`）。插件每次启动时自动装进 `~/.claude/settings.json`、Cindy 的 Codex `hooks.json` 和 `~/.claude/agents/`；只装已有配置目录的 harness。卸载插件后，钩子下一次触发时发现脚本不在，会把自己的条目和 `keel-node.md` 删掉再放行。Codex 只运行用户信任过的钩子，第一次要在 Codex 里信任一次 |
 | `overlays/`、`tools/` | 手册镜像的覆盖层与同步脚本 |
 | `config/` | 个人 profile 示例（`profile.example.json`） |
 | `scripts/` | 构建、manifest 生成、手册校验、隐私检查 |

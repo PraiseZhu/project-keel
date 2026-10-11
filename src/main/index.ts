@@ -102,6 +102,11 @@ const clockWatchdog = new ClockWatchdog({
 });
 clockWatchdog.start();
 
+// Install or refresh the Claude Code / Codex Stop hooks on every start; after uninstall the hook removes itself.
+void host.node("hooks/ensure", {}).then((r) => {
+  if (!r.ok) console.warn(`[keel] hooks/ensure failed: ${r.message ?? "unknown"}`);
+});
+
 cindy.onHostMessage(async (msg: any) => {
   if (msg.type === "tool-call") {
     const args = msg.args ?? {};

@@ -90,20 +90,10 @@ describe("Greptile PR26 threads on 93d19dc", () => {
     });
     expect(started.ok).toBe(true);
     let next = nextOf(started);
-    expect(next.kind).toBe("setup");
-    const setup: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
-      run_id: started.result.run_id, phase: "setup",
-      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
-    });
-    next = nextOf(setup);
     expect(next.kind).toBe("dispatch");
-    if (next.kind !== "dispatch" || !next.create_worker) throw new Error("explore worker");
+    // Explore runs on the lead's own subagent first, so it reports final without setup or accepted.
+    if (next.kind !== "dispatch" || !next.subagent) throw new Error("explore subagent");
     const exploreKey = next.dispatch_key;
-    const accExplore: any = await runTool(makeContext(h, "c3", profile), "keel_report", {
-      run_id: started.result.run_id, phase: "accepted", dispatch_key: exploreKey,
-      worker_id: "w1", worker_session_id: "ws1", dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
-    });
-    expect(accExplore.ok).toBe(true);
     const finExplore: any = await runTool(makeContext(h, "c4", profile), "keel_report", {
       run_id: started.result.run_id, phase: "final", dispatch_key: exploreKey,
       inline_report: { status: "done", summary: "explore ok", files_changed: [], ran: [], sc_evidence: { "SC-1": true }, citation: "https://example.com/x" },

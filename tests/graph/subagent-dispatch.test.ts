@@ -125,39 +125,52 @@ describe("SC-1 subagent vs orca dispatch", () => {
     expect(d.create_worker).toBeUndefined();
   });
 
-  it("default sol + codex explore stays on Orca create_worker", async () => {
+  it("default sol + codex explore runs the lead's subagent first, then falls back to an Orca worker on the route", async () => {
     const { h, opts, runId } = await bootExplore({ profile_id: "sol", lead_harness: "codex", manual: DEFAULT_MANUAL });
-    const first = await advance(h, runId, { type: "tick" }, opts);
-    expect(first.next.kind).toBe("setup");
-    const d = await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts);
-    expect(asDispatch(d.next).create_worker).toBeTruthy();
-    expect(asDispatch(d.next).subagent).toBeUndefined();
+    const out = await advance(h, runId, { type: "tick" }, opts);
+    const first = asDispatch(out.next);
+    expect(first.create_worker).toBeUndefined();
+    expect(first.subagent?.harness).toBe("codex");
+    expect(first.subagent).not.toHaveProperty("model");
+    expect(first.subagent).not.toHaveProperty("effort");
+    expect(first.subagent?.route).toEqual({ model: "gpt-6.1-sol", provider_id: "art-cindy" });
+    expect(first.note).toContain("失败后改开 worker 跑 gpt-6-luna");
+    expect(out.state.nodes.explore.actual_route).toMatchObject({ agent: "codex", model: "gpt-6.1-sol" });
+    expect(out.state.team?.ready).not.toBe(true);
+
+    const failed = await advance(h, runId, { type: "report", phase: "final", dispatch_key: first.dispatch_key, inline_report: { status: "failed" }, report: { status: "failed", summary: "subagent 不可用" } }, opts);
+    expect(failed.next.kind).toBe("setup");
+    const retry = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts)).next);
+    expect(retry.subagent).toBeUndefined();
+    expect(retry.create_worker).toMatchObject({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", role: "keel-explorer" });
   });
 
-  it("claude-code route that is grok-4.6 stays on Orca", async () => {
-    const manual = cloneManual(DEFAULT_MANUAL);
-    const grok = manual.profiles.find((p) => p.id === "grok")!;
-    (grok.nodes.default as { explorer: { primary: Route } }).explorer = { primary: { agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "medium" } };
-    const { h, opts, runId } = await bootExplore({ manual });
-    const first = await advance(h, runId, { type: "tick" }, opts);
-    expect(first.next.kind).toBe("setup");
-  });
-
-  it("claude-code opus and fable routes stay on Orca", async () => {
-    for (const model of ["anthropic/claude-opus-5-5", "anthropic/claude-fable-5-1"] as const) {
+  it("claude-code explorer route the Agent tool cannot alias runs the lead's subagent without a model", async () => {
+    const routes: Route[] = [
+      { agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "medium" },
+      { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "medium" },
+      { agent: "claude-code", model: "anthropic/claude-fable-5-1", provider_id: "xd", effort: "medium" },
+      { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" },
+    ];
+    for (const route of routes) {
       const manual = cloneManual(DEFAULT_MANUAL);
       const grok = manual.profiles.find((p) => p.id === "grok")!;
-      (grok.nodes.default as { explorer: { primary: Route } }).explorer = { primary: { agent: "claude-code", model, provider_id: "xd", effort: "medium" } };
-      const { h, opts, runId } = await bootExplore({ run_id: `run-${model.split("/").pop()}`, manual });
-      if (!h.agentModelList.some((m) => m.id === model && m.agent === "claude-code" && m.providerId === "xd")) {
-        h.agentModelList.push({ id: model, agent: "claude-code", providerId: "xd" });
+      (grok.nodes.default as { explorer: { primary: Route } }).explorer = { primary: route };
+      const { h, opts, runId } = await bootExplore({ run_id: `run-${route.model.split("/").pop()!.replace(/\./g, "-")}`, manual });
+      if (!h.agentModelList.some((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id)) {
+        h.agentModelList.push({ id: route.model, agent: route.agent, providerId: route.provider_id });
       }
-      const first = await advance(h, runId, { type: "tick" }, opts);
-      expect(first.next.kind, model).toBe("setup");
-      const d = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts)).next);
-      expect(d.create_worker).toBeTruthy();
-      expect(d.subagent).toBeUndefined();
+      const d = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
+      expect(d.create_worker, route.model).toBeUndefined();
+      expect(d.subagent?.harness, route.model).toBe("claude-code");
+      expect(d.subagent, route.model).not.toHaveProperty("model");
+      expect(d.subagent?.route, route.model).toEqual({ model: "grok-4.6", provider_id: "art-cindy" });
     }
+  });
+
+  it("pi lead keeps explore on Orca", async () => {
+    const { h, opts, runId } = await bootExplore({ profile_id: "sol", lead_harness: "pi", manual: DEFAULT_MANUAL });
+    expect((await advance(h, runId, { type: "tick" }, opts)).next.kind).toBe("setup");
   });
 
   it("write and verifier nodes stay on create_worker under the same claude-code profile", async () => {
@@ -379,20 +392,17 @@ describe("R43-02 leftover plugin_task must not hijack a new Orca research attemp
     }, opts);
     expect(afterResearch.state.cursor).toBe("explore");
     researchNode.kind = "dispatch";
-    expect(afterResearch.next.kind).toBe("setup");
-    const explore = asDispatch((await advance(h, runId, {
-      type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1",
-    }, opts)).next);
-    expect(explore.create_worker).toBeTruthy();
-    await advance(h, runId, {
-      type: "report", phase: "accepted", dispatch_key: explore.dispatch_key,
-      worker_id: "we", worker_session_id: "se", dispatch_outcome: { created: true, delivered: true, queued: false },
-    }, opts);
+    // Explore's first attempt is the lead's subagent; research's second attempt needs an Orca team.
+    const explore = asDispatch(afterResearch.next);
+    expect(explore.subagent).toBeTruthy();
     const afterExplore = await advance(h, runId, {
       type: "report", phase: "final", dispatch_key: explore.dispatch_key,
       inline_report: { status: "done" }, report: { status: "done", files_changed: [], functions_touched: ["one"] },
     }, opts);
-    const research2 = asDispatch(afterExplore.next);
+    expect(afterExplore.next.kind).toBe("setup");
+    const research2 = asDispatch((await advance(h, runId, {
+      type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1",
+    }, opts)).next);
     expect(research2.dispatch_key).toBe(`${runId}:research:2`);
     expect(research2.create_worker).toBeTruthy();
     expect(research2.plugin_task).toBeUndefined();
@@ -503,7 +513,7 @@ describe("SC-3 research is dispatch", () => {
   afterEach(cleanupRepos);
 
   // Change graphs no longer have a research node; only the investigation graph does.
-  it("investigation research is create_worker for default sol, never plugin_task or human:reconcile", async () => {
+  it("investigation research is the lead's subagent for default sol, never plugin_task or human:reconcile", async () => {
     const world = makeWorld();
     const host = makeE2eHost(world);
     const started = await startRun(host, {
@@ -514,7 +524,8 @@ describe("SC-3 research is dispatch", () => {
     expect(research, `steps=${JSON.stringify(run.steps.map((s) => s.kind))}`).toBeTruthy();
     if (research?.kind !== "dispatch") throw new Error("research");
     expect(research.plugin_task).toBeUndefined();
-    expect(research.create_worker).toBeTruthy();
+    expect(research.create_worker).toBeUndefined();
+    expect(research.subagent?.harness).toBe("codex");
     expect(run.steps.some((s) => s.kind === "decide" && s.gate_id === "human:reconcile")).toBe(false);
     expect(run.state.cursor).toBe("report");
   });

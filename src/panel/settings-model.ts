@@ -265,7 +265,7 @@ export function renderRowHtml(row: SettingsRowView, taskType: TaskType, open = f
 /** All rows; on the all-tasks view the investigation-only rows sit under one divider. */
 export function renderRowsHtml(rows: readonly SettingsRowView[], taskType: TaskType, isOpen: (id: SettingsRowId) => boolean): string {
   const firstGrouped = taskType === "default" ? rows.find((r) => r.group === "investigation") : undefined;
-  return rows.map((row) => (row === firstGrouped ? `<div class="group">只用于调查任务</div>` : "") + renderRowHtml(row, taskType, isOpen(row.id))).join("");
+  return rows.map((row) => (row === firstGrouped ? `<div class="group">只用于调查任务 · 默认走主控子代理，失败时按这里开 worker</div>` : "") + renderRowHtml(row, taskType, isOpen(row.id))).join("");
 }
 
 export function renderProfileButtonHtml(p: { id: string; name: string; selected?: boolean; defaultOf?: Harness }): string {

@@ -158,7 +158,9 @@ const AFTER_RECOVER = "keel_report phase=recover";
 const CLAUDE_ALIAS = /(?:^|\/)claude-(haiku|sonnet)(?:-|$)/;
 /** Direction consult, final review, and adversarial interrogate stay on Orca even though they are read-only. */
 const NO_SUBAGENT = new Set([ASTRA_CONSULT_ID, "astra-final-review", "interrogate", "interrogate-architect"]);
-const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用 keel-node，model 显式传 subagent.model，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的该别名。";
+/** Explore and research always try the lead's own subagent first; the configured route is the Orca fallback. */
+const SUBAGENT_FIRST = new Set<string>(["explorer", "researcher"]);
+const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用 keel-node，有 subagent.model 就显式传，没有就不传，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的模型。";
 
 export function classifyRetry(errorMode: ErrorMode | undefined, consecutiveFailures: number): { decision: RetryDecision; note: string } {
   if (consecutiveFailures >= 2) return { decision: "human", note: "连续 2 次失败，放弃该节点" };
@@ -270,18 +272,24 @@ function pickRoute(
   return { stop: "全部路线不可用" };
 }
 
-/** Native-subagent model for a read-only one-shot node, or undefined when it must stay on Orca. */
-function subagentModel(state: GraphRunState, specNode: GraphNode, route: Route, manual: ModelManual): { model?: string } | undefined {
+/**
+ * Native-subagent model for a read-only one-shot node, or undefined when it must stay on Orca.
+ * `onLead` marks a subagent that runs on the lead's own model because the configured route cannot.
+ */
+function subagentModel(state: GraphRunState, specNode: GraphNode, route: Route, manual: ModelManual): { model?: string; onLead?: Route } | undefined {
   if (specNode.writes || specNode.role === "verifier" || NO_SUBAGENT.has(specNode.id)) return undefined;
-  if (route.agent !== state.lead_harness) return undefined;
   let lead: Route;
   try { lead = findProfile(manual, state.profile_id).lead; } catch { return undefined; }
-  if (route.agent === "claude-code") {
-    const alias = CLAUDE_ALIAS.exec(route.model)?.[1];
-    return alias ? { model: alias } : undefined;
+  const sameHarness = route.agent === state.lead_harness;
+  if (state.lead_harness === "claude-code") {
+    const alias = sameHarness ? CLAUDE_ALIAS.exec(route.model)?.[1] : undefined;
+    if (alias) return { model: alias };
+  } else if (state.lead_harness === "codex") {
+    if (sameHarness && route.model === lead.model) return {};
+  } else {
+    return undefined;
   }
-  if (route.agent === "codex") return route.model === lead.model ? {} : undefined;
-  return undefined;
+  return SUBAGENT_FIRST.has(specNode.role ?? "") ? { onLead: lead } : undefined;
 }
 
 function subagentEligible(state: GraphRunState, specNode: GraphNode, manual: ModelManual, models: readonly AgentModel[] | undefined, preferFallback: boolean): boolean {
@@ -298,30 +306,33 @@ function isSubagentChannel(node: NodeRunState | undefined): boolean {
   return node?.planned_params?.channel === "subagent";
 }
 
-function subagentDispatch(state: GraphRunState, specNode: GraphNode, node: NodeRunState, picked: { route: Route; note?: string }, alias: { model?: string }, leadProvider: string, now: number): Next {
+function subagentDispatch(state: GraphRunState, specNode: GraphNode, node: NodeRunState, picked: { route: Route; note?: string }, alias: { model?: string; onLead?: Route }, leadProvider: string, now: number): Next {
   const key = node.dispatch_key!;
   const params = node.planned_params!;
   const investigation = state.task_type === "investigation";
+  // A subagent that cannot run the configured route runs on the lead's own model; report that, not the route.
+  const ran = alias.onLead ?? picked.route;
   const subagent: SubagentParams = {
-    harness: picked.route.agent,
+    harness: state.lead_harness,
     role: params.role,
     working_dir: params.working_dir,
     task: params.initial_task,
-    route: { model: picked.route.model, provider_id: picked.route.provider_id },
-    ...(params.effort ? { effort: params.effort } : {}),
+    route: { model: ran.model, provider_id: ran.provider_id },
+    ...(!alias.onLead && params.effort ? { effort: params.effort } : {}),
     ...(alias.model ? { model: alias.model } : {}),
     ...(investigation ? {} : { report_path: reportPath({ id: specNode.id }, { run_id: state.run_id, goal: state.goal, worktree: state.worktree, taskType: state.task_type }, { attempt: node.attempts, dispatch_key: key }) }),
   };
-  const note = [picked.note, SUBAGENT_NOTE].filter(Boolean).join(" ");
+  const routeNote = alias.onLead ? `探索/研究先用主控自带 subagent（跑主控模型 ${alias.onLead.model}）；失败后改开 worker 跑 ${picked.route.model}。` : picked.note;
+  const note = [routeNote, SUBAGENT_NOTE].filter(Boolean).join(" ");
   const next: Next = { kind: "dispatch", dispatch_key: key, subagent, after: AFTER_FINAL, note };
   node.dispatch_state = "running";
   node.dispatch_state_at = now;
   node.started_at = now;
   node.actual_route = {
-    agent: picked.route.agent,
-    model: alias.model ?? picked.route.model,
+    agent: state.lead_harness,
+    model: alias.model ?? ran.model,
     provider_id: leadProvider,
-    ...(picked.route.effort ? { effort: picked.route.effort } : {}),
+    ...(ran.effort ? { effort: ran.effort } : {}),
   };
   state.status = "running";
   state.next = next;

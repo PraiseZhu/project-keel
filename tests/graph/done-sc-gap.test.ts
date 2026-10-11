@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { REVISE_TASK } from "../../src/main/graph/brief.ts";
 import { isChangeGraphDone } from "../../src/main/graph/done.ts";
 import { advance, createRun, workerLabel } from "../../src/main/graph/interpreter.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
@@ -176,6 +177,7 @@ describe("done gate SC missing evidence", () => {
     const task = revised.result.next.create_worker?.initial_task ?? "";
     expect(task).toContain(`done 门缺证据：SC-2。先读验证报告：${WT}/.keel/astra-final-review-1.md`);
     expect(task).toContain("先读这些已完成报告再动手");
+    expect(task).toContain(REVISE_TASK);
     expect(read(h, id).cursor).toBe("implement");
   });
 
@@ -233,6 +235,8 @@ describe("done gate SC missing evidence", () => {
     expect(task).toContain("先读这些已完成报告再动手");
     expect(task).toContain(`${WT}/.keel/astra-final-review-1.md`);
     expect(task).not.toContain(`${WT}/.keel/open-pr-1.md`);
+    expect(task).toContain(REVISE_TASK);
+    expect(task).not.toContain("PR 的 CI 失败了");
     expect(read(h, id).cursor).toBe("fix-ci");
   });
 

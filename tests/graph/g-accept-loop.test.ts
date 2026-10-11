@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
+import { REVISE_TASK } from "../../src/main/graph/brief.ts";
 import { advance, createRun, prOpenSections, scrubLocalPaths } from "../../src/main/graph/interpreter.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
@@ -72,6 +73,8 @@ describe("g-accept FAIL revises without Jev", () => {
     expect(r.next.dispatch_key).toBe("run-fail:implement:2");
     expect(r.next.create_worker?.initial_task).toContain("先读这些已完成报告再动手");
     expect(r.next.create_worker?.initial_task).toContain(`${WT}/.keel/astra-final-review-1.md`);
+    expect(r.next.create_worker?.initial_task).toContain(REVISE_TASK);
+    expect(r.next.create_worker?.initial_task).not.toContain("写一个在当前代码上失败的测试");
   });
 
   it("FAIL walks to fix-ci on the pr graph", async () => {
@@ -100,6 +103,63 @@ describe("g-accept FAIL revises without Jev", () => {
     expect(task).not.toContain(`${WT}/.keel/wait-ci-1.md`);
     expect(task).not.toContain(`${WT}/.keel/ci-rerun-once-1.md`);
     expect(task).not.toContain(`${WT}/.keel/report-ready-1.md`);
+    // fix-ci is the pr graph's revise target: a FAIL review must not be answered with the CI-only task.
+    expect(task).toContain(REVISE_TASK);
+    expect(task).not.toContain("PR 的 CI 失败了");
+  });
+
+  it("pr graph: a later CI-red entry into fix-ci gets the CI task even though the last review was FAIL", async () => {
+    const { h, spec } = await bootAccept("run-pr-cired", "pr", "FAIL");
+    await withRun(h, "run-pr-cired", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      // The revise round already succeeded; CI then went red and ci-rerun-once failed into fix-ci.
+      s.cursor = "fix-ci";
+      s.nodes["g-accept"] = { status: "succeeded", attempts: 1 };
+      s.nodes["fix-ci"] = {
+        status: "succeeded",
+        attempts: 1,
+        dispatch_state: "terminal",
+        report_path: `${WT}/.keel/fix-ci-1.md`,
+        last_report: { status: "done", summary: "按审查修了" },
+      };
+    });
+    const r = await advance(h, "run-pr-cired", { type: "tick" }, { spec });
+    expect(r.next.kind).toBe("dispatch");
+    if (r.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(r.next.dispatch_key).toBe("run-pr-cired:fix-ci:2");
+    const task = r.next.create_worker?.initial_task ?? "";
+    expect(task).toContain("PR 的 CI 失败了");
+    expect(task).not.toContain(REVISE_TASK);
+  });
+
+  it("a failed revise attempt keeps the revise task; the writer's success clears it", async () => {
+    const { h, spec } = await bootAccept("run-revise-retry", "bug-fix", "FAIL");
+    const first = await advance(h, "run-revise-retry", { type: "tick" }, { spec });
+    if (first.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(first.next.create_worker?.initial_task).toContain(REVISE_TASK);
+    await withRun(h, "run-revise-retry", (raw) => {
+      const s = raw as unknown as GraphRunState;
+      const n = s.nodes.implement!;
+      n.status = "failed";
+      n.dispatch_state = "terminal";
+      n.dispatch_key = undefined;
+      s.cursor = "implement";
+      s.next = undefined;
+      s.status = "running";
+    });
+    const retry = await advance(h, "run-revise-retry", { type: "tick" }, { spec });
+    if (retry.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(retry.next.dispatch_key).toBe("run-revise-retry:implement:3");
+    expect(retry.next.create_worker?.initial_task).toContain(REVISE_TASK);
+    const key = retry.next.dispatch_key;
+    await advance(h, "run-revise-retry", {
+      type: "report", phase: "accepted", dispatch_key: key, worker_id: "w", worker_session_id: "ws",
+      dispatch_outcome: { created: true, delivered: true },
+    }, { spec });
+    await advance(h, "run-revise-retry", { type: "report", phase: "final", dispatch_key: key, inline_report: { status: "done" } }, { spec });
+    const st = readState(h, "run-revise-retry");
+    expect(st.nodes.implement?.status).toBe("succeeded");
+    expect(st.nodes.implement?.revise_pending).toBeUndefined();
   });
 
   it("PASS and PASS+NOTES walk to report-ready", async () => {
@@ -238,7 +298,9 @@ describe("writing-node retry brief from interpreter", () => {
     expect(task).toContain("先读这些已完成报告再动手");
     expect(task).toContain(`${WT}/.keel/astra-final-review-1.md`);
     expect(task).toContain(`${WT}/.keel/implement-1.md`);
-    expect(task).toContain("这是退回修改");
+    // No revise edge was taken: a plain retry, even though a FAIL review report exists.
+    expect(task).toContain("这是第 2 次尝试");
+    expect(task).not.toContain(REVISE_TASK);
   });
 });
 

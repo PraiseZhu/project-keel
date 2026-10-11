@@ -127,6 +127,8 @@ export interface NodeRunState {
   team_id?: string;
   /** HEAD at the start of this write attempt; final scope uses git/changed-files base=start_sha. */
   start_sha?: string;
+  /** g-accept or the done gate sent this writer back; cleared when the writer succeeds. */
+  revise_pending?: boolean;
   writer_stopped?: boolean;
   pending_after_stop?: "retry" | "escalate" | "stop" | "fail";
   pending_fail_fingerprint?: string;

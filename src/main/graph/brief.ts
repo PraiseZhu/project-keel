@@ -33,7 +33,12 @@ export interface BriefCtx {
   readonly verify?: readonly string[];
   /** Completed-node .keel/ report paths for retry / revise dispatches. */
   readonly priorReports?: readonly string[];
+  /** The review or the done gate sent this writer back: TASK becomes the revise task. */
+  readonly returned?: boolean;
 }
+
+/** Writer TASK after a FAIL review or a done-gate revise, whichever writer node the graph returns to. */
+export const REVISE_TASK = "这是退回修改：先读 CONTEXT 里的报告（审查报告排在最前），只修其中确认成立的 P0/P1 和缺证据的 SC，已通过的部分不重做；要补测试就先补测试再改实现；改完跑相关测试和全量测试，然后提交。";
 
 function isInvestigation(node: BriefNode, run: BriefRun): boolean {
   return node.inline_report === true || run.taskType === "investigation";
@@ -72,7 +77,7 @@ export function nodeTask(node: BriefNode, run: BriefRun): string {
         "2) 对 ACCEPTANCE 每条亲自验证，sc_evidence 只给本次验证通过的；",
         "3) 跑测试，ran 里要有测试运行器本身的命令；",
         type === "bug-fix"
-          ? "4) 用 git log 确认失败测试先于修复提交，且该测试在修复前确实失败；"
+          ? "4) 用 git log 确认失败测试（test:）先于修复（fix:）提交；要复跑修复前的测试，只能用 git worktree add 检出到系统临时目录里跑，跑完 git worktree remove，不要在当前工作树 checkout、reset、stash 或改文件；"
           : type === "refactoring"
             ? "4) 判断改动是否降低了阅读负担，没有就判 FAIL；"
             : "4) 设计有明显更简单的做法时写进 findings；",
@@ -120,7 +125,7 @@ export function buildBrief(node: BriefNode, run: BriefRun, ctx: BriefCtx): strin
   ].filter(Boolean).join("。");
   return [
     pad("GOAL", run.goal.trim()),
-    pad("TASK", nodeTask(node, run)),
+    pad("TASK", ctx.returned && node.writes ? REVISE_TASK : nodeTask(node, run)),
     pad("SCOPE", scope),
     pad("CONTEXT", ctxLines),
     pad("ACCEPTANCE", acceptance),

@@ -38,7 +38,7 @@ export async function resolveGraphTask(ctx: ToolContext, input: {
   const evidence: Evidence = { task: input.goal, goal: input.goal, ...(input.playbook ? { playbook: input.playbook } : {}) };
   const decision = await runGate(ctx, "G-route", evidence, {
     run_id: input.run_id,
-    direction_gate: input.profile.direction_gate === "astra" ? "astra" : "lead",
+    direction_gate: "lead",
   });
   if (decision.routed === "act" && isGraphTaskType(decision.value)) return { taskType: decision.value };
   const options = [...GATES["G-route"].options(evidence)];

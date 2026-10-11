@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_FORBIDDEN, buildBrief } from "../../src/main/graph/brief.ts";
+import { BRIEF_FORBIDDEN, buildBrief, REVISE_TASK } from "../../src/main/graph/brief.ts";
 
 const node = { id: "implement", role: "worker" as const, writes: true, timebox_min: 45 };
 const run = {
@@ -107,5 +107,74 @@ describe("writing node brief", () => {
     expect(first).toContain(reports[0]);
     const plain = buildBrief(node, run, { ...ctx, attempt: 1, dispatch_key: "run-1:implement:1" });
     expect(plain).not.toContain("先读这些已完成报告再动手");
+  });
+});
+
+describe("node task line", () => {
+  const base = { run_id: "run-1", goal: "修好登录空指针", worktree: "/w" };
+  const ctx1 = { attempt: 1, dispatch_key: "run-1:x:1" };
+
+  it("bug-fix writer does failing test, root cause, minimal fix, tests in one session", () => {
+    const text = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, ctx1);
+    const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
+    expect(task).toContain("失败的测试");
+    expect(task).toContain("单独提交");
+    expect(task).toContain("根因");
+    expect(task).toContain("最小修复");
+    expect(text.indexOf("TASK")).toBeGreaterThan(text.indexOf("GOAL"));
+    expect(text.indexOf("TASK")).toBeLessThan(text.indexOf("SCOPE"));
+  });
+
+  it("feature writer follows the plan; refactoring writer pins behavior first", () => {
+    const feature = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "feature" }, ctx1);
+    expect(feature).toContain("方案报告");
+    const refactor = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "refactoring" }, ctx1);
+    expect(refactor).toContain("钉住现有行为的测试");
+  });
+
+  it("the review is read-only, runs tests, and maps confirmed P0/P1 to FAIL", () => {
+    const text = buildBrief({ id: "astra-final-review", role: "verifier", writes: false }, { ...base, taskType: "bug-fix" }, ctx1);
+    expect(text).toContain("非作者审查者");
+    expect(text).toContain("P0/P1");
+    expect(text).toContain("verdict 写 FAIL");
+    expect(text).toContain("测试运行器本身的命令");
+    expect(text).toContain("先于修复（fix:）提交");
+    expect(text).toContain("只读：不得修改任何文件");
+  });
+
+  it("the bug-fix review reruns the pre-fix test only in a temporary worktree", () => {
+    const text = buildBrief({ id: "astra-final-review", role: "verifier", writes: false }, { ...base, taskType: "bug-fix" }, ctx1);
+    const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
+    expect(task).toContain("git worktree add");
+    expect(task).toContain("不要在当前工作树 checkout、reset、stash 或改文件");
+  });
+
+  it("a returned writer gets the revise task whichever node it is; read-only nodes keep their own", () => {
+    for (const id of ["implement", "fix-ci"]) {
+      const text = buildBrief({ id, role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, { ...ctx1, returned: true });
+      const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
+      expect(task).toContain(REVISE_TASK);
+      expect(task).not.toContain("PR 的 CI 失败了");
+      expect(task).not.toContain("写一个在当前代码上失败的测试");
+    }
+    const review = buildBrief({ id: "astra-final-review", role: "verifier", writes: false }, { ...base, taskType: "bug-fix" }, { ...ctx1, returned: true });
+    expect(review).toContain("非作者审查者");
+    expect(review).not.toContain(REVISE_TASK);
+  });
+
+  it("falls back to the repo's own test command when no SC has verify", () => {
+    const text = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, ctx1);
+    expect(text).toMatch(/VERIFY\s+没有指定时用仓库自带的测试命令/);
+  });
+});
+
+describe("VERIFY line", () => {
+  it("lists a shared verify command once", () => {
+    const text = buildBrief(
+      { id: "implement", role: "worker", writes: true },
+      { run_id: "run-1", goal: "g", worktree: "/w", taskType: "bug-fix", sc: [{ id: "SC-1", text: "a", verify: "npm test" }, { id: "SC-2", text: "b", verify: "npm test" }] },
+      { attempt: 1, dispatch_key: "run-1:implement:1" },
+    );
+    expect(text).toMatch(/^VERIFY\s+npm test$/m);
   });
 });

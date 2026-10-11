@@ -88,11 +88,11 @@ describe("pstack graph compile", () => {
       expect(spec.edges.some((e) => e.from === "triage-threads" && e.to === "wait-ci" && e.on === "ok"), id).toBe(false);
       const open = spec.nodes.find((n) => n.id === "open-pr");
       const wait = spec.nodes.find((n) => n.id === "wait-ci");
-      const verify = spec.nodes.find((n) => n.id === "verify-head");
+      const review = spec.nodes.find((n) => n.id === "astra-final-review");
       const report = spec.nodes.find((n) => n.id === "report-ready");
       expect(open?.max_attempts, id).toBe(wait?.max_attempts);
       expect(open?.max_attempts, id).toBe(8);
-      expect(report?.max_attempts, id).toBe(verify?.max_attempts);
+      expect(report?.max_attempts, id).toBe(review?.max_attempts);
       expect(report?.max_attempts, id).toBe(3);
       for (const e of spec.edges) {
         if (e.to === "wait-ci" && e.on === "ok") {
@@ -108,29 +108,51 @@ describe("pstack graph compile", () => {
     expect(spec.entry).toBe("open-pr");
     expect(spec.covers).toEqual(["opening-a-pr", "babysit", "shipping", "autonomous-run"]);
     const ids = spec.nodes.map((n) => n.id);
-    expect(ids).toEqual(expect.arrayContaining(["open-pr", "wait-ci", "ci-rerun-once", "astra-unstick", "astra-final-review", "verify-head", "report-ready", "done"]));
-    expect(ids).not.toEqual(expect.arrayContaining(["reproduce", "implement", "architect-plan", "explore", "pin-test", "arena"]));
+    expect(ids).toEqual(expect.arrayContaining(["open-pr", "wait-ci", "ci-rerun-once", "astra-unstick", "astra-final-review", "report-ready", "done"]));
+    for (const gone of ["verify-head", "implement", "architect-plan", "explore", "arena"]) expect(ids, gone).not.toContain(gone);
     expect(validateGraph(spec, expectedStepsFor(spec, playbooks).steps)).toEqual([]);
   });
 
-  it("Astra three checkpoints exist with the right conditions", () => {
+  it("change graphs are one writer, then PR/CI, then one non-author review", () => {
     const bug = graphForTask("bug-fix");
     const feature = graphForTask("feature");
     const refactoring = graphForTask("refactoring");
     const investigation = graphForTask("investigation");
     const pr = graphForTask("pr");
+    const has = (spec: GraphSpec, from: string, to: string, on: string) => spec.edges.some((e) => e.from === from && e.to === to && e.on === on);
 
-    expect(bug.nodes.find((n) => n.id === "architect-plan")?.when).toEqual({ kind: "crosses_function_boundary" });
+    expect(bug.entry).toBe("implement");
+    expect(refactoring.entry).toBe("implement");
+    expect(feature.entry).toBe("architect-plan");
     expect(feature.nodes.find((n) => n.id === "architect-plan")?.when).toEqual({ kind: "always" });
-    expect(refactoring.nodes.find((n) => n.id === "architect-plan")?.when).toEqual({ kind: "crosses_function_boundary" });
-    expect(investigation.nodes.some((n) => n.id === "architect-plan" || n.role === "architect")).toBe(false);
+    expect(has(feature, "architect-plan", "implement", "ok")).toBe(true);
+    expect(has(feature, "architect-plan", "g-retry-plan", "fail")).toBe(true);
+    expect(bug.nodes.some((n) => n.id === "architect-plan")).toBe(false);
+    expect(refactoring.nodes.some((n) => n.id === "architect-plan")).toBe(false);
+
+    for (const spec of [bug, feature, refactoring]) {
+      const dispatches = spec.nodes.filter((n) => n.kind === "dispatch").map((n) => n.id).sort();
+      const expected = ["astra-final-review", "astra-unstick", "fix-ci", "implement", "triage-threads", ...(spec.id === "feature" ? ["architect-plan"] : [])].sort();
+      expect(dispatches, spec.id).toEqual(expected);
+      expect(spec.nodes.filter((n) => n.writes).map((n) => n.id).sort(), spec.id).toEqual(["fix-ci", "implement", "triage-threads"]);
+      expect(has(spec, "implement", "open-pr", "ok"), spec.id).toBe(true);
+    }
 
     for (const spec of [bug, feature, refactoring, pr]) {
       const unstick = spec.nodes.find((n) => n.id === "astra-unstick");
       expect(unstick?.role, spec.id).toBe("architect");
       expect(unstick?.when, spec.id).toEqual({ kind: "fingerprint_repeat", times: 2 });
       expect(spec.edges.some((e) => e.on === "fingerprint_repeat" && e.to === "astra-unstick"), spec.id).toBe(true);
-      expect(spec.nodes.some((n) => n.id === "astra-final-review" && n.role === "architect"), spec.id).toBe(true);
+      const review = spec.nodes.find((n) => n.id === "astra-final-review");
+      expect(review?.role, spec.id).toBe("verifier");
+      expect(review?.writes, spec.id).toBe(false);
+      expect(review?.max_attempts, spec.id).toBe(3);
+      expect(spec.nodes.some((n) => n.id === "verify-head"), spec.id).toBe(false);
+      expect(has(spec, "wait-ci", "astra-final-review", "ok"), spec.id).toBe(true);
+      expect(has(spec, "astra-final-review", "g-accept", "ok"), spec.id).toBe(true);
+      expect(has(spec, "astra-final-review", "g-retry-review", "fail"), spec.id).toBe(true);
+      expect(has(spec, "g-accept", "report-ready", "gate:adopt"), spec.id).toBe(true);
+      expect(has(spec, "g-accept", spec.id === "pr" ? "fix-ci" : "implement", "gate:revise"), spec.id).toBe(true);
     }
     expect(investigation.nodes.some((n) => n.id === "astra-unstick" || n.id === "astra-final-review")).toBe(false);
   });

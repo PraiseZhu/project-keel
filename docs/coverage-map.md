@@ -92,9 +92,9 @@ UNMAPPED=0
 | playbook | `skills/poteto-mode/playbooks/autopilot-full.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/autopilot-full.md` | P3 | owner 停在 merge-ready，由用户在 GitHub 合并；一 PR 一 owner 走 Orca |
 | playbook | `skills/poteto-mode/playbooks/autopilot-stack.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/autopilot-stack.md` | P3 | 同上，栈底向上由用户在 GitHub 落地 |
 | playbook | `skills/poteto-mode/playbooks/babysit.md` | C | `plugin/manual/pstack/skills/poteto-mode/playbooks/babysit.md`<br>`src/main/tools/pr.ts`<br>`src/shared/graph/pstack.ts` | P1 | watch-pr 移植进 Node；按车道停：交接车道交给自动化盯梢 即停手；永不合并；Bugbot/Greptile/🤖自动Review 用 Jev J5+J4 分诊 |
-| playbook | `skills/poteto-mode/playbooks/bug-fix.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/bug-fix.md`<br>`src/shared/graph/pstack.ts` | P1 | control 面换成 Cindy 浏览器/桌面/iOS 工具；/loop 换成会话内循环 + pr_wait |
+| playbook | `skills/poteto-mode/playbooks/bug-fix.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/bug-fix.md`<br>`src/shared/graph/pstack.ts` | P1 | control 面换成 Cindy 浏览器/桌面/iOS 工具；/loop 换成会话内循环 + pr_wait；复现、定位、修复由一个写手会话完成，非作者审查在 PR 上复核 |
 | playbook | `skills/poteto-mode/playbooks/eval.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/eval.md` | P3 | 评测回放走 Orca 车道 |
-| playbook | `skills/poteto-mode/playbooks/feature.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/feature.md`<br>`src/shared/graph/pstack.ts` | P1 | “多种合理形态时必走 arena”保留，是否多形态由 Jev J10 判定，可被用户点名覆盖；arena 本身 P2 上线前降级为单候选并明示 |
+| playbook | `skills/poteto-mode/playbooks/feature.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/feature.md`<br>`src/shared/graph/pstack.ts` | P1 | 图内为方案 → 写手 → 非作者审查；arena / interrogate 不进图，需要并行候选或质询时由用户点名 `fanout` |
 | playbook | `skills/poteto-mode/playbooks/hillclimb.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/hillclimb.md` | P3 | /loop 换成 autonomous-run 循环 + 台账 |
 | playbook | `skills/poteto-mode/playbooks/investigation.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/investigation.md`<br>`src/shared/graph/pstack.ts` | P1 |  |
 | playbook | `skills/poteto-mode/playbooks/multi-phase-plan.md` | C | `plugin/manual/pstack/skills/poteto-mode/playbooks/multi-phase-plan.md`<br>`src/node/plan/check-plan.ts` | P3 | check-plan.mjs 移植；计划文件落 ~/AI-Agent/Codex/plans/ 或目标仓 docs/ |
@@ -103,10 +103,10 @@ UNMAPPED=0
 | playbook | `skills/poteto-mode/playbooks/pause-safely.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/pause-safely.md` | P1 | resume note 写插件 data 目录；不 push 新东西 |
 | playbook | `skills/poteto-mode/playbooks/perf-issue.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/perf-issue.md` | P3 |  |
 | playbook | `skills/poteto-mode/playbooks/prototype.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/prototype.md` | P1 |  |
-| playbook | `skills/poteto-mode/playbooks/refactoring.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/refactoring.md`<br>`src/shared/graph/pstack.ts` | P1 |  |
+| playbook | `skills/poteto-mode/playbooks/refactoring.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/refactoring.md`<br>`src/shared/graph/pstack.ts` | P1 | 钉住测试、重构、等价验证由一个写手会话完成；“是否值得保留”由非作者审查判断 |
 | playbook | `skills/poteto-mode/playbooks/runtime-forensics.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/runtime-forensics.md` | P3 |  |
 | playbook | `skills/poteto-mode/playbooks/session-pickup.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/session-pickup.md` | P1 | 来源换成插件台账 + Cindy 历史检索 |
-| playbook | `skills/poteto-mode/playbooks/shipping.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/shipping.md`<br>`src/shared/graph/pstack.ts` | P2 | 独立验证车道保留；落地改为报告可合并的验证 ceiling，由用户在 GitHub 合并（插件无合并能力）；patch-id 规则保留 |
+| playbook | `skills/poteto-mode/playbooks/shipping.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/shipping.md`<br>`src/shared/graph/pstack.ts` | P2 | 独立验证并入非作者审查节点（astra-final-review）；落地改为报告可合并的验证 ceiling，由用户在 GitHub 合并（插件无合并能力）；patch-id 规则保留 |
 | playbook | `skills/poteto-mode/playbooks/trace-forensics.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/trace-forensics.md` | P3 |  |
 | playbook | `skills/poteto-mode/playbooks/visual-parity.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/visual-parity.md` | P3 | control-ui 换成 Cindy 浏览器截图 |
 | playbook | `skills/poteto-mode/playbooks/worktree-cleanup.md` | C | `plugin/manual/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md`<br>`src/node/git/worktree.ts` | P1 | worktree-audit 移植；只删干净且已合并的，含改动或在用一律停；删除前 confirm |

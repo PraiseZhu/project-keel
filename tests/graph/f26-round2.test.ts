@@ -40,7 +40,8 @@ async function plantVerifier(h: ReturnType<typeof fakeHost>, headSha: string, ex
     goal: "修登录报错", repo_dir: "/repo", lead: "codex", scope: ["src/**"],
   });
   const runId = started.result.run_id as string;
-  const key = `${runId}:verify-same-surface:1`;
+  // astra-final-review is the only verifier (role keel-verifier) in change graphs.
+  const key = `${runId}:astra-final-review:1`;
   await withRun(h, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
     s.pr = 12;
@@ -49,7 +50,7 @@ async function plantVerifier(h: ReturnType<typeof fakeHost>, headSha: string, ex
     s.worktree = "/repo/.worktrees/x";
     s.pr_binding = { repo: "o/r", number: 12, base_ref: "main", base_sha: OLD_BASE, head_sha: headSha };
     Object.assign(s, extra);
-    s.nodes["verify-same-surface"] = {
+    s.nodes["astra-final-review"] = {
       status: "active",
       attempts: 1,
       dispatch_key: key,
@@ -89,7 +90,7 @@ describe("F26-01 late report vs current PR head", () => {
     });
     const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
     expect(st.verdict).toBeUndefined();
-    expect(st.nodes["verify-same-surface"]?.last_report?.head_matches).toBe(false);
+    expect(st.nodes["astra-final-review"]?.last_report?.head_matches).toBe(false);
   });
 
   it("retarget re-verify uses computed base_sha", async () => {
@@ -148,7 +149,7 @@ describe("F26-02 investigation create_worker.working_dir", () => {
 });
 
 describe("F26-04 retry_verify does not succeed the node", () => {
-  it("human:verify-head + retry_verify re-dispatches instead of walking to report-ready", async () => {
+  it("human:astra-final-review + retry_verify re-dispatches instead of walking to report-ready", async () => {
     const h = fakeHost({
       node: (method: string) => {
         if (method === "git/changed-files") return { ok: true, result: { files: [] } };
@@ -160,29 +161,29 @@ describe("F26-04 retry_verify does not succeed the node", () => {
     const spec = PSTACK_GRAPHS["bug-fix"];
     await createRun(h, {
       run_id: "run-rv", spec_id: spec.id, profile_id: "sol", lead_harness: "codex",
-      task_type: "bug-fix", entry: "verify-head", goal: "修登录报错",
+      task_type: "bug-fix", entry: "astra-final-review", goal: "修登录报错",
       worktree: "/repo/.worktrees/x", now: h.now(),
     });
     await withRun(h, "run-rv", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.status = "waiting_human";
-      s.cursor = "verify-head";
+      s.cursor = "astra-final-review";
       s.team = { ready: true, team_id: "t1" };
-      s.next = { kind: "decide", gate_id: "human:verify-head", question: "验证未通过", options: ["retry_verify", "stop"] };
-      s.nodes["verify-head"] = { status: "failed", attempts: 1 };
+      s.next = { kind: "decide", gate_id: "human:astra-final-review", question: "验证未通过", options: ["retry_verify", "stop"] };
+      s.nodes["astra-final-review"] = { status: "failed", attempts: 1 };
     });
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_gate", {
-      run_id: "run-rv", gate_id: "human:verify-head", answer: "retry_verify",
+      run_id: "run-rv", gate_id: "human:astra-final-review", answer: "retry_verify",
     });
-    expect(r.ok).toBe(true);
+    expect(r.ok, r.message).toBe(true);
     expect(r.result.next.kind).toBe("dispatch");
-    expect(r.result.next.dispatch_key).toMatch(/verify-head/);
-    expect(JSON.parse(h.files.get(graphStatePath("run-rv"))!).cursor).toBe("verify-head");
+    expect(r.result.next.dispatch_key).toBe("run-rv:astra-final-review:2");
+    expect(JSON.parse(h.files.get(graphStatePath("run-rv"))!).cursor).toBe("astra-final-review");
   });
 });
 
 describe("F26-05 keel_wait does not complete a running verifier", () => {
-  it("verify-head still running stays active after keel_wait", async () => {
+  it("astra-final-review still running stays active after keel_wait", async () => {
     const h = fakeHost({
       node: (method: string) => {
         if (method === "git/changed-files") return { ok: true, result: { files: [] } };
@@ -194,15 +195,15 @@ describe("F26-05 keel_wait does not complete a running verifier", () => {
     const spec = PSTACK_GRAPHS["bug-fix"];
     await createRun(h, {
       run_id: "run-vh", spec_id: spec.id, profile_id: "sol", lead_harness: "codex",
-      task_type: "bug-fix", entry: "verify-head", goal: "修登录报错",
+      task_type: "bug-fix", entry: "astra-final-review", goal: "修登录报错",
       worktree: "/repo/.worktrees/x", now: h.now(),
     });
     await withRun(h, "run-vh", (raw) => {
       const s = raw as unknown as GraphRunState;
-      s.cursor = "verify-head";
+      s.cursor = "astra-final-review";
       s.team = { ready: true, team_id: "t1" };
-      s.nodes["verify-head"] = {
-        status: "active", attempts: 1, dispatch_key: "run-vh:verify-head:1", dispatch_state: "running",
+      s.nodes["astra-final-review"] = {
+        status: "active", attempts: 1, dispatch_key: "run-vh:astra-final-review:1", dispatch_state: "running",
         planned_params: {
           label: "keel-ver", role: "keel-verifier", agent: "pi", model: "gpt-6-astra",
           provider_id: "art-cindy", initial_task: "v", writes: false, fallbacks: [], route_index: 0,
@@ -212,8 +213,8 @@ describe("F26-05 keel_wait does not complete a running verifier", () => {
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_wait", { run_id: "run-vh" });
     expect(r.ok).toBe(true);
     const st = JSON.parse(h.files.get(graphStatePath("run-vh"))!) as GraphRunState;
-    expect(st.nodes["verify-head"]?.status).not.toBe("succeeded");
-    expect(st.nodes["verify-head"]?.dispatch_state).toBe("running");
+    expect(st.nodes["astra-final-review"]?.status).not.toBe("succeeded");
+    expect(st.nodes["astra-final-review"]?.dispatch_state).toBe("running");
   });
 });
 

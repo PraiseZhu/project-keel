@@ -327,7 +327,7 @@ describe("F26-04 keel_gate consumes the current decide", () => {
     expect(adopt.result.next.kind).not.toBe("decide");
     const st = JSON.parse(h.files.get(graphStatePath("run-gate"))!) as GraphRunState;
     expect(st.status).not.toBe("await_sol");
-    expect(st.cursor).toBe("verify-head");
+    expect(st.cursor).toBe("report-ready");
 
     const h2 = fakeHost();
     await createRun(h2, {
@@ -475,8 +475,9 @@ describe("keel_wait hands back a pending non-wait next (real run: setup after re
 describe("worker sessions cannot drive the run (real run: explorer called keel_report)", () => {
   it("rejects keel_report / keel_wait / keel_gate from a recorded worker session", async () => {
     const h = fakeHost({ node: () => ({ ok: false, message: "unused" }) });
-    const spec = PSTACK_GRAPHS["bug-fix"];
-    await createRun(h, { run_id: "run-wk", spec_id: spec.id, profile_id: "sol", lead_harness: "codex", task_type: "bug-fix", entry: "implement", goal: "g", worktree: "/repo/.worktrees/x", now: h.now() });
+    // explore / research only exist in the investigation graph now.
+    const spec = PSTACK_GRAPHS.investigation;
+    await createRun(h, { run_id: "run-wk", spec_id: spec.id, profile_id: "sol", lead_harness: "codex", task_type: "investigation", entry: "explore", goal: "g", invocation_dir: "/repo", now: h.now() });
     await withRun(h, "run-wk", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.nodes["explore"] = { status: "succeeded", attempts: 1, dispatch_key: "run-wk:explore:1", dispatch_state: "terminal", worker_id: "w1", worker_session_id: "sess-worker" } as never;

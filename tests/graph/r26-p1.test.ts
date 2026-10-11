@@ -128,7 +128,7 @@ describe("R26-02 late attempt must not write ledger or commit status", () => {
     });
     await createRun(host, {
       run_id: "late-verifier", spec_id: "bug-fix", task_type: "bug-fix", profile_id: "sol",
-      lead_harness: "codex", entry: "verify-head", goal: "修复", worktree: "/repo/.worktrees/test",
+      lead_harness: "codex", entry: "astra-final-review", goal: "修复", worktree: "/repo/.worktrees/test",
       pr: 1, repo: "o/r", gh_repo: "o/r", now: host.now(),
     });
     await withRun(host, "late-verifier", (raw) => {
@@ -141,8 +141,8 @@ describe("R26-02 late attempt must not write ledger or commit status", () => {
         head: HEAD, base_sha: BASE, patch_id: "patch", level: "verifier-failed",
         by_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" }, by_family: "gpt",
       };
-      s.nodes["verify-head"] = {
-        status: "failed", attempts: 2, dispatch_key: "late-verifier:verify-head:2",
+      s.nodes["astra-final-review"] = {
+        status: "failed", attempts: 2, dispatch_key: "late-verifier:astra-final-review:2",
         dispatch_state: "terminal", started_at: host.now(), dispatch_state_at: host.now(),
         planned_params: {
           label: "ver2", role: "keel-verifier", agent: "codex", model: "gpt-6-luna",
@@ -155,7 +155,7 @@ describe("R26-02 late attempt must not write ledger or commit status", () => {
     const result: any = await runTool(ctx, "keel_report", {
       run_id: "late-verifier",
       phase: "final",
-      dispatch_key: "late-verifier:verify-head:1",
+      dispatch_key: "late-verifier:astra-final-review:1",
       inline_report: {
         status: "done", summary: "old attempt PASS", head_sha: HEAD, verdict: "PASS",
         files_changed: [], ran: [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 1 }],
@@ -287,7 +287,7 @@ describe("R26-R06 late final cannot overwrite hard gate after concurrent retry",
     });
     await createRun(host, {
       run_id: "race-verifier", spec_id: "bug-fix", task_type: "bug-fix", profile_id: "sol",
-      lead_harness: "codex", entry: "verify-head", goal: "修复", worktree: "/repo/wt", pr: 1, repo: "o/r", now: host.now(),
+      lead_harness: "codex", entry: "astra-final-review", goal: "修复", worktree: "/repo/wt", pr: 1, repo: "o/r", now: host.now(),
     });
     await withRun(host, "race-verifier", (raw) => {
       const s = raw as unknown as GraphRunState;
@@ -295,8 +295,8 @@ describe("R26-R06 late final cannot overwrite hard gate after concurrent retry",
       s.next = { kind: "wait", call: { tool: "keel_wait", args: { run_id: "race-verifier" } } };
       s.team = { ready: true, team_id: "t1" };
       s.author_families = ["grok"];
-      s.nodes["verify-head"] = {
-        status: "active", attempts: 1, dispatch_key: "race-verifier:verify-head:1", dispatch_state: "running",
+      s.nodes["astra-final-review"] = {
+        status: "active", attempts: 1, dispatch_key: "race-verifier:astra-final-review:1", dispatch_state: "running",
         started_at: host.now() - 40 * 60_000 + 1000, dispatch_state_at: host.now() - 40 * 60_000 + 1000,
         worker_id: "w1", worker_label: "ver1", team_id: "t1",
         planned_params: {
@@ -308,7 +308,7 @@ describe("R26-R06 late final cannot overwrite hard gate after concurrent retry",
     });
     const ctx = { ...EMPTY_PROFILE, lanes: [{ repo: "o/r", preset: "personal" as const, verifyCheck: "keel/verifier" }] };
     const pending = runTool(makeContext(host, "race", ctx), "keel_report", {
-      run_id: "race-verifier", phase: "final", dispatch_key: "race-verifier:verify-head:1",
+      run_id: "race-verifier", phase: "final", dispatch_key: "race-verifier:astra-final-review:1",
       inline_report: { status: "done", summary: "old", verdict: "PASS", head_sha: HEAD, ran: [{ cmd: "npx vitest run", exit_code: 0, tests_passed: 1 }] },
     });
     await atBase;
@@ -316,17 +316,17 @@ describe("R26-R06 late final cannot overwrite hard gate after concurrent retry",
     const opts = { gates: { retry: () => "retry" as const } };
     const timed = await advance(host, "race-verifier", { type: "tick" }, opts);
     expect(timed.next).toMatchObject({ kind: "recover", action: "diagnose" });
-    await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:verify-head:1", action: "diagnose", action_result: { running: true } }, opts);
-    await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:verify-head:1", action: "archive", action_result: { ok: true } }, opts);
-    const retry = await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:verify-head:1", action: "verify_stopped", action_result: { ok: true, complete: true, team_id: "t1", workers: [] } }, opts);
-    expect(retry.next).toMatchObject({ kind: "dispatch", dispatch_key: "race-verifier:verify-head:2" });
+    await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:astra-final-review:1", action: "diagnose", action_result: { running: true } }, opts);
+    await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:astra-final-review:1", action: "archive", action_result: { ok: true } }, opts);
+    const retry = await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:astra-final-review:1", action: "verify_stopped", action_result: { ok: true, complete: true, team_id: "t1", workers: [] } }, opts);
+    expect(retry.next).toMatchObject({ kind: "dispatch", dispatch_key: "race-verifier:astra-final-review:2" });
     const accepted: any = await runTool(makeContext(host, "new-accepted"), "keel_report", {
-      run_id: "race-verifier", phase: "accepted", dispatch_key: "race-verifier:verify-head:2",
+      run_id: "race-verifier", phase: "accepted", dispatch_key: "race-verifier:astra-final-review:2",
       worker_id: "w2", worker_session_id: "ws2", dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
     });
     expect(accepted.ok).toBe(true);
     await runTool(makeContext(host, "new-final", ctx), "keel_report", {
-      run_id: "race-verifier", phase: "final", dispatch_key: "race-verifier:verify-head:2",
+      run_id: "race-verifier", phase: "final", dispatch_key: "race-verifier:astra-final-review:2",
       inline_report: { status: "failed", summary: "new attempt failed", verdict: "FAIL", head_sha: HEAD, ran: [{ cmd: "npx vitest run", exit_code: 1, tests_passed: 0 }] },
     });
     release();

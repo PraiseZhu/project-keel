@@ -272,5 +272,20 @@ describe("settings.html structure", () => {
     expect(html).not.toContain("5×6");
     expect(html).toContain("方案管理 · 导入导出 ›");
     expect(html).not.toContain("模型档次表");
+    // Status ids the script paints: one dot + one problem text per item.
+    for (const id of ["jev", "catalog", "hooks", "clock"]) {
+      expect(html).toContain(`id="status-${id}-dot"`);
+      expect(html).toContain(`id="status-${id}-value"`);
+    }
+  });
+
+  it("drops the static explanations the page used to repeat", () => {
+    const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../plugin/settings.html"), "utf8");
+    for (const gone of ["每个下拉框打开时", "改完点保存", "读取中", "<h2>", 'id="reply-confirm"', "前往 Typesafe 控制台"]) {
+      expect(html).not.toContain(gone);
+    }
+    // Save starts disabled; the script enables it only while there are unsaved edits.
+    expect(html).toMatch(/data-act="save" disabled/);
+    expect(html).not.toMatch(/class="bar"[\s\S]*data-act="restore"[\s\S]*<\/section>/);
   });
 });

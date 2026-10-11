@@ -356,20 +356,20 @@ function completedKeelReports(state: GraphRunState, spec: GraphSpec): string[] {
   return [...new Set(items.map((x) => x.path))];
 }
 
-function isReturnedWriter(state: GraphRunState, node: GraphNode): boolean {
-  if (!node.writes) return false;
-  if (node.id === "fix-ci" || node.id === "triage-threads") return true;
-  if (state.nodes["g-accept"]?.status === "succeeded") return true;
-  if (state.nodes["astra-final-review"]?.last_report?.verdict === "FAIL") return true;
-  if (state.facts?.done_revise?.missing_sc?.length) return true;
-  return false;
+/** g-accept revise or done-gate revise: the writer's next attempts get the revise TASK until one succeeds. */
+function markRevise(state: GraphRunState, spec: GraphSpec, to: string): void {
+  if (spec.nodes.find((n) => n.id === to)?.writes) ensureNode(state, to).revise_pending = true;
 }
 
 function brief(state: GraphRunState, spec: GraphSpec, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
-  const attachPrior = node.writes && (attempt >= 2 || isReturnedWriter(state, node));
+  // Writers always see finished reports (a feature writer needs the plan); unstick reads why earlier attempts failed.
+  const attachPrior = node.writes || node.id === "astra-unstick";
   const priorReports = attachPrior ? completedKeelReports(state, spec) : undefined;
   const revise = node.writes ? state.facts?.done_revise : undefined;
+  // Set only by the revise edges, so a CI-red entry into the same writer (pr graph fix-ci) keeps its own TASK.
+  const returned = node.writes && state.nodes[node.id]?.revise_pending === true;
   const contextBits = [
+    !returned && node.writes && attempt >= 2 ? `这是第 ${attempt} 次尝试：先读下面的报告，不要重复上一轮的失败` : "",
     revise?.missing_sc?.length
       ? `done 门缺证据：${revise.missing_sc.join("、")}${revise.verify_report ? `。先读验证报告：${revise.verify_report}` : ""}`
       : "",
@@ -384,6 +384,7 @@ function brief(state: GraphRunState, spec: GraphSpec, node: GraphNode, dispatchK
       ...(state.scopeAllow ? { scopeAllow: state.scopeAllow } : {}),
       ...(priorReports?.length ? { priorReports } : {}),
       ...(contextBits.length ? { context: contextBits.join("。") } : {}),
+      ...(returned ? { returned: true } : {}),
     },
   );
 }
@@ -756,6 +757,7 @@ function succeed(state: GraphRunState, spec: GraphSpec, nodeId: string, now: num
   node.status = "succeeded";
   node.dispatch_state = "terminal";
   node.ended_at = now;
+  delete node.revise_pending;
   const to = edgeOn(spec, nodeId, on) ?? edgeOn(spec, nodeId, "ok");
   if (to) state.cursor = to;
 }
@@ -1265,13 +1267,14 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
         return;
       }
       const scIds = scIdsFromMissing(missing);
-      const verify = state.nodes["verify-head"]?.report_path ?? state.nodes["astra-final-review"]?.report_path;
+      const verify = state.nodes["astra-final-review"]?.report_path;
       if (!state.facts) state.facts = {};
       state.facts.done_revise = { missing_sc: scIds, ...(verify ? { verify_report: verify } : {}) };
       const node = ensureNode(state, to);
       node.status = "pending";
       node.dispatch_state = undefined;
       node.dispatch_key = undefined;
+      markRevise(state, spec, to);
       const review = state.nodes["astra-final-review"];
       if (review) {
         review.attempt_floor = review.attempts;
@@ -1333,6 +1336,7 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
     const node = ensureNode(state, gid);
     node.status = "succeeded";
     node.ended_at = now;
+    if (gid.startsWith("g-accept") && answer === "revise") markRevise(state, spec, to);
     state.cursor = to;
     state.next = undefined;
     return;
@@ -1507,6 +1511,7 @@ async function enter(
     const to = edgeOn(spec, id, `gate:${value}`);
     if (!to) return nextDecide(state, id, `门 ${id} 选项 ${value} 没有边`, [value], false);
     node.status = "succeeded";
+    if (gateName === "accept" && value === "revise") markRevise(state, spec, to);
     state.cursor = to;
     return enter(state, spec, opts, now, depth + 1);
   }

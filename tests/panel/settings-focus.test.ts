@@ -474,7 +474,7 @@ describe("settings catalog focus restore", () => {
 });
 
 describe("inline fallback panel", () => {
-  it("toggles the worker row and hides chips on lead/direction/final-review", async () => {
+  it("toggles the worker row and hides chips on lead/final-review", async () => {
     const page = await boot();
     const chip = page.select("worker", "toggle-fb")!;
     expect(chip).toBeTruthy();
@@ -485,9 +485,13 @@ describe("inline fallback panel", () => {
     chip.click();
     expect(row.classList.contains("open")).toBe(false);
     expect(chip.getAttribute("aria-expanded")).toBe("false");
+    expect(page.select("lead", "model")).toBeTruthy();
     expect(page.select("lead", "toggle-fb")).toBeNull();
-    expect(page.select("direction", "toggle-fb")).toBeNull();
+    expect(page.select("final-review", "model")).toBeTruthy();
     expect(page.select("final-review", "toggle-fb")).toBeNull();
+    const rowsEl = page.doc.getElementById("model-rows")!;
+    expect(rowsEl.querySelector('[data-row="direction"]')).toBeNull();
+    expect(rowsEl.querySelector('[data-row="verifier"]')).toBeNull();
   });
 
   it("keeps an expanded worker panel open after another row redraws", async () => {
@@ -550,18 +554,18 @@ describe("inline fallback panel", () => {
 
   it("adds a second fallback then deletes it", async () => {
     const page = await boot();
-    page.select("verifier", "toggle-fb")!.click();
-    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="verifier"]')).toHaveLength(1);
-    const add = page.select("verifier", "add-fb")!;
+    page.select("architect", "toggle-fb")!.click();
+    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="architect"]')).toHaveLength(1);
+    const add = page.select("architect", "add-fb")!;
     expect(add.disabled).toBe(false);
     add.click();
     await flush();
-    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="verifier"]')).toHaveLength(2);
-    expect(page.select("verifier", "add-fb")!.disabled).toBe(true);
-    page.select("verifier", "del-fb", 1)!.click();
+    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="architect"]')).toHaveLength(2);
+    expect(page.select("architect", "add-fb")!.disabled).toBe(true);
+    page.select("architect", "del-fb", 1)!.click();
     await flush();
-    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="verifier"]')).toHaveLength(1);
-    expect(page.select("verifier", "add-fb")!.disabled).toBe(false);
+    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="architect"]')).toHaveLength(1);
+    expect(page.select("architect", "add-fb")!.disabled).toBe(false);
   });
 
   it("saves an edited worker fallback into the default slot", async () => {
@@ -608,7 +612,7 @@ describe("inline fallback panel", () => {
     expect(sol.nodes.default?.worker?.fallbacks).toHaveLength(1);
   });
 
-  it("keeps advanced limited to profiles and import/export", async () => {
+  it("keeps advanced limited to profiles, import/export and restore-defaults", async () => {
     const page = await boot();
     const adv = page.doc.getElementById("advanced-body")!;
     expect(adv.querySelector("[data-act=\"fb-agent\"]")).toBeNull();
@@ -617,12 +621,30 @@ describe("inline fallback panel", () => {
     expect(adv.querySelector("[data-act=\"add-fb\"]")).toBeNull();
     expect(adv.querySelector("[data-act=\"del-fb\"]")).toBeNull();
     expect(adv.textContent).not.toContain("档次表");
-    expect(adv.textContent).toContain("平时不用动");
     expect(adv.textContent).toContain("主控环境");
     expect(adv.querySelector("[data-act=\"export\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"import\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"add\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"copy\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"delete\"]")).toBeTruthy();
+    // Restore-defaults overwrites every profile, so it lives here instead of next to Save.
+    expect(adv.querySelector("[data-act=\"restore\"]")).toBeTruthy();
+    expect(page.doc.querySelector(".bar")!.querySelector("[data-act=\"restore\"]")).toBeNull();
+  });
+});
+
+describe("save bar", () => {
+  it("shows the unsaved state only while the draft differs from what was loaded or saved", async () => {
+    const page = await boot();
+    const status = page.doc.getElementById("manual-status")!;
+    expect(status.textContent).toBe("");
+    const effort = page.select("worker", "effort")!;
+    effort.value = "low";
+    effort.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+    await flush();
+    expect(page.doc.getElementById("manual-status")!.textContent).toBe("有改动未保存");
+    page.doc.querySelector("[data-act=\"save\"]")!.click();
+    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
+    expect(page.doc.getElementById("manual-status")!.textContent).toBe("已保存");
   });
 });

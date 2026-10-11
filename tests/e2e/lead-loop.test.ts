@@ -50,6 +50,8 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
     expect(kinds(run)).toContain("setup");
     expect(kinds(run)).toContain("dispatch");
     expect(kinds(run)).toContain("wait");
+    // Happy path is two worker sessions: one writer, then one non-author review.
+    expect(run.models.map((m) => m.role)).toEqual(["keel-worker", "keel-verifier"]);
   });
 
   it("同族验证者不能 done", async () => {
@@ -198,7 +200,7 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
     expect(run.next.kind).not.toBe("done");
   });
 
-  it("F26-05：验证者 running 时 keel_wait 不得提前完成 verify-head", async () => {
+  it("F26-05：验证者 running 时 keel_wait 不得提前完成 astra-final-review", async () => {
     const world = makeWorld();
     const host = makeE2eHost(world);
     const started = await startRun(host, {
@@ -211,16 +213,16 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
     const snapshots: { cursor: string; status?: string; last_report?: unknown }[] = [];
     const run = await leadLoop(host, started, world, {
       afterWait: (state) => {
-        if (state.cursor !== "verify-head") return;
-        const node = state.nodes["verify-head"];
+        if (state.cursor !== "astra-final-review") return;
+        const node = state.nodes["astra-final-review"];
         if (node?.dispatch_state === "running" || node?.dispatch_state === "accepted") {
           snapshots.push({ cursor: state.cursor, status: node.status, last_report: node.last_report });
         }
       },
     });
-    expect(snapshots.length, `必须在 verify-head running 下至少等两轮，实际 ${snapshots.length}；next=${JSON.stringify(run.next)} cursor=${run.state.cursor}`).toBeGreaterThanOrEqual(2);
+    expect(snapshots.length, `必须在 astra-final-review running 下至少等两轮，实际 ${snapshots.length}；next=${JSON.stringify(run.next)} cursor=${run.state.cursor}`).toBeGreaterThanOrEqual(2);
     for (const snap of snapshots) {
-      expect(snap.cursor).toBe("verify-head");
+      expect(snap.cursor).toBe("astra-final-review");
       expect(snap.status).not.toBe("succeeded");
       expect(snap.last_report).toBeUndefined();
     }

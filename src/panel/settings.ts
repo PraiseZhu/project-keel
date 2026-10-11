@@ -33,7 +33,7 @@ import {
   escapeHtml as esc,
   renderInheritOptionHtml,
   renderProfileButtonHtml,
-  renderRowHtml,
+  renderRowsHtml,
   routeAfterAgentChange,
   routeAfterEffortChange,
   routeAfterModelChange,
@@ -88,24 +88,30 @@ const expandedFallbackRows = new Set<SettingsRowId>();
 
 const input = document.querySelector<HTMLInputElement>("#key");
 const statusEl = document.querySelector<HTMLElement>("#status");
-const jevValue = document.querySelector<HTMLElement>("#status-jev-value");
-const jevDot = document.querySelector<HTMLElement>("#status-jev-dot");
+const jevSummary = document.querySelector<HTMLElement>("#jev-summary");
 
-function setDot(el: HTMLElement | null, tone: "ok" | "warn" | "unknown"): void {
-  if (!el) return;
-  el.className = `dot ${tone}`;
+type StatusId = "jev" | "catalog" | "hooks" | "clock";
+type Tone = "ok" | "warn" | "unknown";
+
+/** Status strip: the dot carries the state; text appears only for a problem; the full line goes in the tooltip. */
+function setStatus(id: StatusId, tone: Tone, problem: string, detail: string): void {
+  const dot = document.querySelector<HTMLElement>(`#status-${id}-dot`);
+  if (dot) dot.className = `dot ${tone}`;
+  const value = document.querySelector<HTMLElement>(`#status-${id}-value`);
+  if (value) value.textContent = problem;
+  document.querySelector<HTMLElement>(`[data-status="${id}"]`)?.setAttribute("title", detail);
 }
 
-async function refreshJev(): Promise<void> {
-  if (!input && !jevValue && !statusEl) return;
+/** announce=true after a save/clear so the accordion confirms the action; page load only paints the state. */
+async function refreshJev(announce = false): Promise<void> {
   const r = await fetch("/secrets");
   if (!r.ok) throw new Error("status");
   const entries = (await r.json()) as { key: string; saved: boolean; tail?: string }[];
   const key = entries.find((x) => x.key === "api_key");
-  const text = key?.saved ? `已保存${key.tail ? ` · 尾号 ${key.tail}` : ""}` : "尚未配置";
-  if (statusEl) statusEl.textContent = key?.saved ? `凭证已保存${key.tail ? `（尾号 ${key.tail}）` : ""}` : "尚未配置凭证";
-  if (jevValue) jevValue.textContent = text;
-  setDot(jevDot, key?.saved ? "ok" : "warn");
+  const text = key?.saved ? `已保存${key.tail ? ` · 尾号 ${key.tail}` : ""}` : "未配置";
+  if (jevSummary) jevSummary.textContent = `${text} ›`;
+  if (announce && statusEl) statusEl.textContent = key?.saved ? "已保存" : "已清除";
+  setStatus("jev", key?.saved ? "ok" : "warn", key?.saved ? "" : "未配置", `Jev 凭证：${text}`);
 }
 
 document.querySelector("#form")?.addEventListener("submit", async (event) => {
@@ -120,7 +126,7 @@ document.querySelector("#form")?.addEventListener("submit", async (event) => {
   try {
     const r = await fetch("/secrets/api_key", { method: "PUT", body: JSON.stringify({ value }) });
     if (r.status !== 204) throw new Error("save");
-    await refreshJev();
+    await refreshJev(true);
   } catch {
     statusEl.textContent = "保存失败，请重新输入并重试。";
   }
@@ -131,7 +137,7 @@ document.querySelector("#clear")?.addEventListener("click", async () => {
   try {
     const r = await fetch("/secrets/api_key", { method: "DELETE" });
     if (!r.ok) throw new Error("clear");
-    await refreshJev();
+    await refreshJev(true);
   } catch {
     if (statusEl) statusEl.textContent = "清除失败，请重试。";
   }
@@ -143,46 +149,41 @@ const lanesEl = document.querySelector<HTMLElement>("#lanes");
 const lanesSummary = document.querySelector<HTMLElement>("#lanes-summary");
 if (lanesEl) {
   const n = (prof.lanes ?? []).length;
-  if (lanesSummary) lanesSummary.textContent = `只读 · ${n} 个仓 ›`;
+  if (lanesSummary) lanesSummary.textContent = `${n} 个仓 ›`;
   const rows = (prof.lanes ?? []).map((l) => `<tr><td><code>${esc(l.repo)}</code></td><td>${esc(l.preset)}</td><td>${l.preflight ? "有" : "—"}</td><td>${l.verifyCheck ? `<code>${esc(l.verifyCheck)}</code>` : "—"}</td></tr>`).join("") || '<tr><td colspan="4">未配置，所有仓按 personal 车道处理</td></tr>';
-  lanesEl.innerHTML = `<table><thead><tr><th>仓库</th><th>车道</th><th>推送前预检</th><th>验证状态</th></tr></thead><tbody>${rows}</tbody></table>
-<p>计划目录：${prof.plansDir ? "已配置" : "目标仓 docs/"}；看板默认仓：${(prof.boardRepos ?? []).length} 个。</p>`;
+  lanesEl.innerHTML = `<table><thead><tr><th>仓库</th><th>车道</th><th>推送前预检</th><th>验证状态</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 refreshJev().catch(() => {
-  if (statusEl) statusEl.textContent = "无法读取配置状态，请重新打开插件详情。";
-  if (jevValue) jevValue.textContent = "无法读取";
-  setDot(jevDot, "unknown");
+  if (jevSummary) jevSummary.textContent = "无法读取 ›";
+  setStatus("jev", "unknown", "无法读取", "Jev 凭证：无法读取，请重新打开插件详情");
 });
 
-const hooksBox = document.querySelector<HTMLElement>("#status-hooks-value");
-const clockValue = document.querySelector<HTMLElement>("#status-clock-value");
-const clockDot = document.querySelector<HTMLElement>("#status-clock-dot");
-if (hooksBox && typeof BroadcastChannel !== "undefined") {
+let hooksSeen = false;
+if (typeof BroadcastChannel !== "undefined") {
   const ch = new BroadcastChannel("keel");
   ch.addEventListener("message", (ev) => {
     const m = ev.data as { type?: string; message?: string; result?: { claude_code?: string; codex?: string; state?: string; error?: string; failCount?: number } };
     if (m?.type === "clock-status") {
       const tone = clockTone(m.result);
-      if (clockValue) clockValue.textContent = renderClockStatus(m.result).replace(/^常驻时钟：/, "");
-      setDot(clockDot, tone);
+      const text = renderClockStatus(m.result);
+      setStatus("clock", tone, tone === "ok" ? "" : text.replace(/^常驻时钟：/, ""), text.replace(/^常驻时钟/, "后台时钟"));
       return;
     }
     if (m?.type !== "hooks-status") return;
-    if (m.message) {
-      hooksBox.innerHTML = `<div class="v"><i class="dot unknown"></i>无法读取</div>`;
-      return;
-    }
+    hooksSeen = true;
     const claude = m.result?.claude_code;
     const codex = m.result?.codex;
     const ok = (s: unknown): s is StopHookInstall => s === "installed" || s === "not_installed" || s === "unreadable";
-    if (!ok(claude) || !ok(codex)) {
-      hooksBox.innerHTML = `<div class="v"><i class="dot unknown"></i>无法读取</div>`;
+    if (m.message || !ok(claude) || !ok(codex)) {
+      setStatus("hooks", "unknown", "无法读取", "收工拦截：无法读取");
       return;
     }
     const hookLabel = (s: StopHookInstall) => s === "installed" ? "已装" : s === "not_installed" ? "未装" : "无法读取";
-    hooksBox.innerHTML = `<div class="v"><i class="dot ${stopHookTone(codex)}"></i>Codex ${hookLabel(codex)}</div>
-<div class="v"><i class="dot ${stopHookTone(claude)}"></i>Claude Code ${hookLabel(claude)}</div>`;
+    const tones = [stopHookTone(codex), stopHookTone(claude)];
+    const tone: Tone = tones.includes("warn") ? "warn" : tones.includes("unknown") ? "unknown" : "ok";
+    const problems = [codex !== "installed" ? `Codex ${hookLabel(codex)}` : "", claude !== "installed" ? `Claude Code ${hookLabel(claude)}` : ""].filter(Boolean).join("、");
+    setStatus("hooks", tone, problems, `收工拦截：Codex ${hookLabel(codex)}，Claude Code ${hookLabel(claude)}`);
   });
   void (async () => {
     try { await fetch("cindy-ghost://keel/wake"); } catch { /* already awake */ }
@@ -191,7 +192,7 @@ if (hooksBox && typeof BroadcastChannel !== "undefined") {
       ch.postMessage({ reqId, op: "hooks-status" });
       ch.postMessage({ reqId: `clock-${reqId}`, op: "clock-status" });
       await new Promise((r) => setTimeout(r, 400));
-      if (!hooksBox.textContent?.includes("读取中")) break;
+      if (hooksSeen) break;
     }
   })();
 }
@@ -201,15 +202,26 @@ const manualFile = document.querySelector<HTMLInputElement>("#manual-file");
 const rowsEl = document.querySelector<HTMLElement>("#model-rows");
 const taskbar = document.querySelector<HTMLElement>("#taskbar");
 const hintEl = document.querySelector<HTMLElement>("#model-hint");
-const catalogValue = document.querySelector<HTMLElement>("#status-catalog-value");
-const catalogDot = document.querySelector<HTMLElement>("#status-catalog-dot");
+const saveBtn = document.querySelector<HTMLButtonElement>("[data-act=\"save\"]");
 const advancedBody = document.querySelector<HTMLElement>("#advanced-body");
+const UNSAVED = "有改动未保存";
+/** The draft as last loaded or saved; Save is enabled only when the draft differs from it. */
+let savedJson = JSON.stringify(draft);
 
 function setManualStatus(kind: "ok" | "error" | "info", text: string, issues?: { path: string; message: string }[]): void {
   if (!manualStatus) return;
   const extra = (issues ?? []).map((i) => `${i.path ? i.path + "：" : ""}${i.message}`).join("\n");
   manualStatus.className = kind === "ok" ? "ok" : kind === "error" ? "issues" : "hint";
   manualStatus.textContent = extra ? `${text}\n${extra}` : text;
+}
+
+/** Replaces the old static "remember to save" hint: Save lights up and the bar says so only while there are edits. */
+function paintDirty(): void {
+  const dirty = JSON.stringify(draft) !== savedJson;
+  if (saveBtn) saveBtn.disabled = !dirty;
+  if (!manualStatus || manualStatus.className === "issues") return;
+  if (dirty) setManualStatus("info", UNSAVED);
+  else if (manualStatus.textContent === UNSAVED) setManualStatus("info", "");
 }
 
 function currentView() {
@@ -222,8 +234,7 @@ function renderAdvanced(view: ReturnType<typeof currentView>): void {
   const selected = draft.profiles.find((p) => p.id === view.profileId);
   const inheritOpts = draft.profiles.filter((p) => p.id !== view.profileId).map((p) => renderInheritOptionHtml(p, selected?.inherit)).join("");
   const profileBtns = items.map((p) => renderProfileButtonHtml(p)).join("");
-  advancedBody.innerHTML = `<p class="hint">平时不用动。这里切换、新增或复制整套方案，或把设置导出备份。</p>
-    <div class="adv-row">${profileBtns}
+  advancedBody.innerHTML = `<div class="adv-row">${profileBtns}<span class="sep"></span>
       <button type="button" data-act="add">新增</button>
       <button type="button" data-act="copy">复制</button>
       <button type="button" data-act="delete">删除</button></div>
@@ -233,7 +244,9 @@ function renderAdvanced(view: ReturnType<typeof currentView>): void {
       <label><input type="checkbox" data-act="default"${draft.defaults_by_harness[selected.harness] === selected.id ? " checked" : ""}> 设为${HARNESS_LABELS[selected.harness]}默认</label></div>` : ""}
     <div class="adv-row">
       <button type="button" data-act="export">导出 JSON</button>
-      <button type="button" data-act="import">导入 JSON</button></div>`;
+      <button type="button" data-act="import">导入 JSON</button>
+      <span class="sep"></span>
+      <button type="button" data-act="restore">恢复默认</button></div>`;
 }
 
 function renderManual(restore?: { act: string; row: string; i?: number }): void {
@@ -255,24 +268,22 @@ function renderManual(restore?: { act: string; row: string; i?: number }): void 
   }
   if (hintEl) {
     hintEl.textContent = view.taskScope === "task"
-      ? `只改需要和「所有任务」不同的角色。已有 ${view.overrideCount} 处覆盖。`
-      : (view.notice ?? "改完点保存，下一次派工生效。主模型和备用一起保存。");
+      ? `只改和「所有任务」不同的角色 · 已单独设置 ${view.overrideCount} 处`
+      : (view.notice ?? "");
   }
-  if (catalogValue) {
-    if (catalog.status === "ok") {
-      const n = catalog.models.filter((m) => m.visible === true).length;
-      catalogValue.textContent = catalog.models.length ? `已启用 ${n} 项` : "清单为空";
-      setDot(catalogDot, catalog.models.length ? "ok" : "warn");
-    } else {
-      catalogValue.textContent = catalog.status === "upgrade" ? "需升级 Cindy" : catalog.status === "retry" ? "暂时不可用" : "读取失败";
-      setDot(catalogDot, "warn");
-    }
+  if (catalog.status === "ok") {
+    const n = catalog.models.filter((m) => m.visible === true).length;
+    setStatus("catalog", n ? "ok" : "warn", n ? "" : "为空", `模型清单：已启用 ${n} 项`);
+  } else {
+    const problem = catalog.status === "upgrade" ? "需升级 Cindy" : catalog.status === "retry" ? "暂时不可用" : "读取失败";
+    setStatus("catalog", "warn", problem, catalog.message || `模型清单：${problem}`);
   }
   if (rowsEl) {
     if (view.empty) rowsEl.innerHTML = `<div class="empty">${esc(view.empty)}</div>`;
-    else rowsEl.innerHTML = view.rows.map((row) => renderRowHtml(row, taskType, expandedFallbackRows.has(row.id))).join("");
+    else rowsEl.innerHTML = renderRowsHtml(view.rows, taskType, (id) => expandedFallbackRows.has(id));
   }
   renderAdvanced(view);
+  paintDirty();
   if (restore && rowsEl) {
     catalogProgrammaticFocus = true;
     try {
@@ -334,6 +345,7 @@ async function doSave(next = draft): Promise<void> {
   }
   if (result.ok) {
     draft = next;
+    savedJson = JSON.stringify(draft);
     const view = currentView();
     selectedId = view.profileId ?? draft.profiles[0]?.id;
     setManualStatus("ok", "已保存");
@@ -574,21 +586,20 @@ manualFile?.addEventListener("change", async () => {
   await doSave(parsed.manual);
 });
 
-const replySelect = document.querySelector<HTMLSelectElement>("#reply-confirm");
 const replyStatus = document.querySelector<HTMLElement>("#reply-status");
 const replySeg = document.querySelector<HTMLElement>("#reply-seg");
 
 function paintReply(mode: ReplyMode): void {
-  if (replySelect) replySelect.value = mode;
   replySeg?.querySelectorAll<HTMLButtonElement>("[data-reply]").forEach((b) => b.classList.toggle("on", b.dataset.reply === mode));
 }
 
 void (async () => {
   if (!replyStatus) return;
   try {
+    // The selected segment already shows the mode; the line below only reports problems and saves.
     const { mode, error } = readReplyMode(await io.getKv());
     paintReply(mode);
-    replyStatus.textContent = error ?? `当前：${REPLY_MODE_LABELS[mode]}`;
+    replyStatus.textContent = error ?? "";
   } catch {
     replyStatus.textContent = "读取 /kv 失败，无法显示当前设置。";
   }
@@ -612,6 +623,7 @@ void (async () => {
   try {
     const loaded = await loadManualFromKv(io);
     draft = loaded.manual;
+    savedJson = JSON.stringify(draft);
     selectedId = draft.defaults_by_harness[harness] ?? draft.profiles.find((p) => p.harness === harness)?.id;
     if (loaded.error) setManualStatus("error", `已回落到默认方案：${loaded.error}`);
   } catch {

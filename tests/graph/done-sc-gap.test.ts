@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { REVISE_TASK } from "../../src/main/graph/brief.ts";
 import { isChangeGraphDone } from "../../src/main/graph/done.ts";
 import { advance, createRun, workerLabel } from "../../src/main/graph/interpreter.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
@@ -75,7 +76,7 @@ async function boot(id: string, graph: "bug-fix" | "pr" = "bug-fix") {
     goal: "修登录报错",
     worktree: WT,
     now: h.now(),
-    author_families: ["gpt"],
+    author_families: ["grok"],
     sc: [{ id: "SC-1", text: "复现用例转绿" }, { id: "SC-2", text: "回归通过" }],
   });
   await withRun(h, id, (raw) => {
@@ -84,7 +85,8 @@ async function boot(id: string, graph: "bug-fix" | "pr" = "bug-fix") {
     s.pr = 35;
     s.repo = "o/r";
     s.gh_repo = "o/r";
-    s.author_families = ["gpt"];
+    // The writer is grok; astra-final-review (gpt-6-astra) is the non-author verifier of another family.
+    s.author_families = ["grok"];
     s.pr_binding = { repo: "o/r", number: 35, base_ref: "main", base_sha: BASE, head_sha: HEAD };
     s.nodes.implement = {
       status: "succeeded",
@@ -101,22 +103,16 @@ async function boot(id: string, graph: "bug-fix" | "pr" = "bug-fix") {
         fallbacks: [],
         route_index: 0,
       },
-      actual_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" },
+      actual_route: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy" },
     };
     s.nodes["open-pr"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
     s.nodes["wait-ci"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+    // astra-final-review is both the non-author review and the verifier.
     s.nodes["astra-final-review"] = {
       status: "succeeded",
       attempts: 1,
       dispatch_state: "terminal",
       report_path: `${WT}/.keel/astra-final-review-1.md`,
-      last_report: { status: "done", summary: "pass", verdict: "PASS" },
-    };
-    s.nodes["verify-head"] = {
-      status: "succeeded",
-      attempts: 1,
-      dispatch_state: "terminal",
-      report_path: `${WT}/.keel/verify-head-1.md`,
       last_report: { status: "done", summary: "verified", verdict: "PASS", sc_evidence: { "SC-1": true } },
     };
     s.nodes["report-ready"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
@@ -128,8 +124,8 @@ async function boot(id: string, graph: "bug-fix" | "pr" = "bug-fix") {
       value: "unit-test-verified",
       level: "unit-test-verified",
       surface: "unit-test",
-      by_family: "grok",
-      by_route: verdict.by_route,
+      by_family: "gpt",
+      by_route: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy" },
     };
     s.budget.astra_left = 3;
   });
@@ -179,9 +175,9 @@ describe("done gate SC missing evidence", () => {
     expect(revised.result.next.kind).toBe("dispatch");
     expect(revised.result.next.dispatch_key).toBe(`${id}:implement:2`);
     const task = revised.result.next.create_worker?.initial_task ?? "";
-    expect(task).toContain("done 门缺证据：SC-2");
-    expect(task).toContain(`${WT}/.keel/verify-head-1.md`);
+    expect(task).toContain(`done 门缺证据：SC-2。先读验证报告：${WT}/.keel/astra-final-review-1.md`);
     expect(task).toContain("先读这些已完成报告再动手");
+    expect(task).toContain(REVISE_TASK);
     expect(read(h, id).cursor).toBe("implement");
   });
 
@@ -229,16 +225,18 @@ describe("done gate SC missing evidence", () => {
     const tick = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
     expect(tick.next.kind).toBe("decide");
     if (tick.next.kind !== "decide") throw new Error("decide");
-    expect(tick.next.context).toMatchObject({ revise_to: "fix-ci" });
+    expect(tick.next.context).toMatchObject({ revise_to: "fix-ci", verify_report: `${WT}/.keel/astra-final-review-1.md` });
     const revised: any = await runTool(ctx, "keel_gate", { run_id: id, gate_id: "done", answer: "revise" });
     expect(revised.ok, revised.message).toBe(true);
     expect(revised.result.next.kind).toBe("dispatch");
     expect(revised.result.next.dispatch_key).toBe(`${id}:fix-ci:1`);
     const task = revised.result.next.create_worker?.initial_task ?? "";
-    expect(task).toContain("done 门缺证据：SC-2");
+    expect(task).toContain(`done 门缺证据：SC-2。先读验证报告：${WT}/.keel/astra-final-review-1.md`);
     expect(task).toContain("先读这些已完成报告再动手");
-    expect(task).toContain(`${WT}/.keel/verify-head-1.md`);
+    expect(task).toContain(`${WT}/.keel/astra-final-review-1.md`);
     expect(task).not.toContain(`${WT}/.keel/open-pr-1.md`);
+    expect(task).toContain(REVISE_TASK);
+    expect(task).not.toContain("PR 的 CI 失败了");
     expect(read(h, id).cursor).toBe("fix-ci");
   });
 
@@ -248,8 +246,8 @@ describe("done gate SC missing evidence", () => {
       const s = raw as unknown as GraphRunState;
       s.nodes["astra-final-review"] = {
         ...s.nodes["astra-final-review"]!,
-        attempts: 2,
-        report_path: `${WT}/.keel/astra-final-review-2.md`,
+        attempts: 3,
+        report_path: `${WT}/.keel/astra-final-review-3.md`,
         last_report: { status: "done", summary: "pass", verdict: "PASS" },
       };
       s.budget.astra_left = 3;
@@ -267,13 +265,12 @@ describe("done gate SC missing evidence", () => {
       dispatch_key: implKey,
       report: { status: "done", summary: "补了 SC 证据", files_changed: ["src/login.ts"], head_sha: HEAD },
     }, { spec });
-    expect(read(h, id).cursor).toBe("verify-same-surface");
+    expect(read(h, id).cursor).toBe("open-pr");
     await withRun(h, id, (raw) => {
       const s = raw as unknown as GraphRunState;
       s.status = "running";
       s.next = undefined;
       s.cursor = "wait-ci";
-      s.nodes["verify-same-surface"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
       s.nodes["open-pr"] = { status: "succeeded", attempts: 2, dispatch_state: "terminal" };
       s.nodes["wait-ci"] = { status: "pending", attempts: 1 };
     });
@@ -283,12 +280,12 @@ describe("done gate SC missing evidence", () => {
     const r = await advance(h, id, { type: "wait_done", on: "ok" }, { spec });
     expect(r.next.kind, `应再派终审，实际 ${JSON.stringify(r.next)}`).toBe("dispatch");
     if (r.next.kind !== "dispatch") throw new Error("dispatch");
-    expect(r.next.dispatch_key).toBe(`${id}:astra-final-review:3`);
-    const label1 = await workerLabel("astra-final-review", `${id}:astra-final-review:1`);
-    const label2 = await workerLabel("astra-final-review", `${id}:astra-final-review:2`);
-    expect(r.next.create_worker?.label).not.toBe(label1);
-    expect(r.next.create_worker?.label).not.toBe(label2);
-    expect(r.next.create_worker?.initial_task).toContain("astra-final-review-3.md");
+    expect(r.next.dispatch_key).toBe(`${id}:astra-final-review:4`);
+    for (const n of [1, 2, 3]) {
+      const old = await workerLabel("astra-final-review", `${id}:astra-final-review:${n}`);
+      expect(r.next.create_worker?.label).not.toBe(old);
+    }
+    expect(r.next.create_worker?.initial_task).toContain("astra-final-review-4.md");
     expect(JSON.stringify(r.next)).not.toMatch(/"kind":"decide"/);
     expect(JSON.stringify(r.next)).not.toMatch(/已达 max_attempts/);
   });

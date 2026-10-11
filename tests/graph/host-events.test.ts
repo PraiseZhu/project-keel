@@ -212,7 +212,7 @@ describe("handbook host events and cards", () => {
       next: { kind: "wait" },
       updated_at: started,
       nodes: {
-        "verify-head": {
+        "astra-final-review": {
           status: "active",
           dispatch_state: "running",
           started_at: started,

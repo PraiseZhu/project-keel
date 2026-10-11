@@ -22,13 +22,24 @@ async function call(h: ReturnType<typeof host>, tool: string, args: Record<strin
   return runTool(makeContext(h, tool), tool, args);
 }
 
-describe("R29-R01 entry consult team setup", () => {
-  it("has no team: setup then consult dispatch then accepted; NOT_FOUND returns setup", async () => {
+/** Entry routing goes to the lead now; the first dispatch after the answer still needs the team. */
+async function routed(h: ReturnType<typeof host>) {
+  const start = await call(h, "keel_run", { goal: "重构登录功能", repo_dir: "/repo", lead: "claude-code", scope: ["src/**"] });
+  expect(start.ok).toBe(true);
+  if (!start.ok) throw new Error("keel_run");
+  const started = start.result as { run_id: string; next: { kind: string; gate_id?: string } };
+  expect(started.next.kind).toBe("decide");
+  expect(started.next.gate_id).toBe("G-route");
+  const gated = await call(h, "keel_gate", { run_id: started.run_id, gate_id: "G-route", answer: "refactoring" });
+  expect(gated.ok).toBe(true);
+  if (!gated.ok) throw new Error("keel_gate");
+  return { run_id: started.run_id, next: (gated.result as { next: { kind: string } }).next };
+}
+
+describe("R29-R01 entry team setup", () => {
+  it("has no team: setup then first dispatch then accepted; NOT_FOUND returns setup", async () => {
     const h = host();
-    const start = await call(h, "keel_run", { goal: "重构登录功能", repo_dir: "/repo", lead: "claude-code", scope: ["src/**"] });
-    expect(start.ok).toBe(true);
-    if (!start.ok) return;
-    const started = start.result as { run_id: string; next: { kind: string; dispatch_key?: string } };
+    const started = await routed(h);
     expect(started.next.kind).toBe("setup");
     const afterSetup = await call(h, "keel_report", {
       run_id: started.run_id,
@@ -39,23 +50,21 @@ describe("R29-R01 entry consult team setup", () => {
     if (!afterSetup.ok) return;
     const dispatched = afterSetup.result as { next: { kind: string; dispatch_key?: string; create_worker?: { role?: string } } };
     expect(dispatched.next.kind).toBe("dispatch");
-    expect(dispatched.next.dispatch_key).toContain(":astra-consult:");
+    expect(dispatched.next.dispatch_key).toContain(":implement:");
     const st = JSON.parse(h.files.get(graphStatePath(started.run_id))!) as { nodes: Record<string, { team_id?: string }> };
-    expect(st.nodes["astra-consult"]?.team_id).toBe("t1");
+    expect(st.nodes.implement?.team_id).toBe("t1");
     const accepted = await call(h, "keel_report", {
       run_id: started.run_id,
       phase: "accepted",
       dispatch_key: dispatched.next.dispatch_key,
-      worker_id: "arch",
-      worker_session_id: "as",
+      worker_id: "writer",
+      worker_session_id: "ws",
       dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
     });
     expect(accepted.ok).toBe(true);
 
     const h2 = host();
-    const start2 = await call(h2, "keel_run", { goal: "重构登录功能", repo_dir: "/repo", lead: "claude-code", scope: ["src/**"] });
-    if (!start2.ok) return;
-    const s2 = start2.result as { run_id: string; next: { kind: string } };
+    const s2 = await routed(h2);
     const setup2 = await call(h2, "keel_report", {
       run_id: s2.run_id,
       phase: "setup",

@@ -52,42 +52,42 @@ describe("R33D-03 read-only nodes must leave the worktree unchanged", () => {
       node: (m: string) => (m === "git/changed-files" ? { ok: true, result: { files } } : { ok: false, message: m }),
     });
     await createRun(h, {
-      run_id: "ro", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
-      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+      run_id: "ro", spec_id: "feature", profile_id: "sol", lead_harness: "codex", task_type: "feature",
+      entry: "architect-plan", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
     });
     await withRun(h, "ro", (raw) => {
       const s = raw as unknown as GraphRunState;
-      s.cursor = "explore";
+      s.cursor = "architect-plan";
       s.team = { ready: true, team_id: "t", lead_session_id: "lead" };
-      s.nodes.explore = {
-        status: "active", attempts: 1, dispatch_key: "ro:explore:1", dispatch_state: "running",
+      s.nodes["architect-plan"] = {
+        status: "active", attempts: 1, dispatch_key: "ro:architect-plan:1", dispatch_state: "running",
         planned_params: {
-          label: "keel-explore-1", role: "keel-explorer", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy",
+          label: "keel-architect-plan-1", role: "keel-architect", agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy",
           initial_task: "x", writes: false, fallbacks: [], route_index: 0, start_sha: "abc",
         },
       };
     });
     return h;
   }
-  const report = { status: "done", summary: "explored", files_changed: [], ran: [] };
+  const report = { status: "done", summary: "planned", files_changed: [], ran: [] };
 
-  it("rejects an explorer that edited source, so its family cannot slip past the non-author check", async () => {
-    const h = await setup(["src/duration.js", ".keel/explore-1.md"]);
+  it("rejects an architect that edited source, so its family cannot slip past the non-author check", async () => {
+    const h = await setup(["src/duration.js", ".keel/architect-plan-1.md"]);
     const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
-      run_id: "ro", phase: "final", dispatch_key: "ro:explore:1", inline_report: report,
+      run_id: "ro", phase: "final", dispatch_key: "ro:architect-plan:1", inline_report: report,
     });
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("SCOPE_VIOLATION");
     expect(r.message).toContain("src/duration.js");
     expect(h.nodeCalls.find((c) => c.method === "git/changed-files")?.params).toMatchObject({ base: "abc" });
     const st = JSON.parse(h.files.get(graphStatePath("ro"))!) as GraphRunState;
-    expect(st.nodes.explore.status).not.toBe("succeeded");
+    expect(st.nodes["architect-plan"].status).not.toBe("succeeded");
   });
 
   it("accepts a read-only node that only wrote its .keel report", async () => {
-    const h = await setup([".keel/explore-1.md"]);
+    const h = await setup([".keel/architect-plan-1.md"]);
     const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
-      run_id: "ro", phase: "final", dispatch_key: "ro:explore:1", inline_report: report,
+      run_id: "ro", phase: "final", dispatch_key: "ro:architect-plan:1", inline_report: report,
     });
     expect(r.ok).toBe(true);
   });
@@ -98,7 +98,7 @@ describe("R33D-03 rereview: no unchecked read-only path", () => {
     const h = fakeHost({ node: (m: string) => ({ ok: false, message: m }) });
     await createRun(h, {
       run_id: "nohead", spec_id: "feature", profile_id: "sol", lead_harness: "codex", task_type: "feature",
-      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+      entry: "architect-plan", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
     });
     const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
       run_id: "nohead", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t" },
@@ -113,28 +113,28 @@ describe("R33D-03 rereview: no unchecked read-only path", () => {
       node: (m: string) => (m === "git/changed-files" ? { ok: true, result: { files: [] } } : { ok: false, message: m }),
     });
     await createRun(h, {
-      run_id: "late", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
-      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+      run_id: "late", spec_id: "feature", profile_id: "sol", lead_harness: "codex", task_type: "feature",
+      entry: "architect-plan", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
     });
     await withRun(h, "late", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.cursor = "implement";
       s.team = { ready: true, team_id: "t", lead_session_id: "lead" };
-      s.nodes.explore = {
-        status: "succeeded", attempts: 1, dispatch_key: "late:explore:1", dispatch_state: "terminal",
+      s.nodes["architect-plan"] = {
+        status: "succeeded", attempts: 1, dispatch_key: "late:architect-plan:1", dispatch_state: "terminal",
         planned_params: {
-          label: "keel-explore-1", role: "keel-explorer", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy",
+          label: "keel-architect-plan-1", role: "keel-architect", agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy",
           initial_task: "x", writes: false, fallbacks: [], route_index: 0, start_sha: "abc",
         },
       };
     });
     const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
-      run_id: "late", phase: "final", dispatch_key: "late:explore:1", inline_report: { status: "done", summary: "again", files_changed: [], ran: [] },
+      run_id: "late", phase: "final", dispatch_key: "late:architect-plan:1", inline_report: { status: "done", summary: "again", files_changed: [], ran: [] },
     });
     expect(r.ok).toBe(true);
     const st = JSON.parse(h.files.get(graphStatePath("late"))!) as GraphRunState;
     expect(st.cursor).toBe("implement");
-    expect(st.nodes.explore.late_reports).toBe(1);
+    expect(st.nodes["architect-plan"].late_reports).toBe(1);
   });
 });
 
@@ -183,16 +183,16 @@ describe("accepted receipt shapes (real run: receipt nested under outcome lost w
   async function run() {
     const h = fakeHost();
     await createRun(h, {
-      run_id: "acc", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex", task_type: "bug-fix",
-      entry: "explore", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
+      run_id: "acc", spec_id: "feature", profile_id: "sol", lead_harness: "codex", task_type: "feature",
+      entry: "architect-plan", goal: "g", worktree: "/repo/.worktrees/x", now: h.now(), scopeAllow: ["src/**"],
     });
     await withRun(h, "acc", (raw) => {
       const s = raw as unknown as GraphRunState;
-      s.cursor = "explore";
+      s.cursor = "architect-plan";
       s.team = { ready: true, team_id: "t", lead_session_id: "lead" };
-      s.nodes.explore = {
-        status: "active", attempts: 1, dispatch_key: "acc:explore:1", dispatch_state: "planned",
-        planned_params: { label: "keel-explore-1", role: "keel-explorer", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", initial_task: "x", writes: false, fallbacks: [], route_index: 0 },
+      s.nodes["architect-plan"] = {
+        status: "active", attempts: 1, dispatch_key: "acc:architect-plan:1", dispatch_state: "planned",
+        planned_params: { label: "keel-architect-plan-1", role: "keel-architect", agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", initial_task: "x", writes: false, fallbacks: [], route_index: 0 },
       };
     });
     return h;
@@ -201,12 +201,12 @@ describe("accepted receipt shapes (real run: receipt nested under outcome lost w
   it("records worker_session_id when the receipt is nested under outcome, so the worker is NOT_LEAD", async () => {
     const h = await run();
     const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
-      run_id: "acc", phase: "accepted", dispatch_key: "acc:explore:1",
+      run_id: "acc", phase: "accepted", dispatch_key: "acc:architect-plan:1",
       outcome: { worker_id: "w1", worker_session_id: "ws-1", dispatch_outcome: { dispatched: true, wakeKind: "queued" }, queued_message_id: "q1" },
     });
     expect(r.ok).toBe(true);
     const st = JSON.parse(h.files.get(graphStatePath("acc"))!) as GraphRunState;
-    expect(st.nodes.explore.worker_session_id).toBe("ws-1");
+    expect(st.nodes["architect-plan"].worker_session_id).toBe("ws-1");
     const w: any = await runTool(makeContext(h, "c2", profile, undefined, "ws-1"), "keel_wait", { run_id: "acc", max_minutes: 1 });
     expect(w.errorCode).toBe("NOT_LEAD");
   });
@@ -214,7 +214,7 @@ describe("accepted receipt shapes (real run: receipt nested under outcome lost w
   it("rejects an accepted report with no worker or task identity", async () => {
     const h = await run();
     const r: any = await runTool(makeContext(h, "c1", profile, undefined, "lead"), "keel_report", {
-      run_id: "acc", phase: "accepted", dispatch_key: "acc:explore:1", outcome: { ok: true },
+      run_id: "acc", phase: "accepted", dispatch_key: "acc:architect-plan:1", outcome: { ok: true },
     });
     expect(r.errorCode).toBe("INVALID_INPUT");
   });

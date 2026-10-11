@@ -67,13 +67,14 @@ describe("R30-01 reconcile-only write attempts still register author families", 
         ? { ok: true, result: { head: H, root: "/repo", branch: "feature", gh_repo: "o/r" } }
         : { ok: false, message: method },
     });
+    // bug-fix starts at the one writer session (implement); attempt 1 runs on grok, the retry on gpt.
     await createRun(h, {
       run_id: "run-author", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex",
-      task_type: "bug-fix", entry: "reproduce", goal: "fix", worktree: "/repo/.worktrees/one",
+      task_type: "bug-fix", entry: "implement", goal: "fix", worktree: "/repo/.worktrees/one",
       scopeAllow: ["src/**"], now: h.now(),
     });
     const opts = {
-      gates: { advance: () => "advance" as const, accept: () => "adopt" as const },
+      gates: { retry: () => "retry" as const, accept: () => "adopt" as const },
       config: { manual, lanes: [], limits: { concurrentRuns: 4, inFlightNodesPerRun: 3, astraBudget: 4 }, thresholds: { act: 0.75, strict: 0.8 } },
     };
     const tick = () => advance(h, "run-author", { type: "tick" }, opts);
@@ -81,30 +82,28 @@ describe("R30-01 reconcile-only write attempts still register author families", 
       type: "report", phase: "accepted", dispatch_key: key, worker_id: "w", worker_session_id: "ws",
       dispatch_outcome: { created: true, delivered: true },
     }, opts);
-    const final = (key: string) => advance(h, "run-author", { type: "report", phase: "final", dispatch_key: key, inline_report: { status: "done" } }, opts);
+    const final = (key: string, status: "done" | "failed" = "done") =>
+      advance(h, "run-author", { type: "report", phase: "final", dispatch_key: key, inline_report: { status } }, opts);
     const first = await tick(); expect(first.next.kind).toBe("setup");
     let out = await advance(h, "run-author", { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "team" } }, opts);
-    if (out.next.kind !== "dispatch") throw new Error("reproduce dispatch");
-    const repro = out.next.dispatch_key;
-    await accepted(repro); out = await final(repro);
+    if (out.next.kind !== "dispatch") throw new Error("implement:1 dispatch");
+    const impl1 = out.next.dispatch_key;
+    expect(impl1).toBe("run-author:implement:1");
+    expect(out.next.create_worker!.model).toBe("grok-4.6");
+    out = await accepted(impl1);
     expect(out.state.author_families).toEqual(["grok"]);
-    if (out.next.kind !== "dispatch") throw new Error("explore dispatch");
-    const explore = out.next.dispatch_key; await accepted(explore); out = await final(explore);
-    if (out.next.kind !== "dispatch") throw new Error("research create");
-    const research = out.next.dispatch_key;
-    await accepted(research);
-    out = await final(research);
     (manual.profiles[0]!.nodes.default as { worker: unknown }).worker = { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } };
-    out = await final(research);
-    if (out.state.cursor === "architect-plan") {
-      if (out.next.kind !== "dispatch") throw new Error("architect dispatch");
-      const arch = out.next.dispatch_key;
-      await accepted(arch);
-      out = await final(arch);
-    }
+    out = await final(impl1, "failed");
     expect(out.state.cursor).toBe("implement");
-    if (out.next.kind !== "dispatch") throw new Error("implement dispatch");
+    // The failed writer is archived and confirmed stopped before the retry is dispatched.
+    expect(out.next).toMatchObject({ kind: "recover", dispatch_key: impl1, action: "archive" });
+    const recover = (action: "archive" | "verify_stopped", action_result: Record<string, unknown>) =>
+      advance(h, "run-author", { type: "report", phase: "recover", dispatch_key: impl1, action, action_result }, opts);
+    out = await recover("archive", { ok: true });
+    out = await recover("verify_stopped", { ok: true, complete: true, team_id: "team", workers: [] });
+    if (out.next.kind !== "dispatch") throw new Error("implement:2 dispatch");
     const impl = out.next.dispatch_key;
+    expect(impl).toBe("run-author:implement:2");
     expect(out.next.create_worker!.model).toBe("gpt-6-luna");
     h.clock.t += PLANNED_TIMEOUT_MS;
     out = await tick(); expect(out.next.kind).toBe("reconcile");

@@ -111,7 +111,7 @@ describe("done gate retries verify when the verdict level is too low", () => {
       const s = raw as unknown as GraphRunState;
       s.cursor = "done";
       s.team = { ready: true, team_id: "t1" };
-      s.nodes["verify-head"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
+      s.nodes["astra-final-review"] = { status: "succeeded", attempts: 1, dispatch_state: "terminal" };
       const mapped = mapChangeDoneFailure(s, low);
       s.next = mapped;
       s.status = mapped.kind === "decide" && mapped.gate_id.startsWith("human:") ? "waiting_human" : s.status;
@@ -120,19 +120,19 @@ describe("done gate retries verify when the verdict level is too low", () => {
     expect(st.next?.kind).toBe("decide");
     if (st.next?.kind !== "decide") throw new Error("decide");
     expect(st.next.options).toEqual(["retry_verify", "stop"]);
-    expect(st.next.gate_id).toBe("human:verify-head");
-    expect(st.cursor).toBe("verify-head");
+    expect(st.next.gate_id).toBe("human:astra-final-review");
+    expect(st.cursor).toBe("astra-final-review");
 
     const r: any = await runTool(makeContext(h, "c1", profile), "keel_gate", {
       run_id: "run-level",
-      gate_id: "human:verify-head",
+      gate_id: "human:astra-final-review",
       answer: "retry_verify",
     });
     expect(r.ok, r.message).toBe(true);
     expect(r.result.next.kind).toBe("dispatch");
-    expect(r.result.next.dispatch_key).toBe("run-level:verify-head:2");
-    expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).cursor).toBe("verify-head");
-    expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).nodes["verify-head"]?.attempts).toBe(2);
+    expect(r.result.next.dispatch_key).toBe("run-level:astra-final-review:2");
+    expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).cursor).toBe("astra-final-review");
+    expect(JSON.parse(h.files.get(graphStatePath("run-level"))!).nodes["astra-final-review"]?.attempts).toBe(2);
   });
 });
 
@@ -161,46 +161,34 @@ describe("P1-2 gates use evidence and runGate", () => {
       profile_id: "sol",
       lead_harness: "codex",
       task_type: "bug-fix",
-      entry: "g-advance-mechanism",
+      entry: "g-retry-implement",
       goal: "fix",
       now: h.now(),
     });
     const path = graphStatePath("run-gate");
     const first = await runTool(makeContext(h, "c1", profile), "keel_gate", {
-      run_id: "run-gate", gate_id: "g-advance-mechanism", answer: "advance",
+      run_id: "run-gate", gate_id: "g-retry-implement", answer: "retry",
     });
     expect((first as { ok: boolean }).ok).toBe(true);
     const after = JSON.parse(h.files.get(path)!) as GraphRunState;
-    expect(after.sol_decisions.filter((d) => d.gate_id === "g-advance-mechanism" && d.attempt === 1)).toEqual([]);
-    after.cursor = "g-advance-mechanism";
+    expect(after.sol_decisions.filter((d) => d.gate_id === "g-retry-implement")).toEqual([]);
+    expect(after.cursor).toBe("implement");
+    after.cursor = "g-retry-implement";
     after.status = "running";
     after.next = undefined;
-    after.nodes["g-advance-mechanism"] = { status: "pending", attempts: 2 };
-    after.nodes["research"] = {
-      status: "succeeded",
-      attempts: 1,
-      ended_at: 2,
-      last_report: { ran: [{ cmd: "npm test", exit_code: 1 }], fresh: true, head_matches: true, files_changed: [] },
-    };
+    after.nodes["g-retry-implement"] = { status: "pending", attempts: 2 };
     h.files.set(path, JSON.stringify(after));
     const second = await advance(h, "run-gate", { type: "tick" }, {
       spec,
       gates: {
-        advance: async ({ state: s }) => {
-          const leftover = s.sol_decisions.find((d) => d.gate_id === "g-advance-mechanism");
+        retry: async ({ state: s }) => {
+          const leftover = s.sol_decisions.find((d) => d.gate_id === "g-retry-implement");
           expect(leftover).toBeUndefined();
-          const ev = advanceEvidenceForNode({
-            nodeId: "verify-same-surface",
-            ran: [{ cmd: "npm test", exit_code: 1 }],
-            head_matches: true,
-            new_report: true,
-          });
-          return GATES["G-advance"].deterministic(ev) === "stay" ? "stay" : undefined;
+          return "stop" as const;
         },
       },
     });
-    expect(second.next.kind).not.toBe("done");
-    if (second.next.kind === "decide") expect(second.next.gate_id).not.toBe("g-advance-mechanism");
+    expect(second.next.kind).toBe("stop");
   });
 });
 
@@ -435,7 +423,7 @@ describe("done uses the PR head, not an unpushed local head", () => {
   });
 });
 
-describe("retry_verify rewinds verify-head without burning attempts", () => {
+describe("retry_verify rewinds the review (astra-final-review) without burning open-pr", () => {
   const head = verdict.head_sha;
   const base = verdict.base_sha;
   const wt = "/repo/.worktrees/x";
@@ -471,14 +459,14 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     return JSON.parse(h.files.get(graphStatePath(id))!) as GraphRunState;
   }
 
+  /** `reviews` is how many times astra-final-review (review + verifier) already ran on this run. */
   async function boot(
     graph: "bug-fix" | "feature" | "refactoring" | "pr",
-    attempts: number,
+    reviews: number,
     afterRevision = false,
-    designContested = false,
   ) {
     const h = fakeHost({ node });
-    const id = `retry-${graph}-${attempts}-${afterRevision ? "rev" : "n"}-${designContested ? "c" : "u"}`;
+    const id = `retry-${graph}-${reviews}-${afterRevision ? "rev" : "n"}`;
     const spec = PSTACK_GRAPHS[graph];
     const ctx = makeContext(h, "c-retry", profile);
     await createRun(h, {
@@ -519,14 +507,13 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
         },
         actual_route: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy" },
       };
-      for (const name of ["open-pr", "wait-ci", "astra-final-review"] as const) {
+      for (const name of ["open-pr", "wait-ci"] as const) {
         s.nodes[name] = { status: "succeeded", attempts: afterRevision ? 2 : 1, dispatch_state: "terminal" };
       }
-      s.nodes["report-ready"] = { status: "succeeded", attempts, dispatch_state: "terminal" };
-      s.nodes["astra-final-review"]!.last_report = { status: "done", summary: "pass", verdict: "PASS" };
-      s.nodes["verify-head"] = {
+      s.nodes["report-ready"] = { status: "succeeded", attempts: reviews, dispatch_state: "terminal" };
+      s.nodes["astra-final-review"] = {
         status: "succeeded",
-        attempts,
+        attempts: reviews,
         dispatch_state: "terminal",
         last_report: { status: "done", summary: "aggregate passed", verdict: "PASS", sc_evidence: { "SC-1": true } },
       };
@@ -541,27 +528,26 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
         by_family: "gpt",
         by_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" },
       };
-      s.facts = { design_contested: designContested };
       s.budget.astra_left = 3;
     });
     return { h, id, spec, ctx };
   }
 
   it.each(["bug-fix", "feature", "refactoring", "pr"] as const)(
-    "%s low-level rewind offers retry_verify on human:verify-head",
+    "%s low-level rewind offers retry_verify on human:astra-final-review",
     async (graph) => {
       const { h, id, spec, ctx } = await boot(graph, 1);
       const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
       expect(initial.next.kind).toBe("decide");
       if (initial.next.kind !== "decide") throw new Error("decide");
-      expect(initial.next.gate_id).toBe("human:verify-head");
+      expect(initial.next.gate_id).toBe("human:astra-final-review");
       expect(initial.next.options).toEqual(["retry_verify", "stop"]);
-      expect(read(h, id).cursor).toBe("verify-head");
-      expect(read(h, id).nodes["verify-head"]?.attempts).toBe(1);
+      expect(read(h, id).cursor).toBe("astra-final-review");
+      expect(read(h, id).nodes["astra-final-review"]?.attempts).toBe(1);
     },
   );
 
-  it("attempt 1 re-dispatches verify-head:2 and attempt 2 re-dispatches :3", async () => {
+  it("attempt 1 re-dispatches astra-final-review:2 and attempt 2 re-dispatches :3", async () => {
     const first = await boot("bug-fix", 1);
     const firstTick = await advance(first.h, first.id, { type: "tick" }, { spec: first.spec, doneCheck: (s) => runDoneCheck(first.ctx, s) });
     expect(firstTick.next.kind).toBe("decide");
@@ -571,8 +557,8 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     });
     expect(firstRetry.ok, firstRetry.message).toBe(true);
     expect(firstRetry.result.next.kind).toBe("dispatch");
-    expect(firstRetry.result.next.dispatch_key).toBe(`${first.id}:verify-head:2`);
-    expect(read(first.h, first.id).nodes["verify-head"]?.attempts).toBe(2);
+    expect(firstRetry.result.next.dispatch_key).toBe(`${first.id}:astra-final-review:2`);
+    expect(read(first.h, first.id).nodes["astra-final-review"]?.attempts).toBe(2);
 
     const second = await boot("bug-fix", 2);
     const secondTick = await advance(second.h, second.id, { type: "tick" }, { spec: second.spec, doneCheck: (s) => runDoneCheck(second.ctx, s) });
@@ -583,8 +569,8 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     });
     expect(secondRetry.ok, secondRetry.message).toBe(true);
     expect(secondRetry.result.next.kind).toBe("dispatch");
-    expect(secondRetry.result.next.dispatch_key).toBe(`${second.id}:verify-head:3`);
-    expect(read(second.h, second.id).nodes["verify-head"]?.attempts).toBe(3);
+    expect(secondRetry.result.next.dispatch_key).toBe(`${second.id}:astra-final-review:3`);
+    expect(read(second.h, second.id).nodes["astra-final-review"]?.attempts).toBe(3);
   });
 
   it("attempt 3 stays stopped instead of dispatching a fourth verify", async () => {
@@ -598,33 +584,28 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     expect(retry.ok, retry.message).toBe(true);
     expect(retry.result.next.kind).toBe("decide");
     expect(retry.result.next.options).toEqual(["stop"]);
-    expect(retry.result.next.question).toMatch(/verify-head/);
-    expect(read(h, id).nodes["verify-head"]?.attempts).toBe(3);
+    expect(retry.result.next.question).toMatch(/astra-final-review/);
+    expect(read(h, id).nodes["astra-final-review"]?.attempts).toBe(3);
   });
 
-  it.each([false, true] as const)(
-    "feature retry_verify does not consume open-pr after two final reviews when design_contested=%s",
-    async (designContested) => {
-      const { h, id, spec, ctx } = await boot("feature", 1, true, designContested);
-      const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
-      expect(initial.next.kind).toBe("decide");
-      if (initial.next.kind !== "decide") throw new Error("decide");
-      expect(initial.next.gate_id).toBe("human:verify-head");
-      const retry: any = await runTool(ctx, "keel_gate", {
-        run_id: id, gate_id: initial.next.gate_id, answer: "retry_verify",
-      });
-      expect(retry.ok, retry.message).toBe(true);
-      expect(retry.result.next.kind).toBe("dispatch");
-      expect(retry.result.next.dispatch_key).toBe(`${id}:verify-head:2`);
-      const st = read(h, id);
-      expect(st.cursor).toBe("verify-head");
-      expect(st.nodes["verify-head"]?.attempts).toBe(2);
-      expect(st.nodes["open-pr"]?.attempts).toBe(2);
-      expect(st.nodes["wait-ci"]?.attempts).toBe(2);
-      expect(st.nodes["astra-final-review"]?.attempts).toBe(2);
-      expect(st.nodes.interrogate?.status).not.toBe("active");
-    },
-  );
+  it("feature retry_verify after a revised review re-dispatches the review without consuming open-pr", async () => {
+    const { h, id, spec, ctx } = await boot("feature", 2, true);
+    const initial = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
+    expect(initial.next.kind).toBe("decide");
+    if (initial.next.kind !== "decide") throw new Error("decide");
+    expect(initial.next.gate_id).toBe("human:astra-final-review");
+    const retry: any = await runTool(ctx, "keel_gate", {
+      run_id: id, gate_id: initial.next.gate_id, answer: "retry_verify",
+    });
+    expect(retry.ok, retry.message).toBe(true);
+    expect(retry.result.next.kind).toBe("dispatch");
+    expect(retry.result.next.dispatch_key).toBe(`${id}:astra-final-review:3`);
+    const st = read(h, id);
+    expect(st.cursor).toBe("astra-final-review");
+    expect(st.nodes["astra-final-review"]?.attempts).toBe(3);
+    expect(st.nodes["open-pr"]?.attempts).toBe(2);
+    expect(st.nodes["wait-ci"]?.attempts).toBe(2);
+  });
 
   it("a passing npm test re-verify reaches done", async () => {
     const { h, id, spec, ctx } = await boot("bug-fix", 1);
@@ -637,7 +618,7 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     expect(retry.ok, retry.message).toBe(true);
     expect(retry.result.next.kind).toBe("dispatch");
     const key = retry.result.next.dispatch_key as string;
-    expect(key).toBe(`${id}:verify-head:2`);
+    expect(key).toBe(`${id}:astra-final-review:2`);
     const accepted: any = await runTool(ctx, "keel_report", {
       run_id: id,
       phase: "accepted",
@@ -681,7 +662,7 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     const tick = await advance(h, id, { type: "tick" }, { spec, doneCheck: (s) => runDoneCheck(ctx, s) });
     expect(tick.next.kind).toBe("decide");
     if (tick.next.kind !== "decide") throw new Error("decide");
-    expect(tick.next.gate_id).toBe("human:verify-head");
+    expect(tick.next.gate_id).toBe("human:astra-final-review");
     const retry: any = await runTool(ctx, "keel_gate", {
       run_id: id, gate_id: tick.next.gate_id, answer: "retry_verify",
     });
@@ -720,15 +701,15 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
   it("attempt 2 still-low then attempt 3 npm test reaches done", async () => {
     const { h, id, spec, ctx } = await boot("bug-fix", 1);
     const key2 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm run verify", exit_code: 0, tests_passed: 0 }]);
-    expect(key2).toBe(`${id}:verify-head:2`);
+    expect(key2).toBe(`${id}:astra-final-review:2`);
     expect(read(h, id).verdict?.level).toBe("type-check-only");
     const mid: any = await runTool(ctx, "keel_wait", { run_id: id });
     expect(mid.ok, mid.message).toBe(true);
     expect(mid.result.next.kind).toBe("decide");
-    expect(mid.result.next.gate_id).toBe("human:verify-head");
+    expect(mid.result.next.gate_id).toBe("human:astra-final-review");
     expect(read(h, id).nodes["report-ready"]?.attempts).toBe(2);
     const key3 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }]);
-    expect(key3).toBe(`${id}:verify-head:3`);
+    expect(key3).toBe(`${id}:astra-final-review:3`);
     expect(read(h, id).verdict?.level).toBe("unit-test-verified");
     expect(read(h, id).cursor).toBe("report-ready");
     expect(read(h, id).nodes["report-ready"]?.attempts).toBe(3);
@@ -740,7 +721,7 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
   it("attempt 2 npm test re-verify still reaches done after report-ready was already used twice", async () => {
     const { h, id, spec, ctx } = await boot("bug-fix", 2);
     const key = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }]);
-    expect(key).toBe(`${id}:verify-head:3`);
+    expect(key).toBe(`${id}:astra-final-review:3`);
     expect(read(h, id).verdict?.level).toBe("unit-test-verified");
     expect(read(h, id).nodes["report-ready"]?.attempts).toBe(3);
     const done: any = await runTool(ctx, "keel_wait", { run_id: id });
@@ -748,23 +729,22 @@ describe("retry_verify rewinds verify-head without burning attempts", () => {
     expect(done.result.next.kind).toBe("done");
   });
 
-  it("feature two low re-verifies after two final reviews still reach done without extra open-pr", async () => {
-    const { h, id, spec, ctx } = await boot("feature", 1, true, false);
-    const key2 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm run verify", exit_code: 0, tests_passed: 0 }]);
-    expect(key2).toBe(`${id}:verify-head:2`);
+  it("feature: review and verify share one budget of 3, so after two reviews a still-low re-verify ends at stop", async () => {
+    const { h, id, spec, ctx } = await boot("feature", 2, true);
+    const key3 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm run verify", exit_code: 0, tests_passed: 0 }]);
+    expect(key3).toBe(`${id}:astra-final-review:3`);
+    expect(read(h, id).verdict?.level).toBe("type-check-only");
     const mid: any = await runTool(ctx, "keel_wait", { run_id: id });
     expect(mid.ok, mid.message).toBe(true);
     expect(mid.result.next.kind).toBe("decide");
-    expect(mid.result.next.gate_id).toBe("human:verify-head");
-    const key3 = await retryVerifyReport(h, id, spec, ctx, [{ cmd: "npm test", exit_code: 0, tests_passed: 642 }]);
-    expect(key3).toBe(`${id}:verify-head:3`);
+    expect(mid.result.next.gate_id).toBe("human:astra-final-review");
+    const retry: any = await runTool(ctx, "keel_gate", { run_id: id, gate_id: "human:astra-final-review", answer: "retry_verify" });
+    expect(retry.ok, retry.message).toBe(true);
+    expect(retry.result.next.kind).toBe("decide");
+    expect(retry.result.next.options).toEqual(["stop"]);
     const st = read(h, id);
     expect(st.nodes["open-pr"]?.attempts).toBe(2);
     expect(st.nodes["wait-ci"]?.attempts).toBe(2);
-    expect(st.nodes["astra-final-review"]?.attempts).toBe(2);
-    expect(st.cursor).toBe("report-ready");
-    const done: any = await runTool(ctx, "keel_wait", { run_id: id });
-    expect(done.ok, done.message).toBe(true);
-    expect(done.result.next.kind).toBe("done");
+    expect(st.nodes["astra-final-review"]?.attempts).toBe(3);
   });
 });

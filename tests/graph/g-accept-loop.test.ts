@@ -102,12 +102,12 @@ describe("g-accept FAIL revises without Jev", () => {
     expect(task).not.toContain(`${WT}/.keel/report-ready-1.md`);
   });
 
-  it("PASS and PASS+NOTES walk to verify-head", async () => {
+  it("PASS and PASS+NOTES walk to report-ready", async () => {
     for (const verdict of ["PASS", "PASS+NOTES"] as const) {
       const runId = verdict === "PASS" ? "run-pass" : "run-pass-notes";
       const { h, spec } = await bootAccept(runId, "bug-fix", verdict);
       await advance(h, runId, { type: "tick" }, { spec, gates: { accept: () => "ask_user" } });
-      expect(readState(h, runId).cursor).toBe("verify-head");
+      expect(readState(h, runId).cursor).toBe("report-ready");
     }
   });
 
@@ -238,6 +238,7 @@ describe("writing-node retry brief from interpreter", () => {
     expect(task).toContain("先读这些已完成报告再动手");
     expect(task).toContain(`${WT}/.keel/astra-final-review-1.md`);
     expect(task).toContain(`${WT}/.keel/implement-1.md`);
+    expect(task).toContain("这是退回修改");
   });
 });
 
@@ -299,7 +300,7 @@ describe("final FAIL with failed/blocked status still revises", () => {
     expect(r.next.kind).toBe("dispatch");
   });
 
-  it("PASS and PASS+NOTES still walk to verify-head when status is done", async () => {
+  it("PASS and PASS+NOTES still walk to report-ready when status is done", async () => {
     for (const verdict of ["PASS", "PASS+NOTES"] as const) {
       const runId = verdict === "PASS" ? "run-final-pass" : "run-final-pass-notes";
       const { h, spec, key } = await bootFinalAttempt(runId, "bug-fix");
@@ -309,11 +310,11 @@ describe("final FAIL with failed/blocked status still revises", () => {
         dispatch_key: key,
         report: { status: "done", verdict, summary: "通过" },
       }, { spec, gates: { accept: () => "ask_user" } });
-      expect(readState(h, runId).cursor).toBe("verify-head");
+      expect(readState(h, runId).cursor).toBe("report-ready");
     }
   });
 
-  it("failed without verdict still stops", async () => {
+  it("failed without verdict goes to g-retry-review, not straight to stopped", async () => {
     const { h, spec, key } = await bootFinalAttempt("run-fail-no-verdict", "bug-fix");
     const r = await advance(h, "run-fail-no-verdict", {
       type: "report",
@@ -321,8 +322,22 @@ describe("final FAIL with failed/blocked status still revises", () => {
       dispatch_key: key,
       report: { status: "failed", summary: "执行失败" },
     }, { spec });
-    expect(readState(h, "run-fail-no-verdict").cursor).toBe("stopped");
-    expect(r.next.kind).toBe("stop");
+    expect(readState(h, "run-fail-no-verdict").cursor).toBe("g-retry-review");
+    expect(r.next.kind).toBe("decide");
+    if (r.next.kind !== "decide") throw new Error("decide");
+    expect(r.next.gate_id).toBe("g-retry-review");
+    expect(r.next.options).toEqual(["retry", "escalate", "stop"]);
+
+    const { h: h2, spec: spec2, key: key2 } = await bootFinalAttempt("run-fail-no-verdict-retry", "bug-fix");
+    const retried = await advance(h2, "run-fail-no-verdict-retry", {
+      type: "report",
+      phase: "final",
+      dispatch_key: key2,
+      report: { status: "failed", summary: "执行失败" },
+    }, { spec: spec2, gates: { retry: () => "retry" } });
+    expect(retried.next.kind).toBe("dispatch");
+    if (retried.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(retried.next.dispatch_key).toBe("run-fail-no-verdict-retry:astra-final-review:2");
   });
 
   it("a repeated final does not rewind the cursor", async () => {
@@ -415,9 +430,9 @@ describe("prior FAIL cannot skip the next astra-final-review", () => {
       s.nodes["wait-ci"] = { status: "active", attempts: 1 };
       s.nodes["astra-final-review"] = {
         status: "succeeded",
-        attempts: 2,
+        attempts: 3,
         dispatch_state: "terminal",
-        report_path: `${WT}/.keel/astra-final-review-2.md`,
+        report_path: `${WT}/.keel/astra-final-review-3.md`,
         last_report: { status: "done", verdict: "PASS", summary: "已满次数" },
       };
     });
@@ -431,7 +446,8 @@ describe("prior FAIL cannot skip the next astra-final-review", () => {
 });
 
 describe("astra-final-review always dispatches after wait-ci ok", () => {
-  async function plantVerifyFinal(runId: string, implementFiles: string[], implementLines: number) {
+  // implement changed product files; the last node before wait-ci (fix-ci) only wrote its .keel report.
+  async function plantKeelOnlyFinal(runId: string, implementFiles: string[], implementLines: number) {
     const spec = PSTACK_GRAPHS["bug-fix"];
     const h = fakeHost({
       node: (method: string) => {
@@ -451,11 +467,11 @@ describe("astra-final-review always dispatches after wait-ci ok", () => {
       now: h.now(),
       scopeAllow: ["src/**", "docs/**", "tests/**"],
     });
-    const verifyKey = `${runId}:verify-same-surface:1`;
+    const lastKey = `${runId}:fix-ci:1`;
     await withRun(h, runId, (raw) => {
       const s = raw as unknown as GraphRunState;
       s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
-      s.cursor = "verify-same-surface";
+      s.cursor = "fix-ci";
       s.budget.astra_left = 3;
       s.nodes["implement"] = {
         status: "succeeded",
@@ -467,29 +483,30 @@ describe("astra-final-review always dispatches after wait-ci ok", () => {
           changed_lines: implementLines,
         },
       };
-      s.nodes["verify-same-surface"] = {
+      s.nodes["fix-ci"] = {
         status: "active",
         attempts: 1,
-        dispatch_key: verifyKey,
+        dispatch_key: lastKey,
         dispatch_state: "running",
       };
     });
     await advance(h, runId, {
       type: "report",
       phase: "final",
-      dispatch_key: verifyKey,
+      dispatch_key: lastKey,
       report: {
         status: "done",
         summary: "只写了报告",
-        files_changed: [".keel/verify-same-surface-1.md"],
+        files_changed: [".keel/fix-ci-1.md"],
         changed_lines: 20,
       },
     }, { spec });
+    expect(readState(h, runId).cursor).toBe("open-pr");
     return { h, spec };
   }
 
   it("still dispatches astra-final-review when a write node changed source and the last node only wrote .keel", async () => {
-    const { h, spec } = await plantVerifyFinal("run-keep-review", ["src/login.ts"], 508);
+    const { h, spec } = await plantKeelOnlyFinal("run-keep-review", ["src/login.ts"], 508);
     await withRun(h, "run-keep-review", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.status = "running";
@@ -506,7 +523,7 @@ describe("astra-final-review always dispatches after wait-ci ok", () => {
   });
 
   it("still dispatches astra-final-review when all write-node product files are docs/tests under the old line cap", async () => {
-    const { h, spec } = await plantVerifyFinal("run-docs-review", ["docs/readme.md", "tests/a.test.ts"], 12);
+    const { h, spec } = await plantKeelOnlyFinal("run-docs-review", ["docs/readme.md", "tests/a.test.ts"], 12);
     await withRun(h, "run-docs-review", (raw) => {
       const s = raw as unknown as GraphRunState;
       s.status = "running";
@@ -561,8 +578,9 @@ function verifyNode(method: string, localHead: string, prHead: string) {
   return { ok: false, message: method };
 }
 
-async function plantVerify(h: ReturnType<typeof fakeHost>, specId: "bug-fix" | "feature" | "refactoring", localHead: string) {
-  const nodeId = specId === "refactoring" ? "equivalence" : "verify-same-surface";
+// The writer (implement) runs the tests locally before the PR exists; there is no separate local verify node.
+async function plantImplement(h: ReturnType<typeof fakeHost>, specId: "bug-fix" | "feature" | "refactoring", localHead: string) {
+  const nodeId = "implement";
   const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
     goal: specId === "feature" ? "新增登录功能" : specId === "refactoring" ? "重构登录模块" : "修登录报错",
     repo_dir: "/repo",
@@ -604,10 +622,10 @@ async function plantVerify(h: ReturnType<typeof fakeHost>, specId: "bug-fix" | "
   return { runId, key, nodeId };
 }
 
-describe("local verify binds worktree HEAD not the remote PR head", () => {
-  it.each(["bug-fix", "feature", "refactoring"] as const)("%s local B vs remote A advances off the verify node", async (specId) => {
+describe("local writer HEAD ahead of the remote PR head still opens the PR", () => {
+  it.each(["bug-fix", "feature", "refactoring"] as const)("%s local B vs remote A advances off implement to open-pr", async (specId) => {
     const h = fakeHost({ node: (method: string) => verifyNode(method, HEAD_B, HEAD_A) });
-    const { runId, key, nodeId } = await plantVerify(h, specId, HEAD_B);
+    const { runId, key, nodeId } = await plantImplement(h, specId, HEAD_B);
     const r: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
       run_id: runId,
       phase: "final",
@@ -624,47 +642,18 @@ describe("local verify binds worktree HEAD not the remote PR head", () => {
     });
     expect(r.ok, r.message).toBe(true);
     const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
-    expect(st.nodes[nodeId]?.last_report?.head_matches).toBe(true);
     expect(st.verdict).toBeUndefined();
     expect(st.cursor).not.toBe(nodeId);
-    expect(st.cursor).not.toBe("stopped");
-    if (specId === "bug-fix" || specId === "refactoring") {
-      expect(st.cursor).toBe("open-pr");
-      expect(r.result.next.kind).toBe("wait");
-      expect(r.result.next.call.tool).toBe("pr_open");
-    }
-  });
-
-  it("missing local HEAD writes head_matches false and does not fall back to PR A", async () => {
-    const h = fakeHost({
-      node: (method: string, params: Record<string, unknown> = {}) => {
-        if (method === "git/state" && params.repo_dir === WT) return { ok: false, message: "no git" };
-        return verifyNode(method, HEAD_B, HEAD_A);
-      },
-    });
-    const { runId, key, nodeId } = await plantVerify(h, "bug-fix", HEAD_B);
-    await runTool(makeContext(h, "c2", profile), "keel_report", {
-      run_id: runId,
-      phase: "final",
-      dispatch_key: key,
-      inline_report: {
-        status: "done",
-        summary: "ok",
-        ran: [{ cmd: "npm test", exit_code: 0, tests_passed: 1 }],
-        files_changed: ["src/login.ts"],
-        head_sha: HEAD_B,
-      },
-    });
-    const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
-    expect(st.nodes[nodeId]?.last_report?.head_matches).toBe(false);
-    expect(st.cursor).toBe(nodeId);
+    expect(st.cursor).toBe("open-pr");
+    expect(r.result.next.kind).toBe("wait");
+    expect(r.result.next.call.tool).toBe("pr_open");
   });
 });
 
-describe("FAIL then small verify report still re-runs final review", () => {
-  it("FAIL then a later .keel-only verify still re-runs final review", async () => {
+describe("FAIL then small writer report still re-runs final review", () => {
+  it("FAIL then a later .keel-only implement report still re-runs final review", async () => {
     const h = fakeHost({ node: (method: string) => verifyNode(method, HEAD_B, HEAD_B) });
-    const { runId, key } = await plantVerify(h, "bug-fix", HEAD_B);
+    const { runId, key } = await plantImplement(h, "bug-fix", HEAD_B);
     await withRun(h, runId, (raw) => {
       const s = raw as unknown as GraphRunState;
       s.budget.astra_left = 3;
@@ -684,7 +673,7 @@ describe("FAIL then small verify report still re-runs final review", () => {
         status: "done",
         summary: "只写了报告",
         ran: [{ cmd: "npm test", exit_code: 0, tests_passed: 1 }],
-        files_changed: [".keel/verify-same-surface-2.md"],
+        files_changed: [".keel/implement-1.md"],
         changed_lines: 20,
         head_sha: HEAD_B,
       },

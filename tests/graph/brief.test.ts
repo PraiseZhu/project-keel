@@ -109,3 +109,41 @@ describe("writing node brief", () => {
     expect(plain).not.toContain("先读这些已完成报告再动手");
   });
 });
+
+describe("node task line", () => {
+  const base = { run_id: "run-1", goal: "修好登录空指针", worktree: "/w" };
+  const ctx1 = { attempt: 1, dispatch_key: "run-1:x:1" };
+
+  it("bug-fix writer does failing test, root cause, minimal fix, tests in one session", () => {
+    const text = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, ctx1);
+    const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
+    expect(task).toContain("失败的测试");
+    expect(task).toContain("单独提交");
+    expect(task).toContain("根因");
+    expect(task).toContain("最小修复");
+    expect(text.indexOf("TASK")).toBeGreaterThan(text.indexOf("GOAL"));
+    expect(text.indexOf("TASK")).toBeLessThan(text.indexOf("SCOPE"));
+  });
+
+  it("feature writer follows the plan; refactoring writer pins behavior first", () => {
+    const feature = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "feature" }, ctx1);
+    expect(feature).toContain("方案报告");
+    const refactor = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "refactoring" }, ctx1);
+    expect(refactor).toContain("钉住现有行为的测试");
+  });
+
+  it("the review is read-only, runs tests, and maps confirmed P0/P1 to FAIL", () => {
+    const text = buildBrief({ id: "astra-final-review", role: "verifier", writes: false }, { ...base, taskType: "bug-fix" }, ctx1);
+    expect(text).toContain("非作者审查者");
+    expect(text).toContain("P0/P1");
+    expect(text).toContain("verdict 写 FAIL");
+    expect(text).toContain("测试运行器本身的命令");
+    expect(text).toContain("失败测试先于修复提交");
+    expect(text).toContain("只读：不得修改任何文件");
+  });
+
+  it("falls back to the repo's own test command when no SC has verify", () => {
+    const text = buildBrief({ id: "implement", role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, ctx1);
+    expect(text).toMatch(/VERIFY\s+没有指定时用仓库自带的测试命令/);
+  });
+});

@@ -15,11 +15,14 @@ import {
   SETTINGS_ACCORDION_IDS,
   SETTINGS_ROW_IDS,
   SETTINGS_STATUS_IDS,
+  SETTINGS_VISIBLE_ROW_IDS,
   shouldDeferCatalogRender,
   shouldRefreshCatalogOnOpen,
   visibleModels,
 } from "../../src/panel/settings-model.ts";
-import { cloneManual, DEFAULT_MANUAL, ROLES, type AgentModel } from "../../src/shared/manual/schema.ts";
+import { directionOptions } from "../../src/shared/manual/model-tiers.ts";
+import { resolve, resolveDirection } from "../../src/shared/manual/resolve.ts";
+import { cloneManual, DEFAULT_MANUAL, type AgentModel } from "../../src/shared/manual/schema.ts";
 import { appendixCAgentModels } from "../manual/model-manual.test.ts";
 import { parseImportedJson, readCatalog, saveManual, type SettingsIO } from "../../src/panel/manual-editor.ts";
 
@@ -28,19 +31,24 @@ function model(partial: AgentModel): AgentModel {
 }
 
 describe("buildSettingsView", () => {
-  it("renders two harness tabs with the same eight rows and three controls", () => {
+  it("renders two harness tabs with the same six rows and three controls", () => {
     const models = appendixCAgentModels();
+    const order = ["lead", "worker", "architect", "final-review", "explorer", "researcher"];
+    expect([...SETTINGS_VISIBLE_ROW_IDS]).toEqual(order);
+    // Event validation still accepts every stored row id, including the hidden ones.
+    expect([...SETTINGS_ROW_IDS].sort()).toEqual([...order, "direction", "verifier"].sort());
     for (const harness of ["codex", "claude-code"] as const) {
       const view = buildSettingsView(DEFAULT_MANUAL, { harness, taskType: "default" }, models);
       expect(view.tabs).toHaveLength(2);
       expect(view.tabs.map((t) => t.id)).toEqual(["codex", "claude-code"]);
       expect(view.statusIds).toEqual([...SETTINGS_STATUS_IDS]);
       expect(view.accordionIds).toEqual([...SETTINGS_ACCORDION_IDS]);
-      expect(view.rowIds).toEqual([...SETTINGS_ROW_IDS]);
-      expect(view.rows.map((r) => r.id)).toEqual([...SETTINGS_ROW_IDS]);
-      expect(view.rows).toHaveLength(8);
-      expect(view.rows.find((r) => r.id === "architect")?.label).toBe("方案");
-      expect(view.rows.find((r) => r.id === "final-review")?.label).toBe("终审");
+      expect(view.rowIds).toEqual(order);
+      expect(view.rows.map((r) => r.id)).toEqual(order);
+      expect(view.rows).toHaveLength(6);
+      expect(view.rows.map((r) => r.label)).toEqual(["主控", "写手", "方案", "审查", "探索", "研究"]);
+      expect(view.rows.find((r) => r.id === "explorer")?.description).toMatch(/^只用于调查任务/);
+      expect(view.rows.find((r) => r.id === "researcher")?.description).toMatch(/^只用于调查任务/);
       for (const row of view.rows) {
         expect(row.agent.label).toBe("运行环境");
         expect(row.model.label).toBe("模型");
@@ -50,25 +58,28 @@ describe("buildSettingsView", () => {
     }
   });
 
-  it("does not borrow the other harness profile and shows 主控自己定 on Codex", () => {
+  it("does not borrow the other harness profile and hides direction/verifier rows without touching their data", () => {
     const models = appendixCAgentModels();
     const codex = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", profileId: "grok", taskType: "default" }, models);
     expect(codex.profileId).toBe("sol");
-    const dir = codex.rows.find((r) => r.id === "direction")!;
-    expect(dir.directionSelf).toBe(true);
-    expect(dir.agent.disabled).toBe(true);
-    expect(dir.effort.disabled).toBe(true);
-    expect(dir.model.options[0]).toMatchObject({ value: "", label: "主控自己定" });
-    expect(dir.model.groups.length).toBeGreaterThan(0);
-    expect(dir.model.groups.some((g) => g.label.startsWith("和主控持平") || g.label.startsWith("比主控强") || g.label.startsWith("未分级"))).toBe(true);
-    expect(dir.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(false);
-    expect(dir.hiddenWeaker).toBeGreaterThan(0);
-    expect(dir.agent.value).toBe("codex");
+    expect(codex.rows.some((r) => r.id === "direction" || r.id === "verifier")).toBe(false);
     const claude = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
     expect(claude.profileId).toBe("grok");
-    expect(claude.rows.find((r) => r.id === "direction")?.directionSelf).toBe(false);
-    expect(claude.rows.find((r) => r.id === "direction")?.route).toMatchObject({ model: "anthropic/claude-opus-5-5" });
-    expect(claude.rows.find((r) => r.id === "verifier")?.route).toMatchObject({ agent: "codex", model: "gpt-6-luna" });
+    expect(claude.rows.some((r) => r.id === "direction" || r.id === "verifier")).toBe(false);
+    expect(rowsHtml(codex) + rowsHtml(claude)).not.toMatch(/data-row="(direction|verifier)"/);
+    // Stored direction / verifier routes still resolve.
+    expect(resolveDirection(DEFAULT_MANUAL, "grok", "default").primary).toMatchObject({ model: "anthropic/claude-opus-5-5" });
+    expect(resolve(DEFAULT_MANUAL, "grok", "default", "verifier").primary).toMatchObject({ agent: "codex", model: "gpt-6-luna" });
+  });
+
+  it("direction options still list only models stronger than or equal to the Codex lead", () => {
+    const models = appendixCAgentModels();
+    const sol = DEFAULT_MANUAL.profiles.find((p) => p.id === "sol")!;
+    const classified = directionOptions(models, "codex", sol.lead.model);
+    expect(classified.groups.length).toBeGreaterThan(0);
+    expect(classified.groups.some((g) => g.label.startsWith("和主控持平") || g.label.startsWith("比主控强") || g.label.startsWith("未分级"))).toBe(true);
+    expect(classified.groups.flatMap((g) => g.options).some((o) => o.id.includes("gpt-6-luna"))).toBe(false);
+    expect(classified.hiddenWeaker).toBeGreaterThan(0);
   });
 
   it("task view locks inherited roles and can materialize an override without dropping draft routes", () => {
@@ -182,15 +193,16 @@ describe("route patch helpers", () => {
     expect(routeAfterEffortChange(models, { agent: "codex", model: "a", provider_id: "art-cindy", effort: "high" }, "").effort).toBeUndefined();
   });
 
-  it("setDirectionRoute round-trips through the view", () => {
+  it("setDirectionRoute still round-trips stored data while the view shows no direction row", () => {
     const models = appendixCAgentModels();
     const saved = setDirectionRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
-    const row = buildSettingsView(saved, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "direction")!;
-    expect(row.directionSelf).toBe(false);
-    expect(row.route).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
+    expect(saved.profiles.find((p) => p.id === "sol")).toMatchObject({ direction_gate: "astra" });
+    expect(resolveDirection(saved, "sol", "default").primary).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
+    expect(buildSettingsView(saved, { harness: "codex", taskType: "default" }, models).rows.some((r) => r.id === "direction")).toBe(false);
     const self = setDirectionRoute(saved, "sol", undefined);
-    const again = buildSettingsView(self, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "direction")!;
-    expect(again.directionSelf).toBe(true);
+    const solSelf = self.profiles.find((p) => p.id === "sol")!;
+    expect(solSelf.direction_gate).toBe("lead");
+    expect(solSelf.direction_route).toBeUndefined();
   });
 
   it("setFinalReviewRoute round-trips through the view and 同方案 drops the field", () => {
@@ -322,7 +334,7 @@ describe("settings HTML escaping", () => {
     expect(html).not.toMatch(/<img/i);
     expect(html).toContain(XSS_ESCAPED);
     expect(html).toContain(`继承自 ${escapeHtml(parentId)}`);
-    expect(view.rows.filter((r) => r.source?.includes(parentId))).toHaveLength(5);
+    expect(view.rows.filter((r) => r.source?.includes(parentId)).map((r) => r.id)).toEqual(["worker", "architect", "explorer", "researcher"]);
 
     const chips = renderProfileButtonHtml({ id: childId, name: childName, selected: true, defaultOf: "codex" });
     expect(chips).not.toMatch(/<img/i);
@@ -378,7 +390,8 @@ describe("settings HTML escaping", () => {
     const leadView = buildSettingsView(leadParsed.manual, { harness: "codex", taskType: "default" }, leadModels);
     const leadHtml = rowsHtml(leadView);
     expect(leadHtml).not.toMatch(/<img/i);
-    expect(leadHtml).toContain(`只列比主控（${XSS_ESCAPED}）强或持平的模型`);
+    const leadRowHtml = renderRowHtml(leadView.rows.find((r) => r.id === "lead")!, "default");
+    expect(leadRowHtml).toContain(`<option value="${XSS_ESCAPED}\t${sol.lead.provider_id}" selected>${XSS_ESCAPED} · ${escapeHtml(amp)}</option>`);
     expect(leadHtml).toContain(escapeHtml(amp));
     expect(leadHtml).toContain("&amp;");
     expect(leadHtml).toContain("&quot;");
@@ -405,22 +418,25 @@ describe("settings HTML escaping", () => {
 describe("fallback rows", () => {
   const models = appendixCAgentModels();
 
-  it("shows fallbacks only on the five role rows", () => {
+  it("shows fallbacks only on the four visible role rows", () => {
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    for (const id of ROLES) {
+    const roleRows = ["worker", "architect", "explorer", "researcher"] as const;
+    for (const id of roleRows) {
       const row = view.rows.find((r) => r.id === id)!;
       expect(row.fallbacks?.items).toHaveLength(1);
       expect(row.fallbacks?.canAdd).toBe(true);
     }
-    for (const id of ["lead", "direction", "final-review"] as const) {
-      expect(view.rows.find((r) => r.id === id)?.fallbacks).toBeUndefined();
+    for (const id of ["lead", "final-review"] as const) {
+      const row = view.rows.find((r) => r.id === id)!;
+      expect(row).toBeDefined();
+      expect(row.fallbacks).toBeUndefined();
     }
+    expect(view.rows.filter((r) => r.fallbacks).map((r) => r.id).sort()).toEqual([...roleRows].sort());
     const html = rowsHtml(view);
     expect(html).not.toMatch(/data-act="toggle-fb" data-row="lead"/);
-    expect(html).not.toMatch(/data-act="toggle-fb" data-row="direction"/);
     expect(html).not.toMatch(/data-act="toggle-fb" data-row="final-review"/);
+    expect(html).not.toMatch(/data-row="(direction|verifier)"/);
     expect(html).not.toMatch(/id="fb-panel-lead"/);
-    expect(html).not.toMatch(/id="fb-panel-direction"/);
     expect(html).not.toMatch(/id="fb-panel-final-review"/);
   });
 

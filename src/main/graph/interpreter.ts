@@ -366,10 +366,15 @@ function isReturnedWriter(state: GraphRunState, node: GraphNode): boolean {
 }
 
 function brief(state: GraphRunState, spec: GraphSpec, node: GraphNode, dispatchKeyValue: string, attempt: number): string {
-  const attachPrior = node.writes && (attempt >= 2 || isReturnedWriter(state, node));
+  // Writers always see finished reports (a feature writer needs the plan); unstick reads why earlier attempts failed.
+  const attachPrior = node.writes || node.id === "astra-unstick";
   const priorReports = attachPrior ? completedKeelReports(state, spec) : undefined;
   const revise = node.writes ? state.facts?.done_revise : undefined;
+  // fix-ci / triage-threads carry their own TASK; only the main writer needs the "returned for revision" line.
+  const returned = node.id === "implement" && isReturnedWriter(state, node);
   const contextBits = [
+    returned ? "这是退回修改：先读下面的报告，只修其中确认成立的 P0/P1 和缺证据的 SC，已通过的部分不重做" : "",
+    !returned && node.writes && attempt >= 2 ? `这是第 ${attempt} 次尝试：先读下面的报告，不要重复上一轮的失败` : "",
     revise?.missing_sc?.length
       ? `done 门缺证据：${revise.missing_sc.join("、")}${revise.verify_report ? `。先读验证报告：${revise.verify_report}` : ""}`
       : "",
@@ -1265,7 +1270,7 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
         return;
       }
       const scIds = scIdsFromMissing(missing);
-      const verify = state.nodes["verify-head"]?.report_path ?? state.nodes["astra-final-review"]?.report_path;
+      const verify = state.nodes["astra-final-review"]?.report_path;
       if (!state.facts) state.facts = {};
       state.facts.done_revise = { missing_sc: scIds, ...(verify ? { verify_report: verify } : {}) };
       const node = ensureNode(state, to);

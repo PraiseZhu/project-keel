@@ -23,15 +23,18 @@ export const SETTINGS_ROW_IDS = ["lead", "direction", "explorer", "researcher", 
 export type SettingsRowId = (typeof SETTINGS_ROW_IDS)[number];
 export type SettingsHarness = "codex" | "claude-code";
 
+/** Rows the page shows. direction / verifier stay in stored data but no graph uses them any more. */
+export const SETTINGS_VISIBLE_ROW_IDS = ["lead", "worker", "architect", "final-review", "explorer", "researcher"] as const satisfies readonly SettingsRowId[];
+
 export const SETTINGS_ROW_META: Record<SettingsRowId, { label: string; description: string }> = {
   lead: { label: "主控", description: "发起并推进整件事" },
-  direction: { label: "方向裁决", description: "选路线时谁拍板" },
-  explorer: { label: "探索", description: "读代码，找要改的位置" },
-  researcher: { label: "研究", description: "查资料、核对接口" },
-  worker: { label: "实现", description: "复现、写代码、提交" },
-  verifier: { label: "验证", description: "换一个模型复核" },
-  architect: { label: "方案", description: "定方案" },
-  "final-review": { label: "终审", description: "最终审查" },
+  direction: { label: "方向裁决", description: "已停用：任务类型由主控开工时说明" },
+  explorer: { label: "探索", description: "只用于调查任务：读代码找位置" },
+  researcher: { label: "研究", description: "只用于调查任务：查资料、核对接口" },
+  worker: { label: "写手", description: "复现、修复、跑测试、提交" },
+  verifier: { label: "验证", description: "已并入审查" },
+  architect: { label: "方案", description: "新功能先出方案；同一失败重复时出主意" },
+  "final-review": { label: "审查", description: "换更强、不同家族的模型审改动并跑测试" },
 };
 
 export const TASK_SCOPE_TYPES: readonly Exclude<TaskType, "default">[] = ["bug-fix", "feature", "refactoring", "investigation", "pr"];
@@ -561,7 +564,7 @@ export function buildSettingsView(
     taskScope,
     statusIds: SETTINGS_STATUS_IDS,
     accordionIds: SETTINGS_ACCORDION_IDS,
-    rowIds: SETTINGS_ROW_IDS,
+    rowIds: SETTINGS_VISIBLE_ROW_IDS,
   };
   if (!picked.profile) {
     return { ...base, empty: picked.empty, overrideCount: 0, rows: [] };
@@ -570,9 +573,11 @@ export function buildSettingsView(
   const profileLevelNote = taskScope === "task";
   const rows: SettingsRowView[] = [
     leadRow(profile, catalog, profileLevelNote),
-    directionRow(manual, profile, taskType, catalog, profileLevelNote),
-    ...ROLES.map((role) => roleRow(role, manual, profile, taskType, catalog)),
+    roleRow("worker", manual, profile, taskType, catalog),
+    roleRow("architect", manual, profile, taskType, catalog),
     finalReviewRow(manual, profile, taskType, catalog, profileLevelNote),
+    roleRow("explorer", manual, profile, taskType, catalog),
+    roleRow("researcher", manual, profile, taskType, catalog),
   ];
   return {
     ...base,

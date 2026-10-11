@@ -516,7 +516,7 @@ function reviseToOf(state: GraphRunState): string | undefined {
 export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDoneResult): Next {
   const missingSc = scIdsFromMissing(result.missing);
   if (missingSc.length) {
-    const verify = state.nodes?.["verify-head"]?.report_path ?? state.nodes?.["astra-final-review"]?.report_path;
+    const verify = state.nodes?.["astra-final-review"]?.report_path;
     const reviseTo = reviseToOf(state);
     return {
       kind: "decide",
@@ -567,10 +567,8 @@ export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDo
 
 function rewindVerifier(state: GraphRunState): string {
   const spec = PSTACK_GRAPHS[state.spec_id as GraphTaskType];
-  const id = spec?.nodes.find((n) => n.id === "verify-head" && n.role === "verifier")?.id
-    ?? spec?.nodes.find((n) => n.role === "verifier")?.id
-    ?? Object.entries(state.nodes).find(([, n]) => n.planned_params?.role === "keel-verifier")?.[0]
-    ?? "verify-same-surface";
+  // The non-author review (astra-final-review) is the only verifier in change graphs.
+  const id = spec?.nodes.find((n) => n.role === "verifier")?.id ?? "astra-final-review";
   const node = ensureNode(state, id);
   node.status = "pending";
   node.dispatch_state = undefined;
@@ -885,14 +883,12 @@ export async function driveGraphEvent(ctx: ToolContext, runId: string, event: Ad
 }
 
 async function step(ctx: ToolContext, runId: string, event: AdvanceEvent): Promise<{ next: Next; state: GraphRunState }> {
-  const cfg = await loadRuntimeConfig(ctx.host);
   const states = await loadGraphStates(ctx.host);
   const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
-  let profile;
-  try { profile = st?.profile_id ? findProfile(cfg.manual, st.profile_id) : undefined; } catch { profile = undefined; }
   const graph = (st?.task_type ?? "bug-fix") as GraphKind;
   const opts: AdvanceOpts = {
-    gates: makeGates(ctx, runId, graph, profile?.direction_gate === "astra" ? "astra" : "lead"),
+    // Direction calls go to the lead; the task type comes from keel_run.playbook or the lead's answer.
+    gates: makeGates(ctx, runId, graph, "lead"),
     doneCheck: (state) => runDoneCheck(ctx, state),
     ...(ctx.sessionId ? { leadSessionId: ctx.sessionId } : {}),
   };

@@ -82,7 +82,7 @@ async function bootExplore(over: {
     spec_id: spec.id,
     profile_id: over.profile_id ?? "grok",
     lead_harness: over.lead_harness ?? "claude-code",
-    task_type: "bug-fix",
+    task_type: spec.id === "investigation" ? "investigation" : "bug-fix",
     entry: spec.entry,
     goal: "fix the bug",
     worktree: over.worktree ?? "/repo/.worktrees/keel-run-sa",
@@ -175,7 +175,7 @@ describe("SC-1 subagent vs orca dispatch", () => {
     expect(verify.subagent).toBeUndefined();
   });
 
-  it("interrogate-architect stays on create_worker under the same claude-code profile", async () => {
+  it("feature architect-plan stays on create_worker under the same claude-code profile", async () => {
     const spec = PSTACK_GRAPHS.feature;
     const manual = claudeXdManual();
     const h = fakeHost({
@@ -186,17 +186,16 @@ describe("SC-1 subagent vs orca dispatch", () => {
         return { ok: false, message: method };
       },
     });
-    const runId = "run-ia";
+    const runId = "run-ap";
     await createRun(h, {
       run_id: runId,
       spec_id: spec.id,
       profile_id: "grok",
       lead_harness: "claude-code",
       task_type: "feature",
-      entry: "interrogate-architect",
+      entry: spec.entry,
       goal: "新增支付功能",
-      worktree: "/repo/.worktrees/keel-run-ia",
-      facts: { design_contested: true },
+      worktree: "/repo/.worktrees/keel-run-ap",
       astra_budget: 4,
       now: h.now(),
     });
@@ -204,7 +203,7 @@ describe("SC-1 subagent vs orca dispatch", () => {
     const first = await advance(h, runId, { type: "tick" }, opts);
     expect(first.next.kind).toBe("setup");
     const d = asDispatch((await advance(h, runId, { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, opts)).next);
-    expect(d.dispatch_key).toContain(":interrogate-architect:");
+    expect(d.dispatch_key).toContain(":architect-plan:");
     expect(d.create_worker?.role).toBe("keel-architect");
     expect(d.create_worker?.agent).toBe("claude-code");
     expect(d.subagent).toBeUndefined();
@@ -255,7 +254,8 @@ describe("SC-2 subagent in-flight and retry", () => {
     expect(late.state.nodes.explore.status).toBe("succeeded");
     expect(late.next.kind).not.toBe("decide");
 
-    const { h: h2, opts: o2, runId: r2 } = await bootExplore({ run_id: "run-retry", manual: claudeXdManual() });
+    // keel_gate loads the real spec by spec_id; explore lives only in the investigation graph.
+    const { h: h2, opts: o2, runId: r2 } = await bootExplore({ run_id: "run-retry", manual: claudeXdManual(), spec: PSTACK_GRAPHS.investigation });
     asDispatch((await advance(h2, r2, { type: "tick" }, o2)).next);
     h2.clock.t += 20 * 60 * 1000;
     await advance(h2, r2, { type: "tick" }, o2);
@@ -282,7 +282,7 @@ describe("SC-2 subagent in-flight and retry", () => {
 
 describe("R43-01 subagent timeout retry must not inherit started_at", () => {
   it("queued Orca attempt after subagent timeout starts its own timebox", async () => {
-    const { h, opts, runId } = await bootExplore({ run_id: "r-timeout-queue", manual: claudeXdManual() });
+    const { h, opts, runId } = await bootExplore({ run_id: "r-timeout-queue", manual: claudeXdManual(), spec: PSTACK_GRAPHS.investigation });
     const t0 = h.now();
     asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
     h.clock.t += 20 * 60 * 1000;
@@ -332,8 +332,10 @@ describe("R43-01 subagent timeout retry must not inherit started_at", () => {
 });
 
 describe("R43-02 leftover plugin_task must not hijack a new Orca research attempt", () => {
-  it("stay after completed plugin research clears task before create_worker", async () => {
-    const spec = structuredClone(PSTACK_GRAPHS["bug-fix"]);
+  it("returning to research after a completed plugin research clears task before create_worker", async () => {
+    // Change graphs no longer have read-only research; loop the investigation graph back to explore so research runs twice.
+    const spec = structuredClone(PSTACK_GRAPHS.investigation);
+    spec.edges = spec.edges.map((e) => (e.from === "research" && e.on === "ok" ? { ...e, to: "explore" } : e));
     const researchNode = spec.nodes.find((n) => n.id === "research");
     if (!researchNode) throw new Error("research");
     researchNode.kind = "plugin_task";
@@ -348,10 +350,10 @@ describe("R43-02 leftover plugin_task must not hijack a new Orca research attemp
     const runId = "r-legacy-research-loop";
     await createRun(h, {
       run_id: runId,
-      spec_id: "bug-fix",
+      spec_id: "investigation",
       profile_id: "sol",
       lead_harness: "codex",
-      task_type: "bug-fix",
+      task_type: "investigation",
       entry: "research",
       goal: "fix the bug",
       worktree: "/repo/.worktrees/keel-run-sa",
@@ -361,7 +363,6 @@ describe("R43-02 leftover plugin_task must not hijack a new Orca research attemp
     const opts: AdvanceOpts = {
       spec,
       config: cfg(DEFAULT_MANUAL),
-      gates: { advance: () => "stay" },
     };
     const create = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
     expect(create.plugin_task?.phase).toBe("create");
@@ -395,7 +396,9 @@ describe("R43-02 leftover plugin_task must not hijack a new Orca research attemp
     expect(research2.dispatch_key).toBe(`${runId}:research:2`);
     expect(research2.create_worker).toBeTruthy();
     expect(research2.plugin_task).toBeUndefined();
-    expect(research2.create_worker?.initial_task).not.toMatch(/不要写 \.keel/);
+    // Investigation workers also skip .keel/, so check for the plugin_task REPORT line specifically.
+    expect(research2.create_worker?.initial_task).not.toMatch(/不要写 \.keel\/ 文件，也不要调用 keel_report/);
+    expect(research2.create_worker?.initial_task).toMatch(/主控会把它原样交给 KEEL/);
     const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
     expect(st.nodes.research?.task).toBeUndefined();
     const acc2 = await advance(h, runId, {
@@ -474,7 +477,7 @@ describe("nudge maps subagent dispatch to wait", () => {
       updated_at: t0,
       next: { kind: "dispatch", subagent: { harness: "claude-code", model: "haiku" } },
       nodes: { explore: { dispatch_state: "running", started_at: t0 } },
-      spec_id: "bug-fix",
+      spec_id: "investigation",
     };
     const mapped = asNudgeRun(raw)!;
     expect(mapped.next?.kind).toBe("wait");
@@ -489,7 +492,7 @@ describe("nudge maps subagent dispatch to wait", () => {
       updated_at: t0,
       next: { kind: "dispatch", subagent: { harness: "claude-code", model: "haiku" } },
       nodes: { explore: { dispatch_state: "running", started_at: t0 } },
-      spec_id: "bug-fix",
+      spec_id: "investigation",
     };
     const mapped = asNudgeRun(raw)!;
     expect(shouldNudge(mapped, t0 + 21 * 60_000, { turn: { endReason: "completed" } }).nudge).toBe(true);
@@ -499,20 +502,21 @@ describe("nudge maps subagent dispatch to wait", () => {
 describe("SC-3 research is dispatch", () => {
   afterEach(cleanupRepos);
 
-  it("bug-fix research is create_worker for default sol, never plugin_task or human:reconcile", async () => {
+  // Change graphs no longer have a research node; only the investigation graph does.
+  it("investigation research is create_worker for default sol, never plugin_task or human:reconcile", async () => {
     const world = makeWorld();
     const host = makeE2eHost(world);
     const started = await startRun(host, {
-      goal: "修登录报错", repo_dir: world.repoDir, lead: "codex", sc: [...SC], scope: ["src/**"],
+      goal: "调查登录报错", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC],
     });
-    const run = await leadLoop(host, started, world, { stopWhen: (_n, state) => state.cursor === "implement" || state.cursor === "architect-plan" });
+    const run = await leadLoop(host, started, world, { stopWhen: (_n, state) => state.cursor === "report" });
     const research = run.steps.find((s) => s.kind === "dispatch" && s.dispatch_key?.includes(":research:"));
     expect(research, `steps=${JSON.stringify(run.steps.map((s) => s.kind))}`).toBeTruthy();
     if (research?.kind !== "dispatch") throw new Error("research");
     expect(research.plugin_task).toBeUndefined();
     expect(research.create_worker).toBeTruthy();
     expect(run.steps.some((s) => s.kind === "decide" && s.gate_id === "human:reconcile")).toBe(false);
-    expect(["implement", "architect-plan"]).toContain(run.state.cursor);
+    expect(run.state.cursor).toBe("report");
   });
 
   it("claude-code xd research is subagent", async () => {
@@ -520,9 +524,9 @@ describe("SC-3 research is dispatch", () => {
     const host = makeE2eHost(world);
     host.kv.manual = claudeXdManual();
     const started = await startRun(host, {
-      goal: "修登录报错", repo_dir: world.repoDir, lead: "claude-code", profile: "grok", sc: [...SC], scope: ["src/**"],
+      goal: "调查登录报错", repo_dir: world.repoDir, lead: "claude-code", profile: "grok", playbook: "investigation", sc: [...SC],
     });
-    const run = await leadLoop(host, started, world, { stopWhen: (_n, state) => state.cursor === "implement" || state.cursor === "architect-plan" });
+    const run = await leadLoop(host, started, world, { stopWhen: (_n, state) => state.cursor === "report" });
     const research = run.steps.find((s) => s.kind === "dispatch" && s.dispatch_key?.includes(":research:"));
     expect(research).toBeTruthy();
     if (research?.kind !== "dispatch") throw new Error("research");
@@ -534,7 +538,8 @@ describe("SC-3 research is dispatch", () => {
 
 describe("accepted error copy", () => {
   it("mentions subagent must not report accepted", async () => {
-    const { h, opts, runId } = await bootExplore({ manual: claudeXdManual() });
+    // keel_report loads the real spec by spec_id; explore lives only in the investigation graph.
+    const { h, opts, runId } = await bootExplore({ manual: claudeXdManual(), spec: PSTACK_GRAPHS.investigation });
     const d = asDispatch((await advance(h, runId, { type: "tick" }, opts)).next);
     await expect(
       runTool(makeContext(h, "c-acc", { lanes: [], routingPath: null, boardRepos: [], plansDir: null }), "keel_report", {

@@ -23,52 +23,33 @@ async function call(h: ReturnType<typeof fakeHost>, tool: string, args: Record<s
   return runTool(makeContext(h, tool), tool, args);
 }
 
-describe("R29-02 Astra rematerialize", () => {
-  it("clears g_route_choice and dispatches explore after Astra picks feature", async () => {
+describe("R29-02 route materialize", () => {
+  it("dispatches architect-plan with no leftover consult state after the lead picks feature", async () => {
     const h = hostIO();
     const start = await call(h, "keel_run", { goal: "重构登录功能", repo_dir: "/repo", lead: "claude-code", scope: ["src/**"] });
     expect(start.ok).toBe(true);
     if (!start.ok) return;
-    let started = start.result as { run_id: string; next: { kind: string; dispatch_key?: string } };
-    if (started.next.kind === "setup") {
-      const setup0 = await call(h, "keel_report", {
-        run_id: started.run_id,
-        phase: "setup",
-        outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
-      });
-      expect(setup0.ok).toBe(true);
-      if (!setup0.ok) return;
-      started = { run_id: started.run_id, next: (setup0.result as { next: { kind: string; dispatch_key?: string } }).next };
-    }
-    await call(h, "keel_report", {
-      run_id: started.run_id,
-      phase: "accepted",
-      dispatch_key: started.next.dispatch_key,
-      worker_id: "architect-one",
-      worker_session_id: "a-session",
-      dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
-    });
-    const fin = await call(h, "keel_report", {
-      run_id: started.run_id,
-      phase: "final",
-      dispatch_key: started.next.dispatch_key,
-      inline_report: { status: "done", summary: "feature" },
-    });
-    expect(fin.ok).toBe(true);
-    if (!fin.ok) return;
-    const after = fin.result as { next: { kind: string } };
+    const started = start.result as { run_id: string; next: { kind: string; gate_id?: string } };
+    expect(started.next.kind).toBe("decide");
+    expect(started.next.gate_id).toBe("G-route");
+    const gated = await call(h, "keel_gate", { run_id: started.run_id, gate_id: "G-route", answer: "feature" });
+    expect(gated.ok).toBe(true);
+    if (!gated.ok) return;
+    const after = gated.result as { next: { kind: string } };
+    const routed = JSON.parse(h.files.get(graphStatePath(started.run_id))!) as { astra_calls: number };
+    expect(routed.astra_calls).toBe(0);
     const setup = after.next.kind === "setup"
       ? await call(h, "keel_report", {
           run_id: started.run_id,
           phase: "setup",
           outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
         })
-      : fin;
+      : gated;
     expect(setup.ok).toBe(true);
     if (!setup.ok) return;
     const next = (setup.result as { next: { kind: string; dispatch_key?: string; create_worker?: { role?: string } } }).next;
     expect(next.kind).toBe("dispatch");
-    expect(next.dispatch_key).toContain(":explore:");
+    expect(next.dispatch_key).toContain(":architect-plan:");
     const s = JSON.parse(h.files.get(graphStatePath(started.run_id))!) as {
       g_route_choice?: string;
       consult_node?: unknown;
@@ -79,7 +60,8 @@ describe("R29-02 Astra rematerialize", () => {
     expect(s.g_route_choice).toBeUndefined();
     expect(s.consult_node).toBeUndefined();
     expect(s.spec_id).toBe("feature");
-    expect(s.cursor).toBe("explore");
-    expect(s.astra_calls).toBeGreaterThan(0);
+    expect(s.cursor).toBe("architect-plan");
+    // Only architect-plan itself is charged; routing spent nothing.
+    expect(s.astra_calls).toBe(1);
   });
 });

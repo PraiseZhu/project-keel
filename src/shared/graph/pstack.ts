@@ -138,28 +138,63 @@ export const BUG_FIX_ADAPTATIONS: Adaptation[] = [
   {
     playbook_step: "bug-fix#1",
     kind: "equivalent_handoff",
-    reason: "主控不写代码，所以复现交给 Worker（Orca，worktree）；仅在控制面无法到达目标时才问用户。",
+    reason: "主控不写代码，复现交给写手（Orca，worktree）；写手先提交失败测试再修。仅在控制面无法到达目标时才问用户。",
+  },
+  {
+    playbook_step: "bug-fix#2",
+    kind: "equivalent_handoff",
+    reason: "定位根因并入写手同一会话：复现、定位、修复共用上下文，不再另派 explore / research 会话重读代码。",
+  },
+  {
+    playbook_step: "bug-fix#3",
+    kind: "equivalent_handoff",
+    reason: "不在实现前另派 architect：强模型在 astra-final-review 审 diff；同一失败重复两次时 astra-unstick 介入。",
+  },
+  {
+    playbook_step: "bug-fix#4",
+    kind: "equivalent_handoff",
+    reason: "同表面验证由写手先跑，再由非作者审查节点在 PR head 上复跑并出 verdict。",
   },
 ];
 
 export const FEATURE_ADAPTATIONS: Adaptation[] = [
   {
+    playbook_step: "feature#1",
+    kind: "equivalent_handoff",
+    reason: "how 调查并入 architect-plan：方案节点自己读代码，不另派 explore 会话。",
+  },
+  {
     playbook_step: "feature#3",
     kind: "equivalent_handoff",
-    reason: "throughput checkpoint 四项待办不丢，转为 G-arena 门节点；不适用维度由 Worker 在报告里写 n/a:<reason>。",
+    reason: "throughput checkpoint 由写手在报告里逐项写明（不适用写 n/a:<reason>）；不再设 G-arena 门与 arena 并行实现。",
   },
   {
     playbook_step: "feature#6",
     kind: "user_goal_override",
-    reason: "KEEL 禁止 rebase 与 force-push；原文“Rebase into small, ordered commits”改为提交整理由 Worker 在 worktree 内完成（implement 节点），不 force-push。",
+    reason: "KEEL 禁止 rebase 与 force-push；原文“Rebase into small, ordered commits”改为写手在 worktree 内按小步有序提交，不 force-push。",
+  },
+  {
+    playbook_step: "feature#7",
+    kind: "equivalent_handoff",
+    reason: "设计质询并入 astra-final-review：非作者强模型审 diff 时一并质询设计；不另设 interrogate 节点。",
   },
 ];
 
 export const REFACTORING_ADAPTATIONS: Adaptation[] = [
   {
+    playbook_step: "refactoring#1",
+    kind: "equivalent_handoff",
+    reason: "钉住行为、命名结构与目标形状并入写手同一会话：先提交钉住测试，再小步重构。",
+  },
+  {
+    playbook_step: "refactoring#7",
+    kind: "equivalent_handoff",
+    reason: "是否值得保留由 astra-final-review 判断：不降低阅读负担的重构判 FAIL 退回写手。",
+  },
+  {
     playbook_step: "refactoring#8",
     kind: "user_goal_override",
-    reason: "KEEL 禁止 rebase 与 force-push；原文 rebase 小步提交改为 Worker 在 worktree 内整理提交，然后转交 open-pr。不 force-push。",
+    reason: "KEEL 禁止 rebase 与 force-push；原文 rebase 小步提交改为写手在 worktree 内整理提交，然后转交 open-pr。不 force-push。",
   },
 ];
 
@@ -187,10 +222,15 @@ function retryGate(id: string, resume: string, escalateTo: string): { nodes: Gra
   };
 }
 
+/**
+ * PR tail shared by every change graph:
+ * open-pr → wait-ci → astra-final-review (non-author review + verdict) → g-accept → report-ready → done.
+ * FAIL goes back to the writer; CI red / threads / conflict loop back through open-pr.
+ */
 function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const retryFix = retryGate("g-retry-fix-ci", "fix-ci", "astra-unstick");
   const retryThreads = retryGate("g-retry-threads", "triage-threads", "astra-unstick");
-  const retryVerify = retryGate("g-retry-verify", "verify-head", "astra-unstick");
+  const retryReview = retryGate("g-retry-review", "astra-final-review", "stopped");
   return {
     nodes: [
       node("open-pr", {
@@ -246,13 +286,14 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         playbook_steps: ["autonomous-run#6"],
         when: { kind: "fingerprint_repeat", times: 2 },
       }),
+      // The one review: a stronger model from another family reads the diff, runs the tests, and writes the verdict.
       node("astra-final-review", {
         kind: "dispatch",
-        role: "architect",
+        role: "verifier",
         writes: false,
         timebox_min: 40,
-        max_attempts: 2,
-        playbook_steps: ["shipping#1"],
+        max_attempts: 3,
+        playbook_steps: ["shipping#1", "shipping#3", "shipping#4"],
       }),
       node("g-accept", {
         kind: "gate",
@@ -267,14 +308,6 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
         timebox_min: 240,
         max_attempts: 3,
       }),
-      node("verify-head", {
-        kind: "dispatch",
-        role: "verifier",
-        writes: false,
-        timebox_min: 40,
-        max_attempts: 3,
-        playbook_steps: ["shipping#1", "shipping#3", "shipping#4"],
-      }),
       node("report-ready", {
         kind: "tool",
         writes: false,
@@ -284,7 +317,7 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
       }),
       ...retryFix.nodes,
       ...retryThreads.nodes,
-      ...retryVerify.nodes,
+      ...retryReview.nodes,
       ...TERMINALS,
     ],
     edges: [
@@ -309,16 +342,13 @@ function prTail(opts: { reviseTo: string; unstickTo: string }): { nodes: GraphNo
       edge("astra-unstick", opts.unstickTo),
       edge("astra-unstick", "stopped", "fail"),
       edge("astra-final-review", "g-accept"),
-      edge("astra-final-review", "stopped", "fail"),
-      edge("g-accept", "verify-head", "gate:adopt"),
+      edge("astra-final-review", "g-retry-review", "fail"),
+      ...retryReview.edges,
+      edge("g-accept", "report-ready", "gate:adopt"),
       edge("g-accept", opts.reviseTo, "gate:revise"),
       edge("g-accept", "human-accept", "gate:ask_user"),
-      edge("human-accept", "verify-head"),
+      edge("human-accept", "report-ready"),
       edge("human-accept", "stopped", "fail"),
-      edge("verify-head", "report-ready"),
-      edge("verify-head", "verify-head", "head_moved"),
-      edge("verify-head", "g-retry-verify", "fail"),
-      ...retryVerify.edges,
       edge("report-ready", "done"),
       edge("report-ready", "stopped", "fail"),
     ],
@@ -333,315 +363,71 @@ function assemble(id: GraphTaskType, covers: readonly string[], entry: string, u
   return spec(id, covers, entry, [...unit.nodes, ...tail.nodes], [...unit.edges, ...tail.edges], [...extra, ...PR_TAIL_ADAPTATIONS]);
 }
 
-function bugFixGraph(): GraphSpec {
-  const retryRepro = retryGate("g-retry-reproduce", "reproduce", "astra-unstick");
+/** One writer session: retry / unstick edges shared by every change graph. */
+function writer(playbook_steps: readonly string[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const retryImpl = retryGate("g-retry-implement", "implement", "astra-unstick");
-  const unit = {
+  return {
     nodes: [
-      node("reproduce", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 30,
-        max_attempts: 3,
-        playbook_steps: ["bug-fix#1"],
-      }),
-      node("explore", {
-        kind: "dispatch",
-        role: "explorer",
-        writes: false,
-        timebox_min: 20,
-        max_attempts: 3,
-        playbook_steps: ["bug-fix#2"],
-      }),
-      node("research", {
-        kind: "dispatch",
-        role: "researcher",
-        writes: false,
-        timebox_min: 25,
-        max_attempts: 3,
-        playbook_steps: ["bug-fix#2"],
-      }),
-      node("g-advance-mechanism", {
-        kind: "gate",
-        writes: false,
-        timebox_min: 5,
-        max_attempts: 3,
-        playbook_steps: ["bug-fix#2"],
-      }),
-      node("architect-plan", {
-        kind: "dispatch",
-        role: "architect",
-        writes: false,
-        timebox_min: 40,
-        max_attempts: 2,
-        playbook_steps: ["bug-fix#3"],
-        when: { kind: "crosses_function_boundary" },
-      }),
       node("implement", {
         kind: "dispatch",
         role: "worker",
         writes: true,
         timebox_min: 60,
         max_attempts: 3,
-        playbook_steps: ["bug-fix#3", "bug-fix#5", "autonomous-run#3"],
+        playbook_steps,
       }),
-      node("verify-same-surface", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 30,
-        max_attempts: 3,
-        playbook_steps: ["bug-fix#4"],
-      }),
-      node("g-advance-verify", {
-        kind: "gate",
-        writes: false,
-        timebox_min: 5,
-        max_attempts: 3,
-        playbook_steps: ["bug-fix#4"],
-      }),
-      ...retryRepro.nodes,
       ...retryImpl.nodes,
     ],
     edges: [
-      edge("reproduce", "explore"),
-      edge("reproduce", "g-retry-reproduce", "fail"),
-      edge("reproduce", "astra-unstick", "fingerprint_repeat"),
-      ...retryRepro.edges,
-      edge("explore", "research"),
-      edge("explore", "stopped", "fail"),
-      edge("research", "g-advance-mechanism"),
-      edge("research", "stopped", "fail"),
-      edge("g-advance-mechanism", "architect-plan", "gate:advance"),
-      edge("g-advance-mechanism", "explore", "gate:stay"),
-      edge("architect-plan", "implement"),
-      edge("architect-plan", "stopped", "fail"),
-      edge("implement", "verify-same-surface"),
+      edge("implement", "open-pr"),
       edge("implement", "g-retry-implement", "fail"),
       edge("implement", "astra-unstick", "fingerprint_repeat"),
       ...retryImpl.edges,
-      edge("verify-same-surface", "g-advance-verify"),
-      edge("verify-same-surface", "implement", "fail"),
-      edge("g-advance-verify", "open-pr", "gate:advance"),
-      edge("g-advance-verify", "verify-same-surface", "gate:stay"),
     ],
   };
-  return assemble("bug-fix", ["bug-fix", ...PR_TAIL_COVERS], "reproduce", unit, prTail({ reviseTo: "implement", unstickTo: "implement" }), BUG_FIX_ADAPTATIONS);
+}
+
+function bugFixGraph(): GraphSpec {
+  const unit = writer(["bug-fix#1", "bug-fix#2", "bug-fix#3", "bug-fix#4", "bug-fix#5", "autonomous-run#3"]);
+  return assemble("bug-fix", ["bug-fix", ...PR_TAIL_COVERS], "implement", unit, prTail({ reviseTo: "implement", unstickTo: "implement" }), BUG_FIX_ADAPTATIONS);
 }
 
 function featureGraph(): GraphSpec {
-  const retryImpl = retryGate("g-retry-implement", "implement", "astra-unstick");
-  const retryArena = retryGate("g-retry-arena", "arena", "astra-unstick");
+  const w = writer(["feature#3", "feature#4", "feature#5", "feature#6", "autonomous-run#3"]);
+  const retryPlan = retryGate("g-retry-plan", "architect-plan", "stopped");
   const unit = {
     nodes: [
-      node("explore", {
-        kind: "dispatch",
-        role: "explorer",
-        writes: false,
-        timebox_min: 20,
-        max_attempts: 3,
-        playbook_steps: ["feature#1"],
-      }),
       node("architect-plan", {
         kind: "dispatch",
         role: "architect",
         writes: false,
         timebox_min: 40,
         max_attempts: 2,
-        playbook_steps: ["feature#2"],
+        playbook_steps: ["feature#1", "feature#2"],
         when: { kind: "always" },
       }),
-      node("g-arena", {
-        kind: "gate",
-        writes: false,
-        timebox_min: 5,
-        max_attempts: 3,
-        playbook_steps: ["feature#3"],
-      }),
-      node("implement", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 60,
-        max_attempts: 3,
-        playbook_steps: ["feature#4", "feature#6", "autonomous-run#3"],
-      }),
-      node("arena", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 60,
-        max_attempts: 3,
-        playbook_steps: ["feature#4"],
-      }),
-      node("g-accept-arena", {
-        kind: "gate",
-        writes: false,
-        timebox_min: 5,
-        max_attempts: 3,
-        playbook_steps: ["feature#4"],
-      }),
-      node("human-arena", {
-        kind: "human",
-        writes: false,
-        timebox_min: 240,
-        max_attempts: 3,
-      }),
-      node("verify-same-surface", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 30,
-        max_attempts: 3,
-        playbook_steps: ["feature#5"],
-      }),
-      node("g-advance-verify", {
-        kind: "gate",
-        writes: false,
-        timebox_min: 5,
-        max_attempts: 3,
-        playbook_steps: ["feature#5"],
-      }),
-      node("interrogate", {
-        kind: "dispatch",
-        role: "verifier",
-        writes: false,
-        timebox_min: 40,
-        max_attempts: 2,
-        playbook_steps: ["feature#7"],
-        when: { kind: "design_contested" },
-      }),
-      node("interrogate-architect", {
-        kind: "dispatch",
-        role: "architect",
-        writes: false,
-        timebox_min: 40,
-        max_attempts: 2,
-        playbook_steps: ["feature#7"],
-        when: { kind: "design_contested" },
-      }),
-      ...retryImpl.nodes,
-      ...retryArena.nodes,
+      ...retryPlan.nodes,
+      ...w.nodes,
     ],
     edges: [
-      edge("explore", "architect-plan"),
-      edge("explore", "stopped", "fail"),
-      edge("architect-plan", "g-arena"),
-      edge("architect-plan", "stopped", "fail"),
-      edge("g-arena", "implement", "gate:single"),
-      edge("g-arena", "arena", "gate:arena"),
-      edge("implement", "verify-same-surface"),
-      edge("implement", "g-retry-implement", "fail"),
-      edge("implement", "astra-unstick", "fingerprint_repeat"),
-      ...retryImpl.edges,
-      edge("arena", "g-accept-arena"),
-      edge("arena", "g-retry-arena", "fail"),
-      edge("arena", "astra-unstick", "fingerprint_repeat"),
-      ...retryArena.edges,
-      edge("g-accept-arena", "verify-same-surface", "gate:adopt"),
-      edge("g-accept-arena", "arena", "gate:revise"),
-      edge("g-accept-arena", "human-arena", "gate:ask_user"),
-      edge("human-arena", "verify-same-surface"),
-      edge("human-arena", "stopped", "fail"),
-      edge("verify-same-surface", "g-advance-verify"),
-      edge("verify-same-surface", "implement", "fail"),
-      edge("g-advance-verify", "interrogate", "gate:advance"),
-      edge("g-advance-verify", "verify-same-surface", "gate:stay"),
-      edge("interrogate", "interrogate-architect"),
-      edge("interrogate", "stopped", "fail"),
-      edge("interrogate-architect", "open-pr"),
-      edge("interrogate-architect", "stopped", "fail"),
+      edge("architect-plan", "implement"),
+      edge("architect-plan", "g-retry-plan", "fail"),
+      ...retryPlan.edges,
+      ...w.edges,
     ],
   };
-  return assemble("feature", ["feature", ...PR_TAIL_COVERS], "explore", unit, prTail({ reviseTo: "implement", unstickTo: "implement" }), FEATURE_ADAPTATIONS);
+  const tail = prTail({ reviseTo: "implement", unstickTo: "implement" });
+  // feature#5 / feature#7 are also carried by the non-author review in the tail.
+  const review = tail.nodes.find((n) => n.id === "astra-final-review")!;
+  review.playbook_steps.push("feature#5", "feature#7");
+  return assemble("feature", ["feature", ...PR_TAIL_COVERS], "architect-plan", unit, tail, FEATURE_ADAPTATIONS);
 }
 
 function refactoringGraph(): GraphSpec {
-  const retryImpl = retryGate("g-retry-implement", "implement", "astra-unstick");
-  const retryPin = retryGate("g-retry-pin", "pin-test", "astra-unstick");
-  const unit = {
-    nodes: [
-      node("pin-explore", {
-        kind: "dispatch",
-        role: "explorer",
-        writes: false,
-        timebox_min: 20,
-        max_attempts: 3,
-        playbook_steps: ["refactoring#1"],
-      }),
-      node("pin-test", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 30,
-        max_attempts: 3,
-        playbook_steps: ["refactoring#1"],
-      }),
-      node("name-shape", {
-        kind: "dispatch",
-        role: "explorer",
-        writes: false,
-        timebox_min: 20,
-        max_attempts: 2,
-        playbook_steps: ["refactoring#2"],
-      }),
-      node("architect-plan", {
-        kind: "dispatch",
-        role: "architect",
-        writes: false,
-        timebox_min: 40,
-        max_attempts: 2,
-        playbook_steps: ["refactoring#3"],
-        when: { kind: "crosses_function_boundary" },
-      }),
-      node("implement", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 60,
-        max_attempts: 3,
-        playbook_steps: ["refactoring#4", "refactoring#5", "autonomous-run#3"],
-      }),
-      node("equivalence", {
-        kind: "dispatch",
-        role: "worker",
-        writes: true,
-        timebox_min: 30,
-        max_attempts: 3,
-        playbook_steps: ["refactoring#6"],
-      }),
-      node("g-advance-worth", {
-        kind: "gate",
-        writes: false,
-        timebox_min: 5,
-        max_attempts: 3,
-        playbook_steps: ["refactoring#7"],
-      }),
-      ...retryImpl.nodes,
-      ...retryPin.nodes,
-    ],
-    edges: [
-      edge("pin-explore", "pin-test"),
-      edge("pin-explore", "stopped", "fail"),
-      edge("pin-test", "name-shape"),
-      edge("pin-test", "g-retry-pin", "fail"),
-      ...retryPin.edges,
-      edge("name-shape", "architect-plan"),
-      edge("name-shape", "stopped", "fail"),
-      edge("architect-plan", "implement"),
-      edge("architect-plan", "stopped", "fail"),
-      edge("implement", "equivalence"),
-      edge("implement", "g-retry-implement", "fail"),
-      edge("implement", "astra-unstick", "fingerprint_repeat"),
-      ...retryImpl.edges,
-      edge("equivalence", "g-advance-worth"),
-      edge("equivalence", "implement", "fail"),
-      edge("g-advance-worth", "open-pr", "gate:advance"),
-      edge("g-advance-worth", "stopped", "gate:stay"),
-    ],
-  };
-  return assemble("refactoring", ["refactoring", ...PR_TAIL_COVERS], "pin-explore", unit, prTail({ reviseTo: "implement", unstickTo: "implement" }), REFACTORING_ADAPTATIONS);
+  const unit = writer(["refactoring#1", "refactoring#2", "refactoring#3", "refactoring#4", "refactoring#5", "refactoring#6", "autonomous-run#3"]);
+  const tail = prTail({ reviseTo: "implement", unstickTo: "implement" });
+  tail.nodes.find((n) => n.id === "astra-final-review")!.playbook_steps.push("refactoring#7");
+  return assemble("refactoring", ["refactoring", ...PR_TAIL_COVERS], "implement", unit, tail, REFACTORING_ADAPTATIONS);
 }
 
 function investigationGraph(): GraphSpec {

@@ -26,16 +26,29 @@ export type SettingsHarness = "codex" | "claude-code";
 /** Rows the page shows. direction / verifier stay in stored data but no graph uses them any more. */
 export const SETTINGS_VISIBLE_ROW_IDS = ["lead", "worker", "architect", "final-review", "explorer", "researcher"] as const satisfies readonly SettingsRowId[];
 
+/** explorer / researcher only run in the investigation graph; change graphs never dispatch them. */
+const INVESTIGATION_ROWS: readonly SettingsRowId[] = ["explorer", "researcher"];
+
+/** Rows that matter for one scope: a task-type view drops the roles its graph never dispatches. */
+export function visibleRowIds(taskType: TaskType): readonly SettingsRowId[] {
+  if (taskType === "default") return SETTINGS_VISIBLE_ROW_IDS;
+  if (taskType === "investigation") return ["lead", ...INVESTIGATION_ROWS];
+  return SETTINGS_VISIBLE_ROW_IDS.filter((id) => !INVESTIGATION_ROWS.includes(id));
+}
+
 export const SETTINGS_ROW_META: Record<SettingsRowId, { label: string; description: string }> = {
-  lead: { label: "主控", description: "发起并推进整件事" },
-  direction: { label: "方向裁决", description: "已停用：任务类型由主控开工时说明" },
-  explorer: { label: "探索", description: "只用于调查任务：读代码找位置" },
-  researcher: { label: "研究", description: "只用于调查任务：查资料、核对接口" },
-  worker: { label: "写手", description: "复现、修复、跑测试、提交" },
+  lead: { label: "主控", description: "推进全流程" },
+  direction: { label: "方向裁决", description: "已停用" },
+  explorer: { label: "探索", description: "读代码找位置" },
+  researcher: { label: "研究", description: "查资料、核对接口" },
+  worker: { label: "写手", description: "写测试、修复、提交" },
   verifier: { label: "验证", description: "已并入审查" },
-  architect: { label: "方案", description: "新功能先出方案；同一失败重复时出主意" },
-  "final-review": { label: "审查", description: "换更强、不同家族的模型审改动并跑测试" },
+  architect: { label: "方案", description: "出方案、帮写手解卡" },
+  "final-review": { label: "审查", description: "不同家族模型复审" },
 };
+
+/** Note on rows that apply to every task type (lead, review) when a task-type view is open. */
+const SHARED_NOTE = "所有任务共用";
 
 export const TASK_SCOPE_TYPES: readonly Exclude<TaskType, "default">[] = ["bug-fix", "feature", "refactoring", "investigation", "pr"];
 
@@ -105,6 +118,8 @@ export interface SettingsRowView {
   readonly model: SelectControl;
   readonly effort: SelectControl;
   readonly fallbacks?: FallbackView;
+  /** Rows used only by the investigation graph; the all-tasks view groups them under one divider. */
+  readonly group?: "investigation";
 }
 
 export interface SettingsView {
@@ -206,16 +221,14 @@ export function renderSelectHtml(ctrl: SelectControl, row: SettingsRowId, act: C
   return `<select class="${cls ?? act}" data-act="${act}" data-row="${escapeHtml(row)}"${iAttr} aria-label="${escapeHtml(ctrl.label)}"${ctrl.disabled ? " disabled" : ""}>${options}${groups}</select>`;
 }
 
+/** Fourth cell of the pick grid: the fallback toggle, or an empty slot so the columns stay aligned. */
 function renderFallbackChipHtml(row: SettingsRowView, open: boolean): string {
-  if (!row.fallbacks) return "";
+  if (!row.fallbacks) return `<span class="fb-slot" aria-hidden="true"></span>`;
   const r = escapeHtml(row.id);
-  const attrs = `type="button" data-act="toggle-fb" data-row="${r}" aria-expanded="${open}" aria-controls="fb-panel-${r}"`;
-  const items = row.fallbacks.items;
-  if (!items.length) return `<button ${attrs} class="fb-chip empty">＋ 设置备用</button>`;
-  const n = items.length;
-  const first = items[0]!.route;
-  const label = first.model ? `${first.model} · ${first.provider_id}` : "未选模型";
-  return `<button ${attrs} class="fb-chip"><span class="n">${n}</span>备用 <span class="arrow">· ${escapeHtml(label)}${n > 1 ? " 等" : ""}</span><span class="chev" aria-hidden="true">›</span></button>`;
+  const n = row.fallbacks.items.length;
+  const attrs = `type="button" data-act="toggle-fb" data-row="${r}" aria-expanded="${open}" aria-controls="fb-panel-${r}" title="备用模型：主模型用不了时按顺序换用"`;
+  if (!n) return `<button ${attrs} class="fb-chip empty">＋ 备用</button>`;
+  return `<button ${attrs} class="fb-chip">备用<span class="n">${n}</span></button>`;
 }
 
 function renderFallbackPanelHtml(row: SettingsRowId, fallbacks?: FallbackView): string {
@@ -230,25 +243,29 @@ function renderFallbackPanelHtml(row: SettingsRowId, fallbacks?: FallbackView): 
         ${renderSelectHtml(it.effort, row, "fb-effort", undefined, it.index)}
         <button type="button" class="icon-btn" data-act="del-fb" data-row="${r}" data-i="${it.index}" title="移除这条备用" aria-label="移除第 ${it.index + 1} 备"${disabled ? " disabled" : ""}>×</button></div>`).join("");
   return `<div class="fb-panel" id="fb-panel-${r}">
-     <div class="fb-head"><b>备用模型</b><span>${disabled ? "沿用所有任务的设置，点「单独设置」后可改" : "主模型用不了时，按顺序依次换用"}</span></div>
+     <div class="fb-head"><b>备用模型</b><span>${disabled ? "沿用所有任务；点「单独设置」后可改" : "主模型用不了时按顺序换用"}</span></div>
      ${itemHtml}
      <button type="button" class="fb-add" data-act="add-fb" data-row="${r}"${canAdd ? "" : " disabled"}>＋ 添加备用${full ? `（已满 ${MAX_FALLBACKS} 条）` : ""}</button>
    </div>`;
 }
 
 export function renderRowHtml(row: SettingsRowView, taskType: TaskType, open = false): string {
-  const locked = row.locked ? " style=\"opacity:.45\"" : "";
-  const pick = `<div class="pick"${locked}>${renderSelectHtml(row.agent, row.id, "agent")}${renderSelectHtml(row.model, row.id, "model", "model")}${renderSelectHtml(row.effort, row.id, "effort")}</div>`;
+  const pick = `<div class="pick">${renderSelectHtml(row.agent, row.id, "agent")}${renderSelectHtml(row.model, row.id, "model", "model")}${renderSelectHtml(row.effort, row.id, "effort")}${renderFallbackChipHtml(row, open)}</div>`;
   let sub = row.source ? escapeHtml(row.source) : "";
   if (row.stale) sub = (sub ? `${sub} · ` : "") + `<span class="stale-reason">${escapeHtml(row.stale)}</span>`;
-  if (row.locked) sub = `沿用所有任务的设置 · <button type="button" class="link" data-act="own" data-row="${escapeHtml(row.id)}">单独设置</button>`;
+  if (row.locked) sub = `沿用所有任务 · <button type="button" class="link" data-act="own" data-row="${escapeHtml(row.id)}">单独设置</button>`;
   else if (taskType !== "default" && !row.profileLevel && SETTINGS_ROW_IDS.includes(row.id)) {
-    sub = (sub ? `${sub} · ` : "") + `<button type="button" class="link" data-act="inherit-slot" data-row="${escapeHtml(row.id)}">沿用所有任务</button>`;
+    sub = (sub ? `${sub} · ` : "") + `<button type="button" class="link" data-act="inherit-slot" data-row="${escapeHtml(row.id)}">改回沿用所有任务</button>`;
   }
-  const chip = renderFallbackChipHtml(row, open);
-  const subHtml = (sub || chip) ? `<div class="sub">${sub ? `<span class="sub-note">${sub}</span>` : ""}${chip}</div>` : "";
-  const openClass = row.fallbacks && open ? " open" : "";
-  return `<div class="row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}${openClass}"><div class="role"><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.description)}</span></div>${pick}${subHtml}${renderFallbackPanelHtml(row.id, row.fallbacks)}</div>`;
+  const subHtml = sub ? `<div class="sub">${sub}</div>` : "";
+  const cls = `row${row.lead ? " lead" : ""}${row.stale ? " stale" : ""}${row.locked ? " locked" : ""}${row.fallbacks && open ? " open" : ""}`;
+  return `<div class="${cls}"><div class="role"><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.description)}</span></div>${pick}${subHtml}${renderFallbackPanelHtml(row.id, row.fallbacks)}</div>`;
+}
+
+/** All rows; on the all-tasks view the investigation-only rows sit under one divider. */
+export function renderRowsHtml(rows: readonly SettingsRowView[], taskType: TaskType, isOpen: (id: SettingsRowId) => boolean): string {
+  const firstGrouped = taskType === "default" ? rows.find((r) => r.group === "investigation") : undefined;
+  return rows.map((row) => (row === firstGrouped ? `<div class="group">只用于调查任务</div>` : "") + renderRowHtml(row, taskType, isOpen(row.id))).join("");
 }
 
 export function renderProfileButtonHtml(p: { id: string; name: string; selected?: boolean; defaultOf?: Harness }): string {
@@ -404,7 +421,7 @@ function roleRow(
   } catch {
     route = profile.nodes.default?.[id]?.primary;
   }
-  if (taskType !== "default" && !profile.nodes[taskType]?.[id]) source = "沿用所有任务的设置";
+  if (taskType !== "default" && !profile.nodes[taskType]?.[id]) source = "沿用所有任务";
   else if (taskType === "default" && !profile.nodes.default?.[id] && profile.inherit) source = `继承自 ${profile.inherit}`;
   const agent = (route?.agent ?? profile.harness) as Harness;
   const effective: Route | undefined = route ?? (agent ? { agent, model: "", provider_id: "" } : undefined);
@@ -426,6 +443,7 @@ function roleRow(
     model: modelControl(id, effective, models, disabled),
     effort: effortControl(id, effective, visibleHit ?? hit, disabled),
     fallbacks: fallbackView(id, editableSlot(manual, profile.id, taskType, id), models, locked),
+    ...(INVESTIGATION_ROWS.includes(id) ? { group: "investigation" as const } : {}),
   };
 }
 
@@ -438,7 +456,7 @@ function leadRow(profile: Profile, models: readonly AgentModel[], profileLevelNo
     ...SETTINGS_ROW_META.lead,
     lead: true,
     route,
-    source: profileLevelNote ? "作用于所有任务" : undefined,
+    source: profileLevelNote ? SHARED_NOTE : undefined,
     stale: staleReason(route, models),
     locked: false,
     profileLevel: true,
@@ -463,10 +481,15 @@ function finalReviewRow(manual: ModelManual, profile: Profile, taskType: TaskTyp
     ? findModel(models, explicit.agent, explicit.model, explicit.provider_id)
     : (effective ? findModel(models, effective.agent, effective.model, effective.provider_id) : undefined);
   const visibleHit = hit?.visible === true ? hit : undefined;
-  let source = explicit
-    ? undefined
-    : (effective ? `同方案（${HARNESS_LABELS[effective.agent]} · ${effective.model} · ${effective.provider_id}）` : "同方案");
-  if (profileLevelNote) source = source ? `作用于所有任务。${source}` : "作用于所有任务";
+  // "Same as 方案" names the architect model it falls back to, so the row needs no extra note line.
+  let architect: Route | undefined;
+  try {
+    architect = resolve(manual, profile.id, taskType, "architect").primary;
+  } catch {
+    architect = profile.nodes.default?.architect?.primary;
+  }
+  const same = architect ? `同方案 · ${findModel(models, architect.agent, architect.model, architect.provider_id)?.name ?? architect.model}` : "同方案";
+  const source = profileLevelNote ? SHARED_NOTE : undefined;
   const groups: SelectGroup[] = groupModelOptions(models, agent).map((g) => ({
     label: g.label,
     options: g.options.map((o) => ({ value: o.value, label: o.label })),
@@ -483,9 +506,9 @@ function finalReviewRow(manual: ModelManual, profile: Profile, taskType: TaskTyp
     directionSelf: false,
     agent: agentControl("final-review", agent, false),
     model: modelControl("final-review", explicit, models, false, {
-      firstOption: { value: "", label: "同方案" },
+      firstOption: { value: "", label: same },
       groups,
-      placeholder: explicit ? undefined : "同方案",
+      placeholder: explicit ? undefined : same,
     }),
     effort: effortControl("final-review", explicit ?? effective, visibleHit ?? hit, !explicit),
   };
@@ -557,6 +580,7 @@ export function buildSettingsView(
     { id: "codex" as const, label: "Codex 主控", active: sel.harness === "codex" },
     { id: "claude-code" as const, label: "Claude Code 主控", active: sel.harness === "claude-code" },
   ];
+  const rowIds = visibleRowIds(taskType);
   const base = {
     harness: sel.harness,
     tabs,
@@ -564,21 +588,18 @@ export function buildSettingsView(
     taskScope,
     statusIds: SETTINGS_STATUS_IDS,
     accordionIds: SETTINGS_ACCORDION_IDS,
-    rowIds: SETTINGS_VISIBLE_ROW_IDS,
+    rowIds,
   };
   if (!picked.profile) {
     return { ...base, empty: picked.empty, overrideCount: 0, rows: [] };
   }
   const profile = picked.profile;
   const profileLevelNote = taskScope === "task";
-  const rows: SettingsRowView[] = [
-    leadRow(profile, catalog, profileLevelNote),
-    roleRow("worker", manual, profile, taskType, catalog),
-    roleRow("architect", manual, profile, taskType, catalog),
-    finalReviewRow(manual, profile, taskType, catalog, profileLevelNote),
-    roleRow("explorer", manual, profile, taskType, catalog),
-    roleRow("researcher", manual, profile, taskType, catalog),
-  ];
+  const rows: SettingsRowView[] = rowIds.map((id) => {
+    if (id === "lead") return leadRow(profile, catalog, profileLevelNote);
+    if (id === "final-review") return finalReviewRow(manual, profile, taskType, catalog, profileLevelNote);
+    return roleRow(id as Role, manual, profile, taskType, catalog);
+  });
   return {
     ...base,
     profileId: profile.id,

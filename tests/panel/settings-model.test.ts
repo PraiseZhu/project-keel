@@ -9,6 +9,7 @@ import {
   renderInheritOptionHtml,
   renderProfileButtonHtml,
   renderRowHtml,
+  renderRowsHtml,
   routeAfterAgentChange,
   routeAfterEffortChange,
   routeAfterModelChange,
@@ -19,6 +20,7 @@ import {
   shouldDeferCatalogRender,
   shouldRefreshCatalogOnOpen,
   visibleModels,
+  visibleRowIds,
 } from "../../src/panel/settings-model.ts";
 import { directionOptions } from "../../src/shared/manual/model-tiers.ts";
 import { resolve, resolveDirection } from "../../src/shared/manual/resolve.ts";
@@ -47,8 +49,7 @@ describe("buildSettingsView", () => {
       expect(view.rows.map((r) => r.id)).toEqual(order);
       expect(view.rows).toHaveLength(6);
       expect(view.rows.map((r) => r.label)).toEqual(["主控", "写手", "方案", "审查", "探索", "研究"]);
-      expect(view.rows.find((r) => r.id === "explorer")?.description).toMatch(/^只用于调查任务/);
-      expect(view.rows.find((r) => r.id === "researcher")?.description).toMatch(/^只用于调查任务/);
+      expect(view.rows.filter((r) => r.group === "investigation").map((r) => r.id)).toEqual(["explorer", "researcher"]);
       for (const row of view.rows) {
         expect(row.agent.label).toBe("运行环境");
         expect(row.model.label).toBe("模型");
@@ -56,6 +57,28 @@ describe("buildSettingsView", () => {
         expect(row.agent.options.map((o) => o.value)).toEqual(["codex", "claude-code", "pi"]);
       }
     }
+  });
+
+  it("a task-type view shows only the roles its graph dispatches", () => {
+    const models = appendixCAgentModels();
+    const change = ["lead", "worker", "architect", "final-review"];
+    for (const t of ["bug-fix", "feature", "refactoring", "pr"] as const) {
+      expect([...visibleRowIds(t)]).toEqual(change);
+      expect(buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: t }, models).rows.map((r) => r.id)).toEqual(change);
+    }
+    expect([...visibleRowIds("investigation")]).toEqual(["lead", "explorer", "researcher"]);
+    expect(buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "investigation" }, models).rows.map((r) => r.id)).toEqual(["lead", "explorer", "researcher"]);
+  });
+
+  it("puts one divider before the investigation-only rows on the all-tasks view only", () => {
+    const models = appendixCAgentModels();
+    const all = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const html = renderRowsHtml(all.rows, "default", () => false);
+    expect(html.match(/class="group"/g)).toHaveLength(1);
+    expect(html.indexOf('class="group"')).toBeGreaterThan(html.indexOf('data-row="final-review"'));
+    expect(html.indexOf('class="group"')).toBeLessThan(html.indexOf('data-row="explorer"'));
+    const inv = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "investigation" }, models);
+    expect(renderRowsHtml(inv.rows, "investigation", () => false)).not.toContain('class="group"');
   });
 
   it("does not borrow the other harness profile and hides direction/verifier rows without touching their data", () => {
@@ -86,7 +109,7 @@ describe("buildSettingsView", () => {
     const models = appendixCAgentModels();
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "bug-fix" }, models);
     expect(view.taskScope).toBe("task");
-    expect(view.rows.find((r) => r.id === "lead")?.source).toMatch(/作用于所有任务/);
+    expect(view.rows.find((r) => r.id === "lead")?.source).toBe("所有任务共用");
     expect(view.rows.find((r) => r.id === "worker")?.locked).toBe(true);
     const owned = setSlot(DEFAULT_MANUAL, "sol", "bug-fix", "worker", {
       primary: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" },
@@ -98,7 +121,7 @@ describe("buildSettingsView", () => {
     const fr = view.rows.find((r) => r.id === "final-review")!;
     expect(fr.profileLevel).toBe(true);
     expect(fr.locked).toBe(false);
-    expect(fr.source).toMatch(/作用于所有任务/);
+    expect(fr.source).toBe("所有任务共用");
     expect(rowsHtml(view)).not.toMatch(/data-act="own" data-row="final-review"/);
     expect(rowsHtml(view)).not.toMatch(/data-act="inherit-slot" data-row="final-review"/);
   });
@@ -107,11 +130,13 @@ describe("buildSettingsView", () => {
     const models = appendixCAgentModels();
     const codex = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
     const fr = codex.rows.find((r) => r.id === "final-review")!;
-    expect(fr.model.options[0]).toMatchObject({ value: "", label: "同方案" });
+    // "Same as 方案" names the architect model it falls back to, so the row needs no extra note line.
+    expect(fr.model.options[0]?.value).toBe("");
+    expect(fr.model.options[0]?.label).toMatch(/^同方案 · .*astra/i);
     expect(fr.model.value).toBe("");
     expect(fr.agent.disabled).toBe(false);
     expect(fr.effort.disabled).toBe(true);
-    expect(fr.source).toMatch(/同方案/);
+    expect(fr.source).toBeUndefined();
     expect(fr.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(true);
     const switched = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
     const after = buildSettingsView(switched, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
@@ -124,7 +149,9 @@ describe("buildSettingsView", () => {
     expect(claude.rows.find((r) => r.id === "architect")?.route).toMatchObject({ model: "anthropic/claude-opus-5-5", effort: "xhigh" });
     const cfr = claude.rows.find((r) => r.id === "final-review")!;
     expect(cfr.route).toMatchObject({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
-    expect(cfr.model.options[0]).toMatchObject({ value: "", label: "同方案" });
+    // Explicit Astra review: the "same as 方案" option still names the architect (Opus), not the explicit route.
+    expect(cfr.model.options[0]?.value).toBe("");
+    expect(cfr.model.options[0]?.label).toMatch(/^同方案 · .*opus/i);
     expect(cfr.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(true);
   });
 });
@@ -214,7 +241,7 @@ describe("route patch helpers", () => {
     expect("final_review_route" in self.profiles[0]!).toBe(false);
     const again = buildSettingsView(self, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
     expect(again.model.value).toBe("");
-    expect(again.model.options[0]?.label).toBe("同方案");
+    expect(again.model.options[0]?.label).toMatch(/^同方案/);
   });
 });
 
@@ -372,7 +399,8 @@ describe("settings HTML escaping", () => {
     const fbHtml = rowsHtml(buildSettingsView(fbParsed.manual, { harness: "codex", taskType: "default" }, fbModels));
     expect(fbHtml).not.toMatch(/<img/i);
     expect(fbHtml).not.toContain("备用：");
-    expect(fbHtml).toContain(`· ${XSS_ESCAPED} · ${XSS_ESCAPED}`);
+    // The chip only counts fallbacks; the fallback model/provider is escaped inside the panel's select.
+    expect(fbHtml).toContain(`>${XSS_ESCAPED} · ${XSS_ESCAPED}</option>`);
 
     const leadJson = JSON.stringify({
       version: 1,
@@ -440,16 +468,25 @@ describe("fallback rows", () => {
     expect(html).not.toMatch(/id="fb-panel-final-review"/);
   });
 
-  it("renders explorer chip with count and first model, without 等", () => {
+  const chipOf = (html: string) => html.match(/<button[^>]*data-act="toggle-fb"[\s\S]*?<\/button>/)?.[0] ?? "";
+
+  it("renders the explorer chip in the pick row with the fallback count only", () => {
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
     const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
     expect(html).toContain('data-act="toggle-fb" data-row="explorer"');
-    expect(html).toContain('<span class="n">1</span>');
-    expect(html).toContain("openai/gpt-6-luna · xd");
-    expect(html).not.toContain(" 等");
+    const pick = html.match(/<div class="pick">[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(pick).toContain('data-act="toggle-fb"');
+    const chip = chipOf(html);
+    expect(chip).toContain('备用<span class="n">1</span>');
+    expect(chip).not.toContain("gpt-6-luna");
   });
 
-  it("disables add when two fallbacks are set and shows 等", () => {
+  it("keeps the lead row's pick grid aligned with an empty fallback slot", () => {
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    expect(renderRowHtml(view.rows.find((r) => r.id === "lead")!, "default")).toContain('<span class="fb-slot" aria-hidden="true"></span>');
+  });
+
+  it("disables add when two fallbacks are set and counts both", () => {
     const two = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", {
       primary: DEFAULT_MANUAL.profiles[0]!.nodes.default!.explorer!.primary,
       fallbacks: [
@@ -461,8 +498,7 @@ describe("fallback rows", () => {
     expect(row.fallbacks?.items).toHaveLength(2);
     expect(row.fallbacks?.canAdd).toBe(false);
     const html = renderRowHtml(row, "default");
-    expect(html).toContain('<span class="n">2</span>');
-    expect(html).toContain(" 等");
+    expect(chipOf(html)).toContain('<span class="n">2</span>');
     expect(html).toMatch(/data-act="add-fb"[^>]*disabled/);
     expect(html).toContain("已满 2 条");
   });
@@ -471,7 +507,7 @@ describe("fallback rows", () => {
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
     const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
     expect(html).toContain("fb-chip empty");
-    expect(html).toContain("＋ 设置备用");
+    expect(chipOf(html)).toContain("＋ 备用");
   });
 
   it("marks the row open only when asked", () => {

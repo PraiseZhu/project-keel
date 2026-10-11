@@ -612,7 +612,7 @@ describe("inline fallback panel", () => {
     expect(sol.nodes.default?.worker?.fallbacks).toHaveLength(1);
   });
 
-  it("keeps advanced limited to profiles and import/export", async () => {
+  it("keeps advanced limited to profiles, import/export and restore-defaults", async () => {
     const page = await boot();
     const adv = page.doc.getElementById("advanced-body")!;
     expect(adv.querySelector("[data-act=\"fb-agent\"]")).toBeNull();
@@ -621,12 +621,30 @@ describe("inline fallback panel", () => {
     expect(adv.querySelector("[data-act=\"add-fb\"]")).toBeNull();
     expect(adv.querySelector("[data-act=\"del-fb\"]")).toBeNull();
     expect(adv.textContent).not.toContain("档次表");
-    expect(adv.textContent).toContain("平时不用动");
     expect(adv.textContent).toContain("主控环境");
     expect(adv.querySelector("[data-act=\"export\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"import\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"add\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"copy\"]")).toBeTruthy();
     expect(adv.querySelector("[data-act=\"delete\"]")).toBeTruthy();
+    // Restore-defaults overwrites every profile, so it lives here instead of next to Save.
+    expect(adv.querySelector("[data-act=\"restore\"]")).toBeTruthy();
+    expect(page.doc.querySelector(".bar")!.querySelector("[data-act=\"restore\"]")).toBeNull();
+  });
+});
+
+describe("save bar", () => {
+  it("shows the unsaved state only while the draft differs from what was loaded or saved", async () => {
+    const page = await boot();
+    const status = page.doc.getElementById("manual-status")!;
+    expect(status.textContent).toBe("");
+    const effort = page.select("worker", "effort")!;
+    effort.value = "low";
+    effort.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+    await flush();
+    expect(page.doc.getElementById("manual-status")!.textContent).toBe("有改动未保存");
+    page.doc.querySelector("[data-act=\"save\"]")!.click();
+    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
+    expect(page.doc.getElementById("manual-status")!.textContent).toBe("已保存");
   });
 });

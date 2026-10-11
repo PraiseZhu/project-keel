@@ -57,7 +57,7 @@
 | control-ui / control-cli | Cindy 浏览器 / 桌面工具 |
 | cloud agent / Grok Bot | 本机 Orca Worker；自定义入口用 Cindy 插件面板 |
 | `gh pr merge` / merge-when-ready | 不提供；用户在 GitHub 合并 |
-| poteto-mode 的 `mode: true` 与新任务 reminder | 未移植：Cindy 插件只能改写用户消息正文（气泡会变），不能像 Cursor 那样隐式附加提醒。改为由 agent 在新任务开始时调用 `pstack_start`；用户不想走 pstack 时不调用 |
+| poteto-mode 的 `mode: true` 与新任务 reminder | 未移植：Cindy 插件只能改写用户消息正文（气泡会变），不能像 Cursor 那样隐式附加提醒。改为由 agent 在新任务开始时调用 `keel_run`；用户不想走 KEEL 时不调用 |
 | watch-pr 的 ChecksUnavailable（无 CI 的仓永不就绪） | 有意替代：本次读取不到任何检查时（真无 CI，或新 head 的检查尚未注册），按冲突、未解决线程、Draft、评审结论判定；读得到检查时与上游一致。刚推送后请等检查出现再看结论 |
 
 ## 插件自带的命令行（`<keel>`）
@@ -74,10 +74,14 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 ## 一次典型的修 bug
 
-1. `keel_run({ goal: "<用户原话>", sc, repo_dir, lead })` → 得到 `run_id` 与 `pstack/skills/poteto-mode/playbooks/bug-fix.md`。
-2. 读 playbook，按步骤复现、写失败测试、修复、证明（J9 证据评分、J12 影响面）。
-3. 用户授权后 `pr_open`；`pr_wait` 等 CI；`pr_threads` 分诊；只修 P0/P1；`pr_reply` 回帖。`pr_status` 给出 `verify_current_head` 时按第 10 条验证。终审报告 `verdict=FAIL` 时图从 `g-accept` 直接退回写代码节点（不问 Jev；报告 status=failed/blocked 同样适用，且下一轮不能跳过终审）；PASS / PASS+NOTES 才进 verify-head。写代码节点成功后走 `open-pr`：`fix-ci` 与 `triage-threads` 都先由 `pr_open` 推送并复用已有 PR，再 `wait-ci`（只提交不推送会等到旧提交）。本地验证按工作树 HEAD 比对 `head_sha`，未推送的修复也能过 G-advance。写代码节点被退回进入（终审 revise、CI 红、评审线程）时，即使该节点是第 1 次派工，brief 也会列出本 run 前序节点的 `.keel/` 报告路径并要求先读；清单只列真实写报告的节点，不含 `open-pr` / `wait-ci` 等工具节点。done 门发现某条 SC 没有证据时给 `revise` / `waive` / `stop`：`revise` 退回该图 `g-accept` 的 revise 目标并在 brief 写明缺哪条 SC；`waive` 必须带用户原话 `authorization_source`，KEEL 记入 decisions 并把该 SC 标为豁免，其余门禁仍须满足才算 done。
-4. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
+流程是三段：写手 → 开 PR、等 CI → 非作者审查。
+
+1. `keel_run({ goal: "<用户原话>", sc, repo_dir, lead, scope, playbook: "bug-fix" })`。`playbook` 写明任务类型（bug-fix / feature / refactoring / investigation），KEEL 就不再猜；`sc` 尽量每条带 `verify` 命令。
+2. 写手（`implement`）一个会话做完：先提交失败测试，再提交修复，跑测试。新功能先由 `architect-plan` 出方案，写手按方案做；重构先提交钉住行为的测试。
+3. `open-pr` → `wait-ci`：主控照 next 调 `pr_open`（用户授权原话填 `authorization_source`）再 `keel_wait`。CI 红走 `fix-ci`，有评审线程走 `triage-threads`，二者都先经 `pr_open` 推送再等 CI。
+4. 审查（`astra-final-review`）：不同家族的强模型只读审 diff、亲自跑测试并给出 verdict。`FAIL` 由 `g-accept` 退回写手，写手的任务说明会列出审查报告；`PASS` / `PASS+NOTES` 进入 `report-ready`。同一失败重复两次时 `astra-unstick` 先出主意。
+5. done 门发现某条 SC 没有证据时给 `revise` / `waive` / `stop`：`revise` 退回写手并写明缺哪条；`waive` 必须带用户原话 `authorization_source`。验证级别不够时给 `retry_verify`，重派审查。
+6. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。
 

@@ -99,18 +99,58 @@ function classifySimple(tokens: string[]): TestKind | null {
   return null;
 }
 
+/** Path/glob characters only. Spaces, `$`, backticks and other shell metacharacters stay rejected. */
+const SAFE_QUOTED_WORD = /^[A-Za-z0-9_./:*?+-]+$/;
+
+/** Split one `&&` segment. Simple `"glob"` / `'path'` words unquote; anything else with quotes proves nothing. */
+function splitSimpleQuoted(seg: string): string[] | null {
+  const tokens: string[] = [];
+  let i = 0;
+  const s = seg.trim();
+  while (i < s.length) {
+    if (/\s/.test(s[i]!)) {
+      i++;
+      continue;
+    }
+    const q = s[i];
+    if (q === '"' || q === "'") {
+      i++;
+      let inner = "";
+      while (i < s.length && s[i] !== q) {
+        inner += s[i];
+        i++;
+      }
+      if (i >= s.length) return null;
+      i++;
+      if (!SAFE_QUOTED_WORD.test(inner)) return null;
+      if (i < s.length && !/\s/.test(s[i]!)) return null;
+      tokens.push(inner);
+      continue;
+    }
+    let word = "";
+    while (i < s.length && !/\s/.test(s[i]!) && s[i] !== '"' && s[i] !== "'") {
+      word += s[i];
+      i++;
+    }
+    if (i < s.length && (s[i] === '"' || s[i] === "'")) return null;
+    tokens.push(word);
+  }
+  return tokens;
+}
+
 /**
  * A command proves a test run only when a test runner is the executable of a segment and
  * the exit code covers it: pipes, `||` and `;` let a failing test still exit 0, so they prove nothing.
  */
 function testInvocation(cmd: string): TestKind | null {
-  // Quotes and escapes change how the shell splits words; without a real shell parser we
-  // cannot tell a runner from text, so such commands prove nothing.
-  // Comments, newlines, background `&` and redirections are likewise not parsed.
-  if (/\|\||\||;|`|\$\(|["'\\#\n<>]|(^|[^&])&(?!&)/.test(cmd)) return null;
+  // Escapes, comments, newlines, background `&` and redirections are not parsed.
+  // Simple quoted path/glob words are unquoted; other quotes prove nothing.
+  if (/\|\||\||;|`|\$\(|[\\#\n<>]|(^|[^&])&(?!&)/.test(cmd)) return null;
   let kind: TestKind | null = null;
   for (const seg of cmd.split("&&")) {
-    const k = classifySimple(seg.trim().split(/\s+/));
+    const tokens = splitSimpleQuoted(seg);
+    if (!tokens) return null;
+    const k = classifySimple(tokens);
     if (k === "ui" || (k === "unit" && kind === null)) kind = k;
   }
   return kind;

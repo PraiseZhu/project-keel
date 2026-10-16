@@ -98,6 +98,36 @@ describe("mapOrchLevel", () => {
     }
   });
 
+  it("simple quoted glob words are still a test run", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
+    for (const cmd of [
+      'node --test "mivo/deploy/*.test.mjs"',
+      'node --test review-pr/scripts/mivo-patches.test.mjs "tools/*.test.mjs" "mivo/**/*.test.mjs"',
+      "npx vitest run 'tests/x.test.ts'",
+    ]) {
+      expect(pass(cmd), cmd).toBe("unit-test-verified");
+    }
+  });
+
+  it("quoted words with spaces, $, backticks, escapes or unmatched quotes still prove nothing", () => {
+    const pass = (cmd: string) => mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, tests_passed: 3 }] });
+    for (const cmd of [
+      'node --test "a b.test.mjs"',
+      'REVIEW_PR_RULES_FILE="$PWD/x" node --test',
+      "node --test `echo x.test.mjs`",
+      'node --test "foo\\bar.test.mjs"',
+      'node --test "unclosed',
+      "node --test 'unclosed",
+      "npm test | tail -20",
+      "npm test || true",
+      "npx vitest run; echo done",
+      "npm test > out.txt",
+      "npm test & wait",
+    ]) {
+      expect(pass(cmd), cmd).toBe("type-check-only");
+    }
+  });
+
   it("a runner that exits 0 without reporting passed tests is not unit evidence", () => {
     const honest = (cmd: string, tests_passed?: number) =>
       mapOrchLevel({ verdict: "PASS", ran: [{ cmd, exit_code: 0, ...(tests_passed === undefined ? {} : { tests_passed }) }] });

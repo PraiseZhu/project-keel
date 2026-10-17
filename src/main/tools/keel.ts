@@ -16,6 +16,7 @@ import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type Gra
 import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
 import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
+import { collectParallelReports, readExecutionRoute, sameRoute } from '../graph/collaboration.ts';
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
 import { append, newRunId } from "../ledger.ts";
 import { findProfile, resolveProfileForHarness } from "../manual/resolve.ts";
@@ -98,6 +99,7 @@ export function mapCreateWorkerReceipt(raw: unknown): {
   worker_id?: string;
   worker_session_id?: string;
   queued_message_id?: string;
+  execution_route?: ReturnType<typeof readExecutionRoute>;
   dispatch_outcome: { created?: boolean; delivered?: boolean; queued?: boolean; errorCode?: string };
 } {
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
@@ -107,10 +109,13 @@ export function mapCreateWorkerReceipt(raw: unknown): {
   const queued_message_id = str(o.queued_message_id) ?? str(o.queuedMessageId);
   const dispatched = outcome.dispatched === true;
   const wakeKind = str(outcome.wakeKind);
+  const resolved = rec(o.resolved);
+  const executionRoute = readExecutionRoute({ ...resolved, provider_id: resolved.provider_id ?? resolved.providerId });
   return {
     ...(worker_id ? { worker_id } : {}),
     ...(worker_session_id ? { worker_session_id } : {}),
     ...(queued_message_id ? { queued_message_id } : {}),
+    ...(executionRoute ? { execution_route: executionRoute } : {}),
     dispatch_outcome: {
       created: Boolean(worker_id),
       delivered: dispatched && wakeKind !== "queued",
@@ -338,10 +343,14 @@ async function startEntryAstraConsult(
 }
 
 function pickProfile(manual: ModelManual, args: Record<string, unknown>): { profile?: Profile; decide?: Next } {
-  const named = str(args.profile);
-  if (named) return { profile: findProfile(manual, named) };
   const lead = str(args.lead);
   if (!lead || !LEADS.has(lead as Harness)) throw new KeelError("INVALID_INPUT", "keel_run 需要 lead: codex | claude-code | pi。");
+  const named = str(args.profile);
+  if (named) {
+    const profile = findProfile(manual, named);
+    if (profile.harness !== lead) throw new KeelError('PROFILE_HARNESS_MISMATCH', `方案 ${named} 属于 ${profile.harness}，当前主控是 ${lead}；选择方案不会切换主控。`);
+    return { profile };
+  }
   try {
     return { profile: resolveProfileForHarness(manual, lead as Harness) };
   } catch (e) {
@@ -1091,7 +1100,11 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     const st = states.find((r) => (r as { run_id?: string }).run_id === runId) as GraphRunState | undefined;
     const reportDir = st?.worktree ?? st?.invocation_dir;
     let parsed: NodeReport | undefined;
-    const inline = args.inline_report && typeof args.inline_report === "object" ? args.inline_report as Record<string, unknown> : undefined;
+    const plannedNode = parsedKey ? st?.nodes?.[parsedKey.nodeId] : undefined;
+    const parallel = plannedNode?.collaborators?.length && plannedNode.dispatch_key === key
+      ? collectParallelReports(key, plannedNode.collaborators, args.parallel_reports) : undefined;
+    const inline = parallel ? parallel as unknown as Record<string, unknown>
+      : args.inline_report && typeof args.inline_report === "object" ? args.inline_report as Record<string, unknown> : undefined;
     if (inline) {
       base.inline_report = { status: (typeof inline.status === "string" ? inline.status : "done") as "done" | "partial" | "blocked" | "failed", summary: typeof inline.summary === "string" ? inline.summary : undefined };
       parsed = {
@@ -1102,6 +1115,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
         ...(Array.isArray(inline.functions_touched) ? { functions_touched: inline.functions_touched.filter((x): x is string => typeof x === "string") } : {}),
         ...(Number.isInteger(inline.changed_lines) && (inline.changed_lines as number) >= 0 ? { changed_lines: inline.changed_lines as number } : {}),
         ran: ranWithTestsPassed(inline.ran),
+        ...(Array.isArray(inline.findings) ? { findings: inline.findings.filter((value): value is string => typeof value === 'string') } : {}),
         ...(typeof inline.citation === "string" ? { citation: inline.citation } : {}),
         ...(inline.sc_evidence && typeof inline.sc_evidence === "object" ? { sc_evidence: inline.sc_evidence as Record<string, boolean> } : {}),
         ...(typeof inline.head_sha === "string" ? { head_sha: inline.head_sha } : {}),
@@ -1116,6 +1130,13 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       base.report_path = file.path;
     }
     const nodeState = parsedKey ? st?.nodes?.[parsedKey.nodeId] : undefined;
+    if (nodeState?.planned_params?.channel === 'subagent' && nodeState.dispatch_key === key && nodeState.dispatch_state !== 'terminal') {
+      const successful = parsed?.status === 'done' || parsed?.status === 'partial';
+      const observed = parallel ? nodeState.collaborators![0]!.route : readExecutionRoute(args.execution_route);
+      if (successful && (!observed || !sameRoute(observed, { ...nodeState.planned_params, agent: nodeState.planned_params.agent as Harness }))) throw new KeelError('EXECUTION_ROUTE_MISMATCH', '原生 sub 回报必须提供与选择一致的 execution_route；不能把请求值冒充实际模型。');
+      if (successful && !parallel && (typeof args.native_agent_id !== 'string' || !args.native_agent_id)) throw new KeelError('REPORT_INVALID', '原生 sub 回报缺少真实 native_agent_id。');
+      if (successful && observed) base.execution_route = observed;
+    }
     if (nodeState?.planned_params?.writes) {
       const allow = nodeState.planned_params.scopeAllow;
       if (!allow?.length) {
@@ -1191,7 +1212,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
       };
       base.report = snap;
       if (nodeState?.planned_params?.role === "keel-verifier" && st?.worktree && headMatches && parsed.head_sha) {
-        const route = nodeState.actual_route ?? {
+        const route = base.execution_route ?? nodeState.actual_route ?? {
           agent: nodeState.planned_params.agent as Harness,
           model: nodeState.planned_params.model,
           provider_id: nodeState.planned_params.provider_id,

@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { makeContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
-import type { GraphRunState } from "../../src/main/graph/state.ts";
+import type { GraphRunState, Next } from "../../src/main/graph/state.ts";
+import { cloneManual, DEFAULT_MANUAL } from "../../src/shared/manual/schema.ts";
+import { nativeFinalArgs } from "../e2e/helpers.ts";
 import { LANE_PRESETS } from "../../src/shared/types.ts";
 import { ToolError } from "../../src/node/env.ts";
 import { runOrch } from "../../src/node/orch/rpc.ts";
@@ -151,15 +153,20 @@ describe("Step 13 / R30 keel_run.program", () => {
       if (next.kind === "setup") {
         out = await runTool(ctx(), "keel_report", { run_id: runId, phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "team" } });
       } else if (next.kind === "dispatch") {
-        const key = next.dispatch_key;
-        await runTool(ctx(), "keel_report", {
-          run_id: runId, phase: "accepted", dispatch_key: key, worker_id: "w", worker_session_id: "ws",
-          dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
-        });
-        out = await runTool(ctx(), "keel_report", {
-          run_id: runId, phase: "final", dispatch_key: key,
-          inline_report: { status: "done", summary: "adopt", verdict: "PASS", head_sha: HEAD, files_changed: [], ran: [{ cmd: "vitest run", exit_code: 0, tests_passed: 1 }] },
-        });
+        const dispatch = next as Extract<Next, { kind: "dispatch" }>;
+        const report = { status: "done", summary: "adopt", verdict: "PASS", head_sha: HEAD, files_changed: [], ran: [{ cmd: "vitest run", exit_code: 0, tests_passed: 1 }] };
+        if (dispatch.subagent || dispatch.subagents?.length) {
+          out = await runTool(ctx(), "keel_report", nativeFinalArgs({ run_id: runId, dispatch, report }));
+        } else {
+          const key = dispatch.dispatch_key;
+          await runTool(ctx(), "keel_report", {
+            run_id: runId, phase: "accepted", dispatch_key: key, worker_id: "w", worker_session_id: "ws",
+            dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
+          });
+          out = await runTool(ctx(), "keel_report", {
+            run_id: runId, phase: "final", dispatch_key: key, inline_report: report,
+          });
+        }
       } else if (next.kind === "decide") {
         const answer = next.options?.includes("adopt") ? "adopt" : next.options?.[0];
         out = await runTool(ctx(), "keel_gate", { run_id: runId, gate_id: next.gate_id, answer });
@@ -238,5 +245,41 @@ describe("Step 13 / R30 keel_run.program", () => {
     const after = JSON.parse(h.files.get(graphStatePath(row.run_id))!) as GraphRunState;
     expect(after.status).toBe("done");
     expect((tick.result as { runs: { next?: { kind: string } }[] }).runs[0]?.next?.kind).toBe("done");
+  });
+
+  it("uses defaults_by_harness for the actual lead instead of a hardcoded sol", async () => {
+    const store = mkdtempSync(join(tmpdir(), "keel-program-profile-"));
+    dirs.push(store);
+    const h = host({ 3: "waiting" });
+    const manual = cloneManual(DEFAULT_MANUAL);
+    const sol = manual.profiles.find((p) => p.id === "sol")!;
+    h.kv.manual = {
+      ...manual,
+      profiles: [...manual.profiles, { ...sol, id: "luna-lead", name: "Luna 主控" }],
+      defaults_by_harness: { ...manual.defaults_by_harness, codex: "luna-lead" },
+    };
+    const ctx = () => makeContext(h, "p", profile);
+    expect((await runTool(ctx(), "keel_run", { ...base, program: { op: "init", store } })).ok).toBe(true);
+    expect((await runTool(ctx(), "keel_run", { ...base, program: { op: "add", store, id: "u", track: "t", pr: 3 } })).ok).toBe(true);
+    const tick = await runTool(ctx(), "keel_run", { ...base, program: { op: "tick", store } });
+    expect(tick.ok, JSON.stringify(tick)).toBe(true);
+    if (!tick.ok) return;
+    const runId = (tick.result as { runs: { run_id: string }[] }).runs[0]!.run_id;
+    const st = JSON.parse(h.files.get(graphStatePath(runId))!) as GraphRunState;
+    expect(st.profile_id).toBe("luna-lead");
+    expect(st.lead_harness).toBe("codex");
+  });
+
+  it("rejects an explicit profile whose harness does not match lead", async () => {
+    const store = mkdtempSync(join(tmpdir(), "keel-program-mismatch-"));
+    dirs.push(store);
+    const h = host({ 4: "waiting" });
+    const ctx = () => makeContext(h, "p", profile);
+    expect((await runTool(ctx(), "keel_run", { ...base, program: { op: "init", store } })).ok).toBe(true);
+    expect((await runTool(ctx(), "keel_run", { ...base, program: { op: "add", store, id: "u", track: "t", pr: 4 } })).ok).toBe(true);
+    const tick = await runTool(ctx(), "keel_run", { ...base, profile: "grok", program: { op: "tick", store } });
+    expect(tick.ok).toBe(false);
+    if (tick.ok) return;
+    expect(tick.errorCode).toBe("PROFILE_HARNESS_MISMATCH");
   });
 });

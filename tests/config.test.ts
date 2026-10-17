@@ -12,6 +12,15 @@ const built: KeelProfile = {
 };
 
 describe("loadRuntimeConfig", () => {
+  it('reads a changed manual even if the settings broadcast was lost', async () => {
+    const h = fakeHost({ kv: { manual: DEFAULT_MANUAL } });
+    const first = await loadRuntimeConfig(h, built);
+    h.kv.manual = { ...DEFAULT_MANUAL, defaults_by_harness: { ...DEFAULT_MANUAL.defaults_by_harness, codex: 'other-profile' } };
+    const second = await loadRuntimeConfig(h, built);
+    expect(first.manual.defaults_by_harness.codex).toBe('sol');
+    expect(second.manual.defaults_by_harness.codex).toBe('other-profile');
+    expect(h.files.size).toBe(0);
+  });
   it("empty kv uses Appendix C defaults and the packed profile's non-model lanes", async () => {
     const h = fakeHost();
     const cfg = await loadRuntimeConfig(h, built);

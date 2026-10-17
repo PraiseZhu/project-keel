@@ -6,6 +6,7 @@ import {
   DEFAULT_MANUAL,
   exportManual,
   HARNESSES,
+  MANUAL_VERSION,
   ManualError,
   MAX_FALLBACKS,
   parseManual,
@@ -24,7 +25,7 @@ import {
 import { validateManual, type ManualIssue } from "../shared/manual/validate.ts";
 
 export const TASK_LABELS: Record<TaskType, string> = {
-  default: "默认",
+  default: "默认设置",
   "bug-fix": "修 bug",
   feature: "新功能",
   refactoring: "重构",
@@ -61,7 +62,8 @@ export interface CatalogState {
 export type SaveResult =
   | { ok: true }
   | { ok: false; kind: "invalid"; issues: ManualIssue[] }
-  | { ok: false; kind: "write"; message: string };
+  | { ok: false; kind: "write"; message: string }
+  | { ok: false; kind: "conflict"; message: string };
 
 export interface RouteView {
   readonly agent: Harness;
@@ -160,14 +162,25 @@ export function setDirectionGate(manual: ModelManual, id: string, gate: Directio
   return patchProfile(manual, id, (p) => ({ ...p, direction_gate: gate }));
 }
 
-/** undefined = 主控自己定 (gate=lead, drop direction_route). Route = gate=astra and store the tuple. */
+/** undefined = 主控自己定 (gate=lead, drop direction_route and collaborators). Route = gate=astra and store the tuple. */
 export function setDirectionRoute(manual: ModelManual, id: string, route?: Route): ModelManual {
   return patchProfile(manual, id, (p) => {
     if (!route) {
-      const { direction_route: _drop, ...rest } = p;
+      const { direction_route: _drop, direction_collaborators: _collab, ...rest } = p;
       return { ...rest, direction_gate: "lead" };
     }
     return { ...p, direction_gate: "astra", direction_route: route };
+  });
+}
+
+export function setDirectionCollaborators(manual: ModelManual, id: string, collaborators?: readonly Route[]): ModelManual {
+  return patchProfile(manual, id, (p) => {
+    if (!collaborators?.length) {
+      const { direction_collaborators: _drop, ...rest } = p;
+      return rest;
+    }
+    if (!p.direction_route) return p;
+    return { ...p, direction_collaborators: collaborators };
   });
 }
 
@@ -175,14 +188,25 @@ export function setLead(manual: ModelManual, id: string, lead: Route): ModelManu
   return patchProfile(manual, id, (p) => ({ ...p, lead }));
 }
 
-/** undefined = 同方案 (drop final_review_route). Route = store the tuple on this profile. */
+/** undefined = 同方案 (drop final_review_route and collaborators). Route = store the tuple on this profile. */
 export function setFinalReviewRoute(manual: ModelManual, id: string, route?: Route): ModelManual {
   return patchProfile(manual, id, (p) => {
     if (!route) {
-      const { final_review_route: _drop, ...rest } = p;
+      const { final_review_route: _drop, final_review_collaborators: _collab, ...rest } = p;
       return rest;
     }
     return { ...p, final_review_route: route };
+  });
+}
+
+export function setFinalReviewCollaborators(manual: ModelManual, id: string, collaborators?: readonly Route[]): ModelManual {
+  return patchProfile(manual, id, (p) => {
+    if (!collaborators?.length) {
+      const { final_review_collaborators: _drop, ...rest } = p;
+      return rest;
+    }
+    if (!p.final_review_route) return p;
+    return { ...p, final_review_collaborators: collaborators };
   });
 }
 
@@ -224,7 +248,11 @@ export function setSlot(manual: ModelManual, id: string, taskType: TaskType, rol
 export function materializeSlot(manual: ModelManual, id: string, taskType: TaskType, role: Role): Slot {
   try {
     const resolved = resolve(manual, id, taskType, role);
-    return { primary: resolved.primary, fallbacks: resolved.fallbacks.length ? [...resolved.fallbacks] : undefined };
+    return {
+      primary: resolved.primary,
+      ...(resolved.fallbacks.length ? { fallbacks: [...resolved.fallbacks] } : {}),
+      ...(role !== "worker" && resolved.collaborators?.length ? { collaborators: [...resolved.collaborators] } : {}),
+    };
   } catch {
     const harness = manual.profiles.find((p) => p.id === id)?.harness ?? "codex";
     return { primary: { agent: harness, model: "", provider_id: "" } };
@@ -258,7 +286,7 @@ export function filterModels(models: readonly AgentModel[], agent: string, showH
 export function staleReason(route: Route, models: readonly AgentModel[]): string | undefined {
   if (!route.model || !route.provider_id) return "尚未选择模型。";
   const hit = findModel(models, route.agent, route.model, route.provider_id);
-  if (!hit) return `模型 ${route.model} 在 agent ${route.agent} / 来源 ${route.provider_id} 下不存在。`;
+  if (!hit || hit.visible === false) return `模型 ${route.model} 在 agent ${route.agent} / 来源 ${route.provider_id} 下不存在。`;
   if (!hit.efforts || hit.efforts.length === 0) {
     if (route.effort !== undefined) return "该项未声明档位，只接受不填 effort。";
     return undefined;
@@ -294,22 +322,117 @@ export async function fetchCatalog(io: SettingsIO): Promise<CatalogState> {
   }
 }
 
-export async function loadManualFromKv(io: SettingsIO): Promise<{ kv: Record<string, unknown>; manual: ModelManual; error?: string }> {
-  const kv = await io.getKv();
-  if (kv.manual === undefined) return { kv, manual: cloneManual(DEFAULT_MANUAL) };
+/** Stable compare key for concurrent-save detection. Invalid stored values keep a raw fingerprint so we never pretend Host CAS. */
+export function fingerprintManual(value: unknown): string {
+  if (value === undefined) return "";
   try {
-    return { kv, manual: parseManual(kv.manual) };
-  } catch (e) {
-    const message = e instanceof ManualError ? e.message : "说明书不是合法 JSON。";
-    return { kv, manual: cloneManual(DEFAULT_MANUAL), error: message };
+    return JSON.stringify(parseManual(value));
+  } catch {
+    try {
+      return `raw:${JSON.stringify(value)}`;
+    } catch {
+      return "raw:unserializable";
+    }
   }
 }
 
-export async function saveManual(io: SettingsIO, manual: ModelManual, models: readonly AgentModel[]): Promise<SaveResult> {
+export function withSavedVersion(manual: ModelManual): ModelManual {
+  return manual.version === MANUAL_VERSION ? manual : { ...manual, version: MANUAL_VERSION };
+}
+
+export async function loadManualFromKv(io: SettingsIO): Promise<{
+  kv: Record<string, unknown>;
+  manual: ModelManual;
+  error?: string;
+  invalid?: boolean;
+  fingerprint: string;
+}> {
   const kv = await io.getKv();
-  const next = composeKv(kv, manual);
-  const issues = validateManual(manual, models, next);
-  if (issues.length) return { ok: false, kind: "invalid", issues };
+  if (kv.manual === undefined) return { kv, manual: cloneManual(DEFAULT_MANUAL), fingerprint: "" };
+  try {
+    const manual = parseManual(kv.manual);
+    return { kv, manual, fingerprint: fingerprintManual(manual) };
+  } catch (e) {
+    const message = e instanceof ManualError ? e.message : "说明书不是合法 JSON。";
+    return {
+      kv,
+      manual: cloneManual(DEFAULT_MANUAL),
+      error: message,
+      invalid: true,
+      fingerprint: fingerprintManual(kv.manual),
+    };
+  }
+}
+
+/** Catalog availability only. Structure, harness defaults, inherit and /kv size always block. */
+export function isAvailabilityIssue(issue: ManualIssue): boolean {
+  const m = issue.message;
+  return m.includes("下不存在") || m.includes("未声明档位") || m.includes("不在该项已声明的 efforts");
+}
+
+function routeAtPath(manual: ModelManual, path: string): Route | undefined {
+  const parts = path.replace(/\/effort$/, "").split("/");
+  if (parts[0] !== "profiles" || !parts[1]) return undefined;
+  const profile = manual.profiles.find((p) => p.id === parts[1]);
+  if (!profile) return undefined;
+  const field = parts[2];
+  if (field === "lead") return profile.lead;
+  if (field === "direction_route") return profile.direction_route;
+  if (field === "final_review_route") return profile.final_review_route;
+  if (field === "direction_collaborators" && parts[3] !== undefined) return profile.direction_collaborators?.[Number(parts[3])];
+  if (field === "final_review_collaborators" && parts[3] !== undefined) return profile.final_review_collaborators?.[Number(parts[3])];
+  if (field === "nodes" && parts[3] && parts[4]) {
+    const slot = profile.nodes[parts[3] as TaskType]?.[parts[4] as Role];
+    if (!slot) return undefined;
+    if (parts[5] === "primary") return slot.primary;
+    if (parts[5] === "fallbacks" && parts[6] !== undefined) return slot.fallbacks?.[Number(parts[6])];
+    if (parts[5] === "collaborators" && parts[6] !== undefined) return slot.collaborators?.[Number(parts[6])];
+  }
+}
+
+function routeTuple(route: Route | undefined): string {
+  if (!route) return "";
+  return JSON.stringify([route.agent, route.model, route.provider_id, route.effort ?? ""]);
+}
+
+/** Availability issues exempt only when the same route tuple is unchanged. Same error text is not enough. */
+export function blockingManualIssues(
+  current: readonly ManualIssue[],
+  baselineIssues: readonly ManualIssue[],
+  currentManual: ModelManual,
+  baselineManual: ModelManual,
+): ManualIssue[] {
+  return current.filter((issue) => {
+    if (!isAvailabilityIssue(issue)) return true;
+    const prior = baselineIssues.some((b) => b.path === issue.path && b.message === issue.message);
+    if (!prior) return true;
+    return routeTuple(routeAtPath(currentManual, issue.path)) !== routeTuple(routeAtPath(baselineManual, issue.path));
+  });
+}
+
+export async function saveManual(
+  io: SettingsIO,
+  manual: ModelManual,
+  models: readonly AgentModel[],
+  opts?: { expectedFingerprint?: string; baseline?: ModelManual },
+): Promise<SaveResult> {
+  const kv = await io.getKv();
+  if (opts && "expectedFingerprint" in opts) {
+    if (fingerprintManual(kv.manual) !== opts.expectedFingerprint) {
+      return {
+        ok: false,
+        kind: "conflict",
+        message: "说明书已被其他面板更新。你的修改仍保留，请重载后再保存。未使用 Host 原子 CAS。",
+      };
+    }
+  }
+  const toSave = withSavedVersion(manual);
+  const next = composeKv(kv, toSave);
+  const issues = validateManual(toSave, models, next);
+  const blocking = opts?.baseline
+    ? blockingManualIssues(issues, validateManual(opts.baseline, models, composeKv(kv, opts.baseline)), toSave, opts.baseline)
+    : issues;
+  if (blocking.length) return { ok: false, kind: "invalid", issues: blocking };
   const put = await io.putKv(next);
   if (!put.ok) return { ok: false, kind: "write", message: put.message ?? `写入 /kv 失败（HTTP ${put.status}）。` };
   io.broadcast({ type: "manual-changed" });

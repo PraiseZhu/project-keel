@@ -8,6 +8,8 @@ import {
   copyProfile,
   deleteProfile,
   fetchCatalog,
+  fingerprintManual,
+  loadManualFromKv,
   parseImportedJson,
   prettyExport,
   profileList,
@@ -159,7 +161,67 @@ describe("saveManual", () => {
     const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), appendixCAgentModels());
     expect(result.ok).toBe(true);
     expect(io.kv.keep).toBe(true);
-    expect(io.kv.manual).toEqual(DEFAULT_MANUAL);
+    expect(io.kv.manual).toEqual({ ...DEFAULT_MANUAL, version: 2 });
+  });
+
+  it("does not let an unused stale profile block saving a changed route", async () => {
+    const loadedBase = cloneManual(DEFAULT_MANUAL);
+    const loaded: ModelManual = {
+      ...loadedBase,
+      profiles: [...loadedBase.profiles, {
+        id: "stale-old",
+        name: "旧方案",
+        harness: "codex",
+        lead: { agent: "codex", model: "gone-model", provider_id: "art-cindy", effort: "high" },
+        direction_gate: "lead",
+        nodes: { default: { ...loadedBase.profiles[0]!.nodes.default! } },
+      }],
+    };
+    const edited = setSlot(loaded, "sol", "default", "worker", {
+      primary: { agent: "pi", model: "x-ai-grok/grok-4.6", provider_id: "xd", effort: "high" },
+      fallbacks: loaded.profiles[0]!.nodes.default!.worker!.fallbacks,
+    });
+    const io = fakeIo({ kv: { extra: 1, manual: loaded }, models: appendixCAgentModels() });
+    const result = await saveManual(io, edited, appendixCAgentModels(), {
+      expectedFingerprint: fingerprintManual(loaded),
+      baseline: loaded,
+    });
+    expect(result).toEqual({ ok: true });
+    expect(io.kv.extra).toBe(1);
+    expect((io.kv.manual as ModelManual).version).toBe(2);
+  });
+
+  it("blocks a changed invalid effort even when the availability message is unchanged", async () => {
+    const models: AgentModel[] = [
+      ...appendixCAgentModels(),
+      { id: "plain", name: "plain", agent: "codex", providerId: "art-cindy", visible: true, efforts: [] },
+    ];
+    const loaded = setSlot(cloneManual(DEFAULT_MANUAL), "sol", "default", "explorer", {
+      primary: { agent: "codex", model: "plain", provider_id: "art-cindy", effort: "high" },
+    });
+    const edited = setSlot(loaded, "sol", "default", "explorer", {
+      primary: { agent: "codex", model: "plain", provider_id: "art-cindy", effort: "max" },
+    });
+    const io = fakeIo({ kv: { extra: 1, manual: loaded }, models });
+    const result = await saveManual(io, edited, models, {
+      expectedFingerprint: fingerprintManual(loaded),
+      baseline: loaded,
+    });
+    expect(result).toMatchObject({ ok: false, kind: "invalid" });
+    if (result.ok === false && result.kind === "invalid") {
+      expect(result.issues.some((i) => i.message.includes("未声明档位"))).toBe(true);
+    }
+    expect(io.kv.extra).toBe(1);
+    expect(io.kv.manual).toEqual(loaded);
+  });
+
+  it("refuses to treat an invalid stored manual as loaded default", async () => {
+    const io = fakeIo({ kv: { manual: { version: 9 }, keep: true } });
+    const loaded = await loadManualFromKv(io);
+    expect(loaded.invalid).toBe(true);
+    expect(loaded.fingerprint).toMatch(/^raw:/);
+    expect(io.kv.manual).toEqual({ version: 9 });
+    expect(io.kv.keep).toBe(true);
   });
 });
 
@@ -191,13 +253,12 @@ describe("RuntimeConfig cache hook", () => {
     const first = await loadRuntimeConfig(h, built);
     expect(first.lanes).toEqual([{ repo: "one/repo", preset: "personal" }]);
     h.kv.lanes = [{ repo: "two/repo", preset: "personal" }];
-    const cached = await loadRuntimeConfig(h, built);
-    expect(cached.lanes).toEqual([{ repo: "one/repo", preset: "personal" }]);
-    expect(h.kvReads).toBe(1);
+    const live = await loadRuntimeConfig(h, built);
+    expect(live.lanes).toEqual([{ repo: "two/repo", preset: "personal" }]);
+    expect(h.kvReads).toBeGreaterThanOrEqual(2);
     invalidateRuntimeConfig();
     const again = await loadRuntimeConfig(h, built);
     expect(again.lanes).toEqual([{ repo: "two/repo", preset: "personal" }]);
-    expect(h.kvReads).toBe(2);
   });
 });
 
@@ -253,7 +314,7 @@ describe("setFinalReviewRoute", () => {
 describe("settings.html structure", () => {
   it("has the mockup skeleton and no routing.json / 5×6 grid markers", () => {
     const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../plugin/settings.html"), "utf8");
-    for (const id of ["status-bar", "model-tabs", "task-scope", "model-rows", "accordion-jev", "accordion-lanes", "accordion-advanced", "reply-seg"]) {
+    for (const id of ["status-bar", "model-tabs", "task-scope", "model-rows", "scope-banner", "accordion-scope", "accordion-jev", "accordion-lanes", "accordion-advanced", "reply-seg", "lead-row"]) {
       expect(html).toContain(`id="${id}"`);
     }
     expect(html).toContain('data-status="jev"');
@@ -262,9 +323,13 @@ describe("settings.html structure", () => {
     expect(html).toContain('data-status="clock"');
     expect(html).toContain("Codex 主控");
     expect(html).toContain("Claude Code 主控");
-    expect(html).toContain("所有任务");
+    expect(html).toContain("默认设置");
     expect(html).toContain("按任务类型");
     expect(html).toContain("评审回帖");
+    expect(html).toContain("当前说明书");
+    expect(html).toContain("不会改变当前主会话模型");
+    expect(html).toContain("最多 4 路只读协作模型");
+    expect(html).not.toContain("探索与研究两步骤并行");
     expect(html).not.toContain("现读 routing.json");
     expect(html).not.toContain("当前派工路由");
     expect(html).not.toContain("roles-refresh");
@@ -272,7 +337,6 @@ describe("settings.html structure", () => {
     expect(html).not.toContain("5×6");
     expect(html).toContain("方案管理 · 导入导出 ›");
     expect(html).not.toContain("模型档次表");
-    // Status ids the script paints: one dot + one problem text per item.
     for (const id of ["jev", "catalog", "hooks", "clock"]) {
       expect(html).toContain(`id="status-${id}-dot"`);
       expect(html).toContain(`id="status-${id}-value"`);
@@ -281,7 +345,7 @@ describe("settings.html structure", () => {
 
   it("drops the static explanations the page used to repeat", () => {
     const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../plugin/settings.html"), "utf8");
-    for (const gone of ["每个下拉框打开时", "改完点保存", "读取中", "<h2>", 'id="reply-confirm"', "前往 Typesafe 控制台"]) {
+    for (const gone of ["每个下拉框打开时", "改完点保存", "读取中", 'id="reply-confirm"', "前往 Typesafe 控制台"]) {
       expect(html).not.toContain(gone);
     }
     // Save starts disabled; the script enables it only while there are unsaved edits.

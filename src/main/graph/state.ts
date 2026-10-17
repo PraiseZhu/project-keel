@@ -24,6 +24,8 @@ export interface CreateWorkerParams {
   model: string;
   provider_id: string;
   effort?: string;
+  fast?: boolean;
+  agent_device_id?: string;
   working_dir?: string;
   initial_task: string;
 }
@@ -31,7 +33,7 @@ export interface CreateWorkerParams {
 export interface SubagentParams {
   /** claude-code → Agent tool; codex → its own sub-agent. */
   harness: Harness;
-  /** claude-code: haiku | sonnet | opus (pass explicitly). codex: omitted, inherits the lead model. */
+  /** Exact requested model; the caller must reject a native tool that cannot honor this route. */
   model?: string;
   effort?: string;
   role: KeelRole;
@@ -39,8 +41,10 @@ export interface SubagentParams {
   task: string;
   /** Where the subagent writes its NodeReport; absent = investigation inline report. */
   report_path?: string;
-  /** Original route id; the native tool actually runs the lead's alias / lead model. */
+  /** Requested identity, not evidence of what the native tool actually ran. */
   route: { model: string; provider_id: string };
+  required_route?: Route;
+  require_exact_route?: boolean;
 }
 
 export interface PlannedParams extends CreateWorkerParams {
@@ -106,6 +110,7 @@ export interface NodeRunState {
   dispatch_state_at?: number;
   planned_params?: PlannedParams;
   actual_route?: Route;
+  collaborators?: readonly { dispatch_key: string; route: Route; task: string }[];
   /** Model families from every write attempt on this node. */
   attempt_families?: string[];
   worker_label?: string;
@@ -194,6 +199,7 @@ export type Next =
       dispatch_key: string;
       create_worker?: CreateWorkerParams;
       subagent?: SubagentParams;
+      subagents?: readonly (SubagentParams & { dispatch_key: string })[];
       plugin_task?: {
         phase: "create" | "send";
         request_key: string;

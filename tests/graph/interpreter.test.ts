@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { advance } from "../../src/main/graph/interpreter.ts";
+import { makeContext } from "../../src/main/context.ts";
+import { runTool } from "../../src/main/dispatch.ts";
+import { advance, createRun } from "../../src/main/graph/interpreter.ts";
 import { KeelError } from "../../src/main/host.ts";
 import { family } from "../../src/shared/fanout.ts";
+import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
+import { fakeHost } from "../helpers/fakeHost.ts";
 import { boot, readState, setupOk, usePluginResearch } from "./helpers.ts";
 
 describe("interpreter next kinds", () => {
@@ -17,6 +21,7 @@ describe("interpreter next kinds", () => {
     expect(d.next.kind).toBe("dispatch");
     if (d.next.kind !== "dispatch") throw new Error("dispatch");
     expect(d.next.create_worker?.role).toBe("keel-worker");
+    expect(d.next.create_worker).toMatchObject({ fast: false, agent_device_id: "local" });
     expect(d.next.create_worker?.label).toMatch(/^keel-[a-z0-9_-]{1,8}-[a-f0-9]{10}$/);
     expect(d.next.create_worker?.label.length).toBeLessThanOrEqual(32);
     expect(JSON.stringify(d.next.create_worker)).not.toMatch(/permission/i);
@@ -26,6 +31,7 @@ describe("interpreter next kinds", () => {
     if (again.next.kind !== "dispatch") throw new Error("dispatch");
     expect(again.next.dispatch_key).toBe("run1:worker:1");
     expect(again.next.create_worker?.label).toBe(d.next.create_worker?.label);
+    expect(again.next.create_worker).toMatchObject({ fast: false, agent_device_id: "local" });
   });
 
   it("accepted delivered → wait; final done walks to wait-ci", async () => {
@@ -130,16 +136,17 @@ describe("interpreter next kinds", () => {
     await advance(h3, "run4", {
       type: "report", phase: "accepted", dispatch_key: send.next.dispatch_key, task_run_id: "trun-1",
     }, { spec: s3 });
-    await advance(h3, "run4", { type: "report", phase: "final", dispatch_key: send.next.dispatch_key, inline_report: { status: "done" } }, { spec: s3 });
-    const ver = await advance(h3, "run4", { type: "tick" }, { spec: s3 });
+    const afterResearch = await advance(h3, "run4", { type: "report", phase: "final", dispatch_key: send.next.dispatch_key, inline_report: { status: "done" } }, { spec: s3 });
+    const ver = afterResearch.next.kind === "dispatch" ? afterResearch : await advance(h3, "run4", { type: "tick" }, { spec: s3 });
     expect(ver.next.kind).toBe("dispatch");
     if (ver.next.kind !== "dispatch") throw new Error("verify");
-    expect(ver.next.create_worker?.role).toBe("keel-verifier");
-    await advance(h3, "run4", {
-      type: "report", phase: "accepted", dispatch_key: ver.next.dispatch_key,
-      worker_id: "v1", worker_session_id: "vs1", dispatch_outcome: { created: true, delivered: true, queued: false },
+    expect(ver.next.create_worker).toBeUndefined();
+    expect(ver.next.subagent?.role).toBe("keel-verifier");
+    expect(ver.next.subagent?.model).toBe("gpt-6-luna");
+    const done = await advance(h3, "run4", {
+      type: "report", phase: "final", dispatch_key: ver.next.dispatch_key, inline_report: { status: "done" },
+      execution_route: ver.next.subagent?.required_route,
     }, { spec: s3 });
-    const done = await advance(h3, "run4", { type: "report", phase: "final", dispatch_key: ver.next.dispatch_key, inline_report: { status: "done" } }, { spec: s3 });
     expect(done.next.kind).toBe("done");
   });
 
@@ -168,10 +175,97 @@ describe("interpreter next kinds", () => {
     expect(family("gpt-6-luna")).toBe("gpt");
     const { h, spec } = await boot({ entry: "verify", author_families: ["gpt", "grok"] });
     const first = await advance(h, "run1", { type: "tick" }, { spec });
-    expect(first.next.kind).toBe("setup");
-    const v = await advance(h, "run1", { type: "report", phase: "setup", outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" }, session_id: "s1" }, { spec });
-    expect(v.next.kind).toBe("stop");
-    if (v.next.kind !== "stop") throw new Error("stop");
-    expect(v.next.reason).toMatch(/不同族/);
+    expect(first.next.kind).toBe("stop");
+    if (first.next.kind !== "stop") throw new Error("stop");
+    expect(first.next.reason).toMatch(/不同族/);
+  });
+});
+
+const emptyCtx = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
+const plannedWorker = { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" };
+
+describe("planned worker replay and accepted resolved route", () => {
+  it("re-tick before accepted keeps the same key and fast:false / local", async () => {
+    const { h, spec } = await boot({ run_id: "run-replay" });
+    const d = await setupOk(h, spec, "run-replay");
+    if (d.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(d.next.create_worker).toMatchObject({ ...plannedWorker, fast: false, agent_device_id: "local" });
+    const again = await advance(h, "run-replay", { type: "tick" }, { spec });
+    expect(again.next.kind).toBe("dispatch");
+    if (again.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(again.next.dispatch_key).toBe(d.next.dispatch_key);
+    expect(again.next.create_worker).toMatchObject({ ...plannedWorker, fast: false, agent_device_id: "local" });
+    expect(again.next.create_worker?.fast).not.toBe(true);
+    expect(again.next.create_worker?.agent_device_id).not.toBeUndefined();
+  });
+
+  async function bootWriter(runId: string) {
+    const spec = PSTACK_GRAPHS["bug-fix"];
+    const h = fakeHost({
+      node: (method: string) => {
+        if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } };
+        if (method === "git/changed-files") return { ok: true, result: { files: [] } };
+        return { ok: false, message: method };
+      },
+    });
+    await createRun(h, {
+      run_id: runId,
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "bug-fix",
+      entry: "implement",
+      goal: "fix the bug",
+      worktree: "/repo/.worktrees/keel-run1",
+      scopeAllow: ["src/**"],
+      now: h.now(),
+    });
+    const d = await advance(h, runId, {
+      type: "report", phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+      session_id: "s1",
+    }, { spec });
+    return { h, spec, d };
+  }
+
+  it("accepted resolved that differs in model, provider, or effort is EXECUTION_ROUTE_MISMATCH", async () => {
+    const mismatches = [
+      { id: "run-mis-model", resolved: { ...plannedWorker, model: "gpt-6-luna" } },
+      { id: "run-mis-provider", resolved: { ...plannedWorker, provider_id: "xd", providerId: "xd" } },
+      { id: "run-mis-effort", resolved: { ...plannedWorker, effort: "low" } },
+    ];
+    for (const { id: runId, resolved } of mismatches) {
+      const { h, d } = await bootWriter(runId);
+      if (d.next.kind !== "dispatch") throw new Error("dispatch");
+      expect(d.next.create_worker).toMatchObject(plannedWorker);
+      const out: any = await runTool(makeContext(h, "acc-mis", emptyCtx), "keel_report", {
+        run_id: runId,
+        phase: "accepted",
+        dispatch_key: d.next.dispatch_key,
+        worker_id: "w1",
+        worker_session_id: "ws1",
+        dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
+        resolved,
+      });
+      expect(out.ok, JSON.stringify({ resolved, out })).toBe(false);
+      expect(out.errorCode).toBe("EXECUTION_ROUTE_MISMATCH");
+    }
+  });
+
+  it("accepted resolved that matches planned model/provider/effort proceeds", async () => {
+    const { h, d } = await bootWriter("run-ok-resolved");
+    if (d.next.kind !== "dispatch") throw new Error("dispatch");
+    const out: any = await runTool(makeContext(h, "acc-ok", emptyCtx), "keel_report", {
+      run_id: "run-ok-resolved",
+      phase: "accepted",
+      dispatch_key: d.next.dispatch_key,
+      worker_id: "w1",
+      worker_session_id: "ws1",
+      dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
+      resolved: { agent: "pi", model: "grok-4.6", providerId: "art-cindy", effort: "high" },
+    });
+    expect(out.ok, JSON.stringify(out)).toBe(true);
+    expect(out.result.next.kind).toBe("wait");
+    expect(readState(h, "run-ok-resolved").nodes.implement?.actual_route).toEqual(plannedWorker);
   });
 });

@@ -95,6 +95,14 @@ const tools = [
   },
 ];
 
+const reportTool = tools.find((tool) => tool.name === 'keel_report');
+Object.assign(reportTool.parameters.properties, {
+  execution_route: { type: 'object', description: '原生 sub 实际执行的 agent/model/provider_id/effort；无法确认时不得伪造成功。' },
+  native_agent_id: { type: 'string', description: '真实原生 sub 回执的 id。' },
+  parallel_reports: { type: 'array', description: 'next.subagents 的全量回报；每项含 dispatch_key、不同 native_agent_id、execution_route、report(NodeReport)。必须收齐所有协作模型，任一失败不得报全体成功。', items: { type: 'object' } },
+});
+reportTool.description += ' 一次性 sub 不换主控模型、不回退 Worker；同批 subagents 用 parallel_reports 汇收，单 sub 成功须带真实 native_agent_id 与 execution_route。';
+
 const manifest = {
   schemaVersion: 3,
   minCindyVersion: "0.1.97",

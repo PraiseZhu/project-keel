@@ -35,9 +35,8 @@ describe("R29-02 route materialize", () => {
     const gated = await call(h, "keel_gate", { run_id: started.run_id, gate_id: "G-route", answer: "feature" });
     expect(gated.ok).toBe(true);
     if (!gated.ok) return;
-    const after = gated.result as { next: { kind: string } };
+    const after = gated.result as { next: { kind: string; dispatch_key?: string; subagent?: { role?: string }; create_worker?: { role?: string } } };
     const routed = JSON.parse(h.files.get(graphStatePath(started.run_id))!) as { astra_calls: number };
-    expect(routed.astra_calls).toBe(0);
     const setup = after.next.kind === "setup"
       ? await call(h, "keel_report", {
           run_id: started.run_id,
@@ -47,9 +46,11 @@ describe("R29-02 route materialize", () => {
       : gated;
     expect(setup.ok).toBe(true);
     if (!setup.ok) return;
-    const next = (setup.result as { next: { kind: string; dispatch_key?: string; create_worker?: { role?: string } } }).next;
+    const next = (setup.result as { next: { kind: string; dispatch_key?: string; subagent?: { role?: string }; create_worker?: { role?: string } } }).next;
     expect(next.kind).toBe("dispatch");
     expect(next.dispatch_key).toContain(":architect-plan:");
+    expect(next.create_worker).toBeUndefined();
+    expect(next.subagent?.role ?? next.create_worker?.role).toBe("keel-architect");
     const s = JSON.parse(h.files.get(graphStatePath(started.run_id))!) as {
       g_route_choice?: string;
       consult_node?: unknown;

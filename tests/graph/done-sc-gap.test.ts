@@ -281,11 +281,13 @@ describe("done gate SC missing evidence", () => {
     expect(r.next.kind, `应再派终审，实际 ${JSON.stringify(r.next)}`).toBe("dispatch");
     if (r.next.kind !== "dispatch") throw new Error("dispatch");
     expect(r.next.dispatch_key).toBe(`${id}:astra-final-review:4`);
+    expect(r.next.subagent).toBeTruthy();
+    expect(r.next.create_worker).toBeUndefined();
     for (const n of [1, 2, 3]) {
       const old = await workerLabel("astra-final-review", `${id}:astra-final-review:${n}`);
       expect(r.next.create_worker?.label).not.toBe(old);
     }
-    expect(r.next.create_worker?.initial_task).toContain("astra-final-review-4.md");
+    expect(r.next.subagent?.task).toContain("astra-final-review-4.md");
     expect(JSON.stringify(r.next)).not.toMatch(/"kind":"decide"/);
     expect(JSON.stringify(r.next)).not.toMatch(/已达 max_attempts/);
   });

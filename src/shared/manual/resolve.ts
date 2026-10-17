@@ -3,6 +3,7 @@ import { ManualError, type Harness, type ModelManual, type Profile, type Role, t
 export interface ResolvedRoutes {
   readonly primary: Route;
   readonly fallbacks: readonly Route[];
+  readonly collaborators?: readonly Route[];
 }
 
 function profileById(manual: ModelManual, id: string): Profile | undefined {
@@ -37,7 +38,7 @@ export function resolve(manual: ModelManual, profileId: string, taskType: TaskTy
     throw new ManualError("MANUAL_SLOT_UNRESOLVED", `方案 ${id} 的 ${taskType}/${role} 解析不到节点（无本列、无默认列、无可用继承）。`, `profiles/${id}/nodes/${taskType}/${role}`);
   };
   const slot = walk(profileId);
-  return { primary: slot.primary, fallbacks: slot.fallbacks ?? [] };
+  return { primary: slot.primary, fallbacks: slot.fallbacks ?? [], ...(slot.collaborators ? { collaborators: slot.collaborators } : {}) };
 }
 
 export function resolveProfileForHarness(manual: ModelManual, harness: Harness): Profile {
@@ -60,7 +61,7 @@ export function findProfile(manual: ModelManual, profileId: string): Profile {
  */
 export function resolveDirection(manual: ModelManual, profileId: string, taskType: TaskType): ResolvedRoutes {
   const profile = findProfile(manual, profileId);
-  if (profile.direction_route) return { primary: profile.direction_route, fallbacks: [] };
+  if (profile.direction_route) return { primary: profile.direction_route, fallbacks: [], ...(profile.direction_collaborators ? { collaborators: profile.direction_collaborators } : {}) };
   return resolve(manual, profileId, taskType, "architect");
 }
 
@@ -70,6 +71,6 @@ export function resolveDirection(manual: ModelManual, profileId: string, taskTyp
  */
 export function resolveFinalReview(manual: ModelManual, profileId: string, taskType: TaskType): ResolvedRoutes {
   const profile = findProfile(manual, profileId);
-  if (profile.final_review_route) return { primary: profile.final_review_route, fallbacks: [] };
+  if (profile.final_review_route) return { primary: profile.final_review_route, fallbacks: [], ...(profile.final_review_collaborators ? { collaborators: profile.final_review_collaborators } : {}) };
   return resolve(manual, profileId, taskType, "architect");
 }

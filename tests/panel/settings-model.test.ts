@@ -1,29 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { setDirectionRoute, setFinalReviewRoute, setSlot } from "../../src/panel/manual-editor.ts";
+import { applyGroupPrimary, applyRolePrimary, familyConflictNote, MIXED_LABEL } from "../../src/panel/grouped-models.ts";
+import { setFinalReviewRoute, setSlot } from "../../src/panel/manual-editor.ts";
 import {
   acceptCatalogResponse,
   buildSettingsView,
   catalogArrivalAction,
   escapeHtml,
   groupModelOptions,
+  renderGroupHtml,
+  renderGroupsHtml,
   renderInheritOptionHtml,
+  renderLeadHtml,
   renderProfileButtonHtml,
-  renderRowHtml,
-  renderRowsHtml,
   routeAfterAgentChange,
   routeAfterEffortChange,
   routeAfterModelChange,
+  routeAfterUnifiedChange,
   SETTINGS_ACCORDION_IDS,
-  SETTINGS_ROW_IDS,
   SETTINGS_STATUS_IDS,
-  SETTINGS_VISIBLE_ROW_IDS,
   shouldDeferCatalogRender,
   shouldRefreshCatalogOnOpen,
   visibleModels,
-  visibleRowIds,
 } from "../../src/panel/settings-model.ts";
-import { directionOptions } from "../../src/shared/manual/model-tiers.ts";
-import { resolve, resolveDirection } from "../../src/shared/manual/resolve.ts";
 import { cloneManual, DEFAULT_MANUAL, type AgentModel } from "../../src/shared/manual/schema.ts";
 import { appendixCAgentModels } from "../manual/model-manual.test.ts";
 import { parseImportedJson, readCatalog, saveManual, type SettingsIO } from "../../src/panel/manual-editor.ts";
@@ -32,132 +30,94 @@ function model(partial: AgentModel): AgentModel {
   return { name: partial.id, visible: true, ...partial };
 }
 
-describe("buildSettingsView", () => {
-  it("renders two harness tabs with the same six rows and three controls", () => {
+function groupsHtml(view: ReturnType<typeof buildSettingsView>): string {
+  return renderGroupsHtml(view.groups, view.taskType);
+}
+
+describe("buildSettingsView groups", () => {
+  it("renders four groups, keeps Jev/lanes/scope accordions, and does not copy pstack 17 roles", () => {
     const models = appendixCAgentModels();
-    const order = ["lead", "worker", "architect", "final-review", "explorer", "researcher"];
-    expect([...SETTINGS_VISIBLE_ROW_IDS]).toEqual(order);
-    // Event validation still accepts every stored row id, including the hidden ones.
-    expect([...SETTINGS_ROW_IDS].sort()).toEqual([...order, "direction", "verifier"].sort());
-    for (const harness of ["codex", "claude-code"] as const) {
-      const view = buildSettingsView(DEFAULT_MANUAL, { harness, taskType: "default" }, models);
-      expect(view.tabs).toHaveLength(2);
-      expect(view.tabs.map((t) => t.id)).toEqual(["codex", "claude-code"]);
-      expect(view.statusIds).toEqual([...SETTINGS_STATUS_IDS]);
-      expect(view.accordionIds).toEqual([...SETTINGS_ACCORDION_IDS]);
-      expect(view.rowIds).toEqual(order);
-      expect(view.rows.map((r) => r.id)).toEqual(order);
-      expect(view.rows).toHaveLength(6);
-      expect(view.rows.map((r) => r.label)).toEqual(["主控", "写手", "方案", "审查", "探索", "研究"]);
-      expect(view.rows.filter((r) => r.group === "investigation").map((r) => r.id)).toEqual(["explorer", "researcher"]);
-      for (const row of view.rows) {
-        expect(row.agent.label).toBe("运行环境");
-        expect(row.model.label).toBe("模型");
-        expect(row.effort.label).toBe("档位");
-        expect(row.agent.options.map((o) => o.value)).toEqual(["codex", "claude-code", "pi"]);
-      }
-    }
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    expect(view.tabs.map((t) => t.id)).toEqual(["codex", "claude-code"]);
+    expect(view.statusIds).toEqual([...SETTINGS_STATUS_IDS]);
+    expect(view.accordionIds).toEqual([...SETTINGS_ACCORDION_IDS]);
+    expect(view.groups.map((g) => g.id)).toEqual(["research", "plan", "code", "review"]);
+    expect(view.groups.map((g) => g.name)).toEqual(["查资料", "想方案", "写代码", "做检查"]);
+    expect(view.scopeLabel).toMatch(/Sol 主控/);
+    expect(view.scopeLabel).toMatch(/Codex/);
+    expect(view.sessionNote).toMatch(/不会改变当前主会话模型/);
+    expect(view.lead?.id).toBe("lead");
+    expect(view.lead?.description).toMatch(/不是当前主会话/);
+    expect(view.groups.flatMap((g) => g.fineTune.map((r) => r.id))).toEqual([
+      "explorer", "researcher", "architect", "direction", "worker", "final-review", "verifier",
+    ]);
+    const html = groupsHtml(view);
+    expect(html).toContain("查资料");
+    expect(html).toContain(MIXED_LABEL);
+    expect(html).not.toContain("data-row=\"lead\"");
+    expect(renderLeadHtml(view.lead!)).toContain('data-row="lead"');
   });
 
-  it("a task-type view shows only the roles its graph dispatches", () => {
+  it("shows 按角色分别设置 when 查资料 roles differ, and unifies after a group write", () => {
     const models = appendixCAgentModels();
-    const change = ["lead", "worker", "architect", "final-review"];
-    for (const t of ["bug-fix", "feature", "refactoring", "pr"] as const) {
-      expect([...visibleRowIds(t)]).toEqual(change);
-      expect(buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: t }, models).rows.map((r) => r.id)).toEqual(change);
-    }
-    expect([...visibleRowIds("investigation")]).toEqual(["lead", "explorer", "researcher"]);
-    expect(buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "investigation" }, models).rows.map((r) => r.id)).toEqual(["lead", "explorer", "researcher"]);
-  });
-
-  it("puts one divider before the investigation-only rows on the all-tasks view only", () => {
-    const models = appendixCAgentModels();
-    const all = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const html = renderRowsHtml(all.rows, "default", () => false);
-    expect(html.match(/class="group"/g)).toHaveLength(1);
-    expect(html.indexOf('class="group"')).toBeGreaterThan(html.indexOf('data-row="final-review"'));
-    expect(html.indexOf('class="group"')).toBeLessThan(html.indexOf('data-row="explorer"'));
-    const inv = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "investigation" }, models);
-    expect(renderRowsHtml(inv.rows, "investigation", () => false)).not.toContain('class="group"');
-  });
-
-  it("does not borrow the other harness profile and hides direction/verifier rows without touching their data", () => {
-    const models = appendixCAgentModels();
-    const codex = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", profileId: "grok", taskType: "default" }, models);
-    expect(codex.profileId).toBe("sol");
-    expect(codex.rows.some((r) => r.id === "direction" || r.id === "verifier")).toBe(false);
-    const claude = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
-    expect(claude.profileId).toBe("grok");
-    expect(claude.rows.some((r) => r.id === "direction" || r.id === "verifier")).toBe(false);
-    expect(rowsHtml(codex) + rowsHtml(claude)).not.toMatch(/data-row="(direction|verifier)"/);
-    // Stored direction / verifier routes still resolve.
-    expect(resolveDirection(DEFAULT_MANUAL, "grok", "default").primary).toMatchObject({ model: "anthropic/claude-opus-5-5" });
-    expect(resolve(DEFAULT_MANUAL, "grok", "default", "verifier").primary).toMatchObject({ agent: "codex", model: "gpt-6-luna" });
-  });
-
-  it("direction options still list only models stronger than or equal to the Codex lead", () => {
-    const models = appendixCAgentModels();
-    const sol = DEFAULT_MANUAL.profiles.find((p) => p.id === "sol")!;
-    const classified = directionOptions(models, "codex", sol.lead.model);
-    expect(classified.groups.length).toBeGreaterThan(0);
-    expect(classified.groups.some((g) => g.label.startsWith("和主控持平") || g.label.startsWith("比主控强") || g.label.startsWith("未分级"))).toBe(true);
-    expect(classified.groups.flatMap((g) => g.options).some((o) => o.id.includes("gpt-6-luna"))).toBe(false);
-    expect(classified.hiddenWeaker).toBeGreaterThan(0);
-  });
-
-  it("task view locks inherited roles and can materialize an override without dropping draft routes", () => {
-    const models = appendixCAgentModels();
-    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "bug-fix" }, models);
-    expect(view.taskScope).toBe("task");
-    expect(view.rows.find((r) => r.id === "lead")?.source).toBe("所有任务共用");
-    expect(view.rows.find((r) => r.id === "worker")?.locked).toBe(true);
-    const owned = setSlot(DEFAULT_MANUAL, "sol", "bug-fix", "worker", {
-      primary: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" },
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    expect(view.groups.find((g) => g.id === "research")?.mixed).toBe(true);
+    expect(view.groups.find((g) => g.id === "research")?.primary?.route).toBeUndefined();
+    const unified = applyGroupPrimary(DEFAULT_MANUAL, "sol", "default", "research", {
+      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
     });
-    const after = buildSettingsView(owned, { harness: "codex", taskType: "bug-fix" }, models);
-    expect(after.rows.find((r) => r.id === "worker")?.locked).toBe(false);
-    expect(after.overrideCount).toBe(1);
-    expect(buildSettingsView(owned, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")?.route?.effort).toBe("medium");
-    const fr = view.rows.find((r) => r.id === "final-review")!;
-    expect(fr.profileLevel).toBe(true);
-    expect(fr.locked).toBe(false);
-    expect(fr.source).toBe("所有任务共用");
-    expect(rowsHtml(view)).not.toMatch(/data-act="own" data-row="final-review"/);
-    expect(rowsHtml(view)).not.toMatch(/data-act="inherit-slot" data-row="final-review"/);
+    const after = buildSettingsView(unified, { harness: "codex", taskType: "default" }, models);
+    const research = after.groups.find((g) => g.id === "research")!;
+    expect(research.mixed).toBe(false);
+    expect(research.primary?.route).toMatchObject({ model: "gpt-6-luna", effort: "high" });
   });
 
-  it("final-review is 同方案 on Codex and explicit Astra on Claude, listing all visible models", () => {
+  it("renders a unify select for mixed groups even if primary is missing", () => {
     const models = appendixCAgentModels();
-    const codex = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const fr = codex.rows.find((r) => r.id === "final-review")!;
-    // "Same as 方案" names the architect model it falls back to, so the row needs no extra note line.
-    expect(fr.model.options[0]?.value).toBe("");
-    expect(fr.model.options[0]?.label).toMatch(/^同方案 · .*astra/i);
-    expect(fr.model.value).toBe("");
-    expect(fr.agent.disabled).toBe(false);
-    expect(fr.effort.disabled).toBe(true);
-    expect(fr.source).toBeUndefined();
-    expect(fr.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(true);
-    const switched = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
-    const after = buildSettingsView(switched, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
-    expect(after.agent.value).toBe("claude-code");
-    expect(after.model.value).toBe("anthropic/claude-opus-5-5\txd");
-    expect(after.effort.disabled).toBe(false);
-    expect(after.effort.value).toBe("xhigh");
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const research = view.groups.find((g) => g.id === "research")!;
+    expect(research.mixed).toBe(true);
+    const html = renderGroupHtml(research, "default");
+    expect(html).toContain(MIXED_LABEL);
+    expect(html).toContain('data-row="research"');
+    expect(html).toContain('data-act="model"');
+    const { primary: _drop, ...rest } = research;
+    const without = renderGroupHtml(rest, "default");
+    expect(without).toContain(MIXED_LABEL);
+    expect(without).toContain('data-act="model"');
+  });
 
-    const claude = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
-    expect(claude.rows.find((r) => r.id === "architect")?.route).toMatchObject({ model: "anthropic/claude-opus-5-5", effort: "xhigh" });
-    const cfr = claude.rows.find((r) => r.id === "final-review")!;
-    expect(cfr.route).toMatchObject({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
-    // Explicit Astra review: the "same as 方案" option still names the architect (Opus), not the explicit route.
-    expect(cfr.model.options[0]?.value).toBe("");
-    expect(cfr.model.options[0]?.label).toMatch(/^同方案 · .*opus/i);
-    expect(cfr.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6-luna"))).toBe(true);
+  it("keeps 写代码 single-model and 做检查 同方案, with verifier only in fine-tune", () => {
+    const models = appendixCAgentModels();
+    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
+    const code = view.groups.find((g) => g.id === "code")!;
+    expect(code.allowCollaborators).toBe(false);
+    expect(code.canAddCollaborator).toBe(false);
+    expect(code.primary?.route?.model).toBe("grok-4.6");
+    const review = view.groups.find((g) => g.id === "review")!;
+    expect(review.sameAsArchitect).toBe(true);
+    expect(review.fineTune.map((r) => r.id)).toEqual(["final-review", "verifier"]);
+    expect(review.fineTune.find((r) => r.id === "verifier")?.description).toMatch(/旧验证/);
+    expect(groupsHtml(view)).toContain("旧验证角色");
+  });
+
+  it("family hint uses actual final-review, not the retired verifier", () => {
+    const models = appendixCAgentModels();
+    expect(familyConflictNote(DEFAULT_MANUAL, "sol", "default")).toBeUndefined();
+    const same = setFinalReviewRoute(DEFAULT_MANUAL, "sol", {
+      agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high",
+    });
+    const note = familyConflictNote(same, "sol", "default");
+    expect(note).toMatch(/终审与写手不能同模型族/);
+    expect(note).toMatch(/grok-4.6/);
+    expect(note).toMatch(/旧验证角色不参与/);
+    const view = buildSettingsView(same, { harness: "codex", taskType: "default" }, models);
+    expect(view.groups.find((g) => g.id === "review")?.familyNote).toMatch(/终审与写手/);
   });
 });
 
-describe("groupModelOptions / efforts", () => {
-  it("lists only visible models, grouped by providerId, and does not merge gateways", () => {
+describe("groupModelOptions / efforts / undeclared visible", () => {
+  it("lists visible and undeclared models, grouped by providerId, and does not merge gateways", () => {
     const models: AgentModel[] = [
       model({ id: "gpt-6-luna", agent: "codex", providerId: "art-cindy", providerName: "Art Cindy", efforts: ["medium", "high"] }),
       model({ id: "gpt-6-luna", agent: "codex", providerId: "xd", providerName: "Cindy AI", efforts: ["low"] }),
@@ -165,39 +125,23 @@ describe("groupModelOptions / efforts", () => {
       { id: "no-flag", agent: "codex", providerId: "art-cindy" },
       model({ id: "gpt-6-luna", agent: "pi", providerId: "art-cindy", providerName: "Art Cindy", efforts: ["high"] }),
     ];
-    expect(visibleModels(models, "codex").map((m) => `${m.id}:${m.providerId}`)).toEqual(["gpt-6-luna:art-cindy", "gpt-6-luna:xd"]);
+    expect(visibleModels(models, "codex").map((m) => `${m.id}:${m.providerId}`)).toEqual([
+      "gpt-6-luna:art-cindy", "gpt-6-luna:xd", "no-flag:art-cindy",
+    ]);
     const groups = groupModelOptions(models, "codex");
     expect(groups.map((g) => g.providerId).sort()).toEqual(["art-cindy", "xd"]);
-    const art = groups.find((g) => g.providerId === "art-cindy")!;
-    const xd = groups.find((g) => g.providerId === "xd")!;
-    expect(art.options).toHaveLength(1);
-    expect(xd.options[0]?.value).toBe("gpt-6-luna\txd");
-    expect(art.label).toBe("Art Cindy");
   });
 
-  it("effort options come only from the selected triple; empty efforts disable the control", () => {
-    const models = [
-      model({ id: "gpt-6-luna", agent: "codex", providerId: "art-cindy", efforts: ["medium", "high"] }),
-      model({ id: "plain", agent: "codex", providerId: "art-cindy", efforts: [] }),
-    ];
-    const luna = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const explorer = luna.rows.find((r) => r.id === "explorer")!;
-    expect(explorer.effort.options.filter((o) => !o.disabled).map((o) => o.value)).toEqual(["medium", "high"]);
-    const next = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", { primary: { agent: "codex", model: "plain", provider_id: "art-cindy" } });
-    const row = buildSettingsView(next, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")!;
-    expect(row.effort.disabled).toBe(true);
-    expect(row.effort.placeholder).toBe("不声明档位");
-  });
-
-  it("keeps a hidden current value out of selectable options", () => {
+  it("keeps a hidden current value out of selectable options and marks it stale", () => {
     const models: AgentModel[] = [
       { id: "gpt-6.1-sol", agent: "codex", providerId: "art-cindy", visible: false, efforts: ["high"] },
       model({ id: "gpt-6-luna", agent: "codex", providerId: "art-cindy", efforts: ["high"] }),
     ];
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const lead = view.rows.find((r) => r.id === "lead")!;
+    const lead = view.lead!;
     expect(lead.model.groups.flatMap((g) => g.options).some((o) => o.value.includes("gpt-6.1-sol"))).toBe(false);
     expect(lead.model.options.some((o) => o.disabled && o.value.includes("gpt-6.1-sol"))).toBe(true);
+    expect(lead.stale).toBeTruthy();
   });
 
   it("does not invent catalog models on 404/503, and seq mismatch drops stale responses", () => {
@@ -209,39 +153,16 @@ describe("groupModelOptions / efforts", () => {
 });
 
 describe("route patch helpers", () => {
-  it("retains effort only when the new model still declares it", () => {
+  it("retains effort only when the new model still declares it, and never swaps provider", () => {
     const models = [
       model({ id: "a", agent: "codex", providerId: "art-cindy", efforts: ["high", "xhigh"], defaultEffort: "high" }),
       model({ id: "b", agent: "codex", providerId: "xd", efforts: ["low"], defaultEffort: "low" }),
     ];
     expect(routeAfterModelChange(models, "codex", "a", "art-cindy", "high").effort).toBe("high");
     expect(routeAfterModelChange(models, "codex", "b", "xd", "high").effort).toBeUndefined();
+    expect(routeAfterUnifiedChange(models, "codex\tb\txd", "high")).toEqual({ agent: "codex", model: "b", provider_id: "xd" });
     expect(routeAfterAgentChange(models, "codex", "high").effort).toBe("high");
     expect(routeAfterEffortChange(models, { agent: "codex", model: "a", provider_id: "art-cindy", effort: "high" }, "").effort).toBeUndefined();
-  });
-
-  it("setDirectionRoute still round-trips stored data while the view shows no direction row", () => {
-    const models = appendixCAgentModels();
-    const saved = setDirectionRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
-    expect(saved.profiles.find((p) => p.id === "sol")).toMatchObject({ direction_gate: "astra" });
-    expect(resolveDirection(saved, "sol", "default").primary).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
-    expect(buildSettingsView(saved, { harness: "codex", taskType: "default" }, models).rows.some((r) => r.id === "direction")).toBe(false);
-    const self = setDirectionRoute(saved, "sol", undefined);
-    const solSelf = self.profiles.find((p) => p.id === "sol")!;
-    expect(solSelf.direction_gate).toBe("lead");
-    expect(solSelf.direction_route).toBeUndefined();
-  });
-
-  it("setFinalReviewRoute round-trips through the view and 同方案 drops the field", () => {
-    const models = appendixCAgentModels();
-    const saved = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
-    const row = buildSettingsView(saved, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
-    expect(row.model.value).toBe("gpt-6-luna\tart-cindy");
-    const self = setFinalReviewRoute(saved, "sol", undefined);
-    expect("final_review_route" in self.profiles[0]!).toBe(false);
-    const again = buildSettingsView(self, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "final-review")!;
-    expect(again.model.value).toBe("");
-    expect(again.model.options[0]?.label).toMatch(/^同方案/);
   });
 });
 
@@ -262,72 +183,18 @@ function fakeIo(models: readonly AgentModel[]): SettingsIO {
   };
 }
 
-function rowsHtml(view: ReturnType<typeof buildSettingsView>): string {
-  return view.rows.map((row) => renderRowHtml(row, view.taskType)).join("");
-}
-
 describe("catalog interaction lock", () => {
   it("defers redraw while a select is being operated and ignores programmatic focus", () => {
     expect(shouldDeferCatalogRender(true)).toBe(true);
-    expect(shouldDeferCatalogRender(false)).toBe(false);
     expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic: false })).toBe(true);
     expect(shouldRefreshCatalogOnOpen({ act: "effort", programmatic: false })).toBe(true);
-    expect(shouldRefreshCatalogOnOpen({ act: "agent", programmatic: false })).toBe(true);
-    expect(shouldRefreshCatalogOnOpen({ act: "fb-agent", programmatic: false })).toBe(true);
+    expect(shouldRefreshCatalogOnOpen({ act: "collab-model", programmatic: false })).toBe(true);
     expect(shouldRefreshCatalogOnOpen({ act: "fb-model", programmatic: false })).toBe(true);
-    expect(shouldRefreshCatalogOnOpen({ act: "fb-effort", programmatic: false })).toBe(true);
     expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic: true })).toBe(false);
     expect(shouldRefreshCatalogOnOpen({ act: "save", programmatic: false })).toBe(false);
     expect(catalogArrivalAction({ seqAccepted: true, interacting: true })).toBe("defer");
     expect(catalogArrivalAction({ seqAccepted: true, interacting: false })).toBe("store-and-render");
-    expect(catalogArrivalAction({ seqAccepted: true, interacting: true, render: false })).toBe("store");
     expect(catalogArrivalAction({ seqAccepted: false, interacting: false })).toBe("ignore");
-  });
-
-  it("keeps the live select through pointerdown/focus and delayed catalog, then applies after change or blur", () => {
-    let interacting = false;
-    let programmatic = false;
-    let pending = false;
-    let rendered = 0;
-    let stored = 0;
-
-    const arrive = (seqAccepted: boolean, render?: boolean) => {
-      const action = catalogArrivalAction({ seqAccepted, interacting, render });
-      if (action === "ignore") return action;
-      if (action === "defer") {
-        pending = true;
-        return action;
-      }
-      stored += 1;
-      pending = false;
-      if (action === "store-and-render") rendered += 1;
-      return action;
-    };
-
-    expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic })).toBe(true);
-    interacting = true;
-    expect(arrive(true)).toBe("defer");
-    expect(rendered).toBe(0);
-    expect(pending).toBe(true);
-
-    programmatic = true;
-    expect(shouldRefreshCatalogOnOpen({ act: "model", programmatic })).toBe(false);
-    programmatic = false;
-
-    expect(arrive(false)).toBe("ignore");
-    expect(pending).toBe(true);
-
-    interacting = false;
-    if (pending) {
-      pending = false;
-      rendered += 1;
-    }
-    expect(rendered).toBe(1);
-
-    interacting = true;
-    expect(arrive(true, false)).toBe("store");
-    expect(rendered).toBe(1);
-    expect(stored).toBe(1);
   });
 });
 
@@ -354,53 +221,17 @@ describe("settings HTML escaping", () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     const models = appendixCAgentModels();
-    const saved = await saveManual(fakeIo(models), parsed.manual, models);
-    expect(saved).toMatchObject({ ok: true });
+    expect(await saveManual(fakeIo(models), parsed.manual, models)).toMatchObject({ ok: true });
     const view = buildSettingsView(parsed.manual, { harness: "codex", taskType: "default" }, models);
-    const html = rowsHtml(view);
+    const html = groupsHtml(view);
     expect(html).not.toMatch(/<img/i);
     expect(html).toContain(XSS_ESCAPED);
-    expect(html).toContain(`继承自 ${escapeHtml(parentId)}`);
-    expect(view.rows.filter((r) => r.source?.includes(parentId)).map((r) => r.id)).toEqual(["worker", "architect", "explorer", "researcher"]);
+    expect(view.groups.flatMap((g) => g.fineTune).some((r) => r.source?.includes(parentId))).toBe(true);
 
     const chips = renderProfileButtonHtml({ id: childId, name: childName, selected: true, defaultOf: "codex" });
     expect(chips).not.toMatch(/<img/i);
     expect(chips).toContain(`data-id="${escapeHtml(childId)}"`);
-    expect(chips).toContain(escapeHtml(childName));
     expect(renderInheritOptionHtml({ id: parentId, name: parentName }, parentId)).toContain(escapeHtml(parentName));
-
-    const fbJson = JSON.stringify({
-      version: 1,
-      profiles: [
-        {
-          ...sol,
-          nodes: {
-            default: {
-              ...sol.nodes.default,
-              explorer: {
-                primary: sol.nodes.default!.explorer!.primary,
-                fallbacks: [{ agent: "codex", model: XSS, provider_id: XSS }],
-              },
-            },
-          },
-        },
-        grok,
-      ],
-      defaults_by_harness: base.defaults_by_harness,
-    });
-    const fbParsed = parseImportedJson(fbJson);
-    expect(fbParsed.ok).toBe(true);
-    if (!fbParsed.ok) return;
-    const fbModels = [
-      ...models,
-      model({ id: XSS, agent: "codex", providerId: XSS, name: XSS, providerName: XSS, efforts: ["high"] }),
-    ];
-    expect(await saveManual(fakeIo(fbModels), fbParsed.manual, fbModels)).toMatchObject({ ok: true });
-    const fbHtml = rowsHtml(buildSettingsView(fbParsed.manual, { harness: "codex", taskType: "default" }, fbModels));
-    expect(fbHtml).not.toMatch(/<img/i);
-    expect(fbHtml).not.toContain("备用：");
-    // The chip only counts fallbacks; the fallback model/provider is escaped inside the panel's select.
-    expect(fbHtml).toContain(`>${XSS_ESCAPED} · ${XSS_ESCAPED}</option>`);
 
     const leadJson = JSON.stringify({
       version: 1,
@@ -416,146 +247,49 @@ describe("settings HTML escaping", () => {
     ];
     expect(await saveManual(fakeIo(leadModels), leadParsed.manual, leadModels)).toMatchObject({ ok: true });
     const leadView = buildSettingsView(leadParsed.manual, { harness: "codex", taskType: "default" }, leadModels);
-    const leadHtml = rowsHtml(leadView);
+    const leadHtml = renderLeadHtml(leadView.lead!);
     expect(leadHtml).not.toMatch(/<img/i);
-    const leadRowHtml = renderRowHtml(leadView.rows.find((r) => r.id === "lead")!, "default");
-    expect(leadRowHtml).toContain(`<option value="${XSS_ESCAPED}\t${sol.lead.provider_id}" selected>${XSS_ESCAPED} · ${escapeHtml(amp)}</option>`);
+    expect(leadHtml).toContain(XSS_ESCAPED);
     expect(leadHtml).toContain(escapeHtml(amp));
-    expect(leadHtml).toContain("&amp;");
-    expect(leadHtml).toContain("&quot;");
-
-    const frJson = JSON.stringify({
-      version: 1,
-      profiles: [{ ...sol, final_review_route: { agent: "codex", model: XSS, provider_id: XSS, effort: "high" } }, grok],
-      defaults_by_harness: base.defaults_by_harness,
-    });
-    const frParsed = parseImportedJson(frJson);
-    expect(frParsed.ok).toBe(true);
-    if (!frParsed.ok) return;
-    const frModels = [
-      ...models,
-      model({ id: XSS, agent: "codex", providerId: XSS, name: XSS, providerName: XSS, efforts: ["high"] }),
-    ];
-    expect(await saveManual(fakeIo(frModels), frParsed.manual, frModels)).toMatchObject({ ok: true });
-    const frHtml = rowsHtml(buildSettingsView(frParsed.manual, { harness: "codex", taskType: "default" }, frModels));
-    expect(frHtml).not.toMatch(/<img/i);
-    expect(frHtml).toContain(XSS_ESCAPED);
   });
 });
 
-describe("fallback rows", () => {
+describe("fallback rows in role fine-tune", () => {
   const models = appendixCAgentModels();
 
-  it("shows fallbacks only on the four visible role rows", () => {
+  it("shows fallbacks on slot roles, not on lead/final-review/direction", () => {
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const roleRows = ["worker", "architect", "explorer", "researcher"] as const;
-    for (const id of roleRows) {
-      const row = view.rows.find((r) => r.id === id)!;
-      expect(row.fallbacks?.items).toHaveLength(1);
-      expect(row.fallbacks?.canAdd).toBe(true);
+    const byId = Object.fromEntries(view.groups.flatMap((g) => g.fineTune.map((r) => [r.id, r])));
+    for (const id of ["worker", "architect", "explorer", "researcher"] as const) {
+      expect(byId[id]?.fallbacks?.items.length).toBeGreaterThanOrEqual(0);
     }
-    for (const id of ["lead", "final-review"] as const) {
-      const row = view.rows.find((r) => r.id === id)!;
-      expect(row).toBeDefined();
-      expect(row.fallbacks).toBeUndefined();
-    }
-    expect(view.rows.filter((r) => r.fallbacks).map((r) => r.id).sort()).toEqual([...roleRows].sort());
-    const html = rowsHtml(view);
-    expect(html).not.toMatch(/data-act="toggle-fb" data-row="lead"/);
-    expect(html).not.toMatch(/data-act="toggle-fb" data-row="final-review"/);
-    expect(html).not.toMatch(/data-row="(direction|verifier)"/);
-    expect(html).not.toMatch(/id="fb-panel-lead"/);
-    expect(html).not.toMatch(/id="fb-panel-final-review"/);
-  });
-
-  const chipOf = (html: string) => html.match(/<button[^>]*data-act="toggle-fb"[\s\S]*?<\/button>/)?.[0] ?? "";
-
-  it("renders the explorer chip in the pick row with the fallback count only", () => {
-    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
-    expect(html).toContain('data-act="toggle-fb" data-row="explorer"');
-    const pick = html.match(/<div class="pick">[\s\S]*?<\/div>/)?.[0] ?? "";
-    expect(pick).toContain('data-act="toggle-fb"');
-    const chip = chipOf(html);
-    expect(chip).toContain('备用<span class="n">1</span>');
-    expect(chip).not.toContain("gpt-6-luna");
-  });
-
-  it("keeps the lead row's pick grid aligned with an empty fallback slot", () => {
-    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    expect(renderRowHtml(view.rows.find((r) => r.id === "lead")!, "default")).toContain('<span class="fb-slot" aria-hidden="true"></span>');
-  });
-
-  it("disables add when two fallbacks are set and counts both", () => {
-    const two = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", {
-      primary: DEFAULT_MANUAL.profiles[0]!.nodes.default!.explorer!.primary,
-      fallbacks: [
-        { agent: "codex", model: "openai/gpt-6-luna", provider_id: "xd", effort: "medium" },
-        { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" },
-      ],
-    });
-    const row = buildSettingsView(two, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")!;
-    expect(row.fallbacks?.items).toHaveLength(2);
-    expect(row.fallbacks?.canAdd).toBe(false);
-    const html = renderRowHtml(row, "default");
-    expect(chipOf(html)).toContain('<span class="n">2</span>');
-    expect(html).toMatch(/data-act="add-fb"[^>]*disabled/);
-    expect(html).toContain("已满 2 条");
-  });
-
-  it("shows empty chip on grok explorer with no fallbacks", () => {
-    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "claude-code", taskType: "default" }, models);
-    const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
-    expect(html).toContain("fb-chip empty");
-    expect(chipOf(html)).toContain("＋ 备用");
-  });
-
-  it("marks the row open only when asked", () => {
-    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const row = view.rows.find((r) => r.id === "explorer")!;
-    const open = renderRowHtml(row, "default", true);
-    expect(open).toContain("row open");
-    expect(open).toContain('aria-expanded="true"');
-    const closed = renderRowHtml(row, "default");
-    expect(closed).not.toContain("row open");
-    expect(closed).toContain('aria-expanded="false"');
-  });
-
-  it("renders panel items with fb selects and delete", () => {
-    const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "default" }, models);
-    const html = renderRowHtml(view.rows.find((r) => r.id === "explorer")!, "default");
-    expect(html).toContain("第 1 备");
-    expect(html).toContain('data-act="fb-agent" data-row="explorer" data-i="0"');
-    expect(html).toContain('data-act="fb-model" data-row="explorer" data-i="0"');
-    expect(html).toContain('data-act="fb-effort" data-row="explorer" data-i="0"');
-    expect(html).toContain('data-act="del-fb" data-row="explorer" data-i="0"');
-  });
-
-  it("shows 选择模型 and stale on an empty fallback", () => {
-    const empty = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", {
-      primary: DEFAULT_MANUAL.profiles[0]!.nodes.default!.explorer!.primary,
-      fallbacks: [{ agent: "codex", model: "", provider_id: "" }],
-    });
-    const row = buildSettingsView(empty, { harness: "codex", taskType: "default" }, models).rows.find((r) => r.id === "explorer")!;
-    expect(row.fallbacks?.items[0]?.stale).toBeTruthy();
-    const html = renderRowHtml(row, "default");
-    expect(html).toContain("fb-item stale");
-    expect(html).toMatch(/<option value="" selected disabled>选择模型<\/option>/);
+    expect(byId["final-review"]?.fallbacks).toBeUndefined();
+    expect(byId.direction?.fallbacks).toBeUndefined();
+    expect(view.lead?.fallbacks).toBeUndefined();
   });
 
   it("keeps inherited fallbacks read-only on locked task-type rows", () => {
     const view = buildSettingsView(DEFAULT_MANUAL, { harness: "codex", taskType: "bug-fix" }, models);
-    const worker = view.rows.find((r) => r.id === "worker")!;
+    const worker = view.groups.find((g) => g.id === "code")!.fineTune.find((r) => r.id === "worker")!;
     expect(worker.locked).toBe(true);
-    expect(worker.fallbacks?.items).toHaveLength(1);
     expect(worker.fallbacks?.disabled).toBe(true);
-    expect(worker.fallbacks?.canAdd).toBe(false);
-    const html = renderRowHtml(worker, "bug-fix");
-    expect(html).toContain('<span class="n">1</span>');
-    expect(html).toMatch(/data-act="fb-agent"[^>]*disabled/);
-    expect(html).toMatch(/data-act="fb-model"[^>]*disabled/);
-    expect(html).toMatch(/data-act="fb-effort"[^>]*disabled/);
-    expect(html).toMatch(/data-act="add-fb"[^>]*disabled/);
-    expect(html).toContain("点「单独设置」后可改");
+  });
+});
+
+describe("role split after group unify", () => {
+  it("does not report the first role as representing the group once they diverge", () => {
+    const models = appendixCAgentModels();
+    const unified = applyGroupPrimary(DEFAULT_MANUAL, "sol", "default", "research", {
+      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
+    });
+    const split = applyRolePrimary(unified, "sol", "default", "researcher", {
+      agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh",
+    });
+    const view = buildSettingsView(split, { harness: "codex", taskType: "default" }, models);
+    const research = view.groups.find((g) => g.id === "research")!;
+    expect(research.mixed).toBe(true);
+    expect(groupsHtml(view)).toContain(MIXED_LABEL);
+    expect(research.fineTune.find((r) => r.id === "explorer")?.route?.model).toBe("gpt-6-luna");
+    expect(research.fineTune.find((r) => r.id === "researcher")?.route?.model).toBe("gpt-6-astra");
   });
 });

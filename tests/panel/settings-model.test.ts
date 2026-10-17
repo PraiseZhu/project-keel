@@ -101,6 +101,30 @@ describe("buildSettingsView groups", () => {
     expect(groupsHtml(view)).toContain("旧验证角色");
   });
 
+  it("shows inherited 做检查 collaborators from architect and keeps 同方案 marker", () => {
+    const models = appendixCAgentModels();
+    const architect = DEFAULT_MANUAL.profiles[0]!.nodes.default!.architect!;
+    const withArch = setSlot(DEFAULT_MANUAL, "sol", "default", "architect", {
+      primary: architect.primary,
+      fallbacks: architect.fallbacks,
+      collaborators: [{ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" }],
+    });
+    const view = buildSettingsView(withArch, { harness: "codex", taskType: "default" }, models);
+    const review = view.groups.find((g) => g.id === "review")!;
+    expect(review.sameAsArchitect).toBe(true);
+    expect(review.primary?.route).toMatchObject({ model: "gpt-6-astra" });
+    expect(review.collaborators).toHaveLength(1);
+    expect(review.collaborators[0]?.route).toMatchObject({ model: "gpt-6-luna" });
+    expect(review.canAddCollaborator).toBe(true);
+    const html = renderGroupHtml(review, "default");
+    expect(html).toMatch(/同方案/);
+    expect(html).toContain("data-act=\"collab-model\"");
+    const fine = review.fineTune.find((r) => r.id === "final-review")!;
+    expect(fine.sameAsArchitect).toBe(true);
+    expect(fine.route).toMatchObject({ model: "gpt-6-astra" });
+    expect(fine.collaborators).toHaveLength(1);
+  });
+
   it("family hint uses actual final-review, not the retired verifier", () => {
     const models = appendixCAgentModels();
     expect(familyConflictNote(DEFAULT_MANUAL, "sol", "default")).toBeUndefined();

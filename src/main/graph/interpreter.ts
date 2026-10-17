@@ -1275,6 +1275,10 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
   if (i < 0) return;
   const rec = state.sol_decisions[i]!;
   const answer = rec.answer;
+  if (!state.next.options.includes(answer)) {
+    state.sol_decisions.splice(i, 1);
+    return;
+  }
   const missing = Array.isArray((state.next.context as { missing?: unknown } | undefined)?.missing)
     ? ((state.next.context as { missing: string[] }).missing)
     : [];

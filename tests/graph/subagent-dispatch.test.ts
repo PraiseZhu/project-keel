@@ -559,6 +559,38 @@ function doneReport(key: string) {
 }
 
 describe("exact route, hidden, effort, provider", () => {
+  it("cannot turn an unsupported native route into success with an unoffered gate answer", async () => {
+    const manual = cloneManual(DEFAULT_MANUAL);
+    const grok = manual.profiles.find((profile) => profile.id === "grok")!;
+    (grok.nodes.default as { explorer: { primary: Route } }).explorer = {
+      primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" },
+    };
+    const { h, opts, runId } = await bootExplore({ run_id: "run-gate-route-guard", manual, spec: PSTACK_GRAPHS.investigation });
+    const pending = await advance(h, runId, { type: "tick" }, opts);
+    expect(pending.next).toMatchObject({ kind: "decide", gate_id: "human:explore", options: ["retry", "stop"] });
+    const context = makeContext(h, "gate-route-guard", emptyCtx);
+    const before = h.files.get(graphStatePath(runId));
+    for (const answer of ["ok", "fail", "adopt"]) {
+      const rejected = await runTool(context, "keel_gate", { run_id: runId, gate_id: "human:explore", answer });
+      expect(rejected).toMatchObject({ ok: false, errorCode: "INVALID_GATE_ANSWER" });
+      expect(h.files.get(graphStatePath(runId))).toBe(before);
+    }
+    const stale = await runTool(context, "keel_gate", { run_id: runId, gate_id: "human:research", answer: "retry" });
+    expect(stale).toMatchObject({ ok: false, errorCode: "GATE_NOT_PENDING" });
+    expect(h.files.get(graphStatePath(runId))).toBe(before);
+    const queued = JSON.parse(before!) as GraphRunState;
+    queued.sol_decisions.push({ gate_id: "human:explore", answer: "ok", attempt: 0 });
+    h.files.set(graphStatePath(runId), JSON.stringify(queued));
+    const guarded = await advance(h, runId, { type: "tick" }, opts);
+    expect(guarded.next).toMatchObject({ kind: "decide", gate_id: "human:explore" });
+    expect(guarded.state.nodes.explore?.status).not.toBe("succeeded");
+    expect(guarded.state.sol_decisions).toEqual([]);
+    const retry = await runTool(context, "keel_gate", { run_id: runId, gate_id: "human:explore", answer: "retry" });
+    expect(retry).toMatchObject({ ok: true, result: { next: { kind: "decide", gate_id: "human:explore" } } });
+    const stop = await runTool(context, "keel_gate", { run_id: runId, gate_id: "human:explore", answer: "stop" });
+    expect(stop).toMatchObject({ ok: true, result: { next: { kind: "stop" } } });
+  });
+
   it("different harness decides NATIVE_ROUTE_UNSUPPORTED instead of opening a Worker", async () => {
     const manual = cloneManual(DEFAULT_MANUAL);
     const grok = manual.profiles.find((p) => p.id === "grok")!;

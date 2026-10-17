@@ -16,6 +16,7 @@ import {
   VERIFIER_NOTE,
 } from "../../src/panel/grouped-models.ts";
 import { fingerprintManual, saveManual, setSlot, withSavedVersion, type SettingsIO } from "../../src/panel/manual-editor.ts";
+import { resolveFinalReview } from "../../src/shared/manual/resolve.ts";
 import { cloneManual, DEFAULT_MANUAL, MANUAL_VERSION, MAX_COLLABORATORS, type AgentModel, type Route } from "../../src/shared/manual/schema.ts";
 import { appendixCAgentModels } from "../manual/model-manual.test.ts";
 
@@ -79,7 +80,7 @@ describe("mixed vs unified", () => {
     const review = readGroupState(DEFAULT_MANUAL, "sol", "default", "review");
     expect(review.mixed).toBe(false);
     expect(review.sameAsArchitect).toBe(true);
-    expect(review.primary).toBeUndefined();
+    expect(review.primary).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
   });
 });
 
@@ -221,6 +222,36 @@ describe("role fine-tune", () => {
     expect(unified.version).toBe(1);
     const withCollab = applyGroupCollaborators(unified, "sol", "default", "research", [astra]);
     expect(withCollab.version).toBe(2);
+  });
+
+  it("shows inherited final-review as architect primary+collaborators and materializes without touching architect", () => {
+    const architect = DEFAULT_MANUAL.profiles[0]!.nodes.default!.architect!;
+    const withArch = setSlot(DEFAULT_MANUAL, "sol", "default", "architect", {
+      primary: architect.primary,
+      fallbacks: architect.fallbacks,
+      collaborators: [luna],
+    });
+    const resolved = resolveFinalReview(withArch, "sol", "default");
+    expect(resolved.primary).toEqual(architect.primary);
+    expect(resolved.collaborators).toEqual([luna]);
+    const state = readGroupState(withArch, "sol", "default", "review");
+    expect(state.sameAsArchitect).toBe(true);
+    expect(state.primary).toEqual(architect.primary);
+    expect(state.collaborators).toEqual([luna]);
+    const saved = applyGroupCollaborators(withArch, "sol", "default", "review", [luna, grok]);
+    const sol = saved.profiles[0]!;
+    expect(sol.nodes.default!.architect?.collaborators).toEqual([luna]);
+    expect(sol.nodes.default!.architect?.primary).toEqual(architect.primary);
+    expect(sol.final_review_route).toEqual(architect.primary);
+    expect(sol.final_review_collaborators).toEqual([luna, grok]);
+    expect(resolveFinalReview(saved, "sol", "default")).toMatchObject({
+      primary: architect.primary,
+      collaborators: [luna, grok],
+    });
+    const viaRole = applyRoleCollaborators(withArch, "sol", "default", "final-review", [grok]);
+    expect(viaRole.profiles[0]!.nodes.default!.architect?.collaborators).toEqual([luna]);
+    expect(viaRole.profiles[0]!.final_review_route).toEqual(architect.primary);
+    expect(viaRole.profiles[0]!.final_review_collaborators).toEqual([grok]);
   });
 
   it("does not store collaborators without a primary route", () => {

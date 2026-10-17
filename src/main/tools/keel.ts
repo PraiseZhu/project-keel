@@ -1552,6 +1552,12 @@ export async function keelGate(ctx: ToolContext, args: Record<string, unknown>) 
   }
   await withRun(ctx.host, runId, (raw) => {
     const s = raw as unknown as GraphRunState;
+    if (s.next?.kind === "decide" && s.next.gate_id !== gateId) {
+      throw new KeelError("GATE_NOT_PENDING", "这个决策门当前未等待回答，请先读取最新 next。");
+    }
+    if (s.next?.kind === "decide" && !s.next.options.includes(answer)) {
+      throw new KeelError("INVALID_GATE_ANSWER", `答案 ${answer} 不在当前决策门的选项中。`);
+    }
     if (!Array.isArray(s.sol_decisions)) s.sol_decisions = [];
     const attempt = s.nodes[gateId]?.attempts ?? 0;
     s.sol_decisions.push({

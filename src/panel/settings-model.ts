@@ -548,8 +548,8 @@ function fineTuneView(
     directionSelf: read.directionSelf,
     sameAsArchitect: read.sameAsArchitect,
     allowCollaborators,
-    model: unifiedModelControl(id, read.directionSelf || read.sameAsArchitect ? undefined : route, models, locked, { firstOption, query }),
-    effort: effortControl(id, read.directionSelf ? undefined : route, visibleHit ?? hit, locked || !!read.directionSelf || (!!read.sameAsArchitect && !profile.final_review_route)),
+    model: unifiedModelControl(id, read.directionSelf ? undefined : route, models, locked, { firstOption, query }),
+    effort: effortControl(id, read.directionSelf ? undefined : route, visibleHit ?? hit, locked || !!read.directionSelf),
     collaborators: collabs,
     canAddCollaborator: canAddCollaborator(allowCollaborators, false, collabs.length) && !locked,
     fallbacks: slotRole ? fallbackView(slotRole, editableSlot(manual, profile.id, taskType, slotRole), models, locked) : undefined,
@@ -576,7 +576,7 @@ function groupView(
       : state.directionSelf
         ? { value: "", label: "主控自己定" }
         : undefined;
-  const displayRoute = state.mixed || state.sameAsArchitect || state.directionSelf ? undefined : state.primary;
+  const displayRoute = state.mixed || state.directionSelf ? undefined : state.primary;
   const primary = pickView(groupId, "primary", 0, displayRoute, models, false, ui, firstOption);
   const collabs = !state.mixed && def.allowCollaborators
     ? state.collaborators.map((c, i) => pickView(groupId, "collaborator", i, c, models, false, ui, !c.model ? { value: "", label: "选择模型", disabled: true } : undefined))

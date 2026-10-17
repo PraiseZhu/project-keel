@@ -170,23 +170,37 @@ function readDirectionTarget(manual: ModelManual, profileId: string, taskType: T
 function readFinalReviewTarget(manual: ModelManual, profileId: string, taskType: TaskType): TargetRead {
   const profile = manual.profiles.find((p) => p.id === profileId);
   if (!profile) return { collaborators: [], fallbacks: [] };
-  if (!profile.final_review_route) {
-    return { collaborators: profile.final_review_collaborators ?? [], fallbacks: [], sameAsArchitect: true };
-  }
+  const inherited = !profile.final_review_route;
   try {
     const resolved = resolveFinalReview(manual, profileId, taskType);
     return {
       primary: resolved.primary,
       collaborators: resolved.collaborators ?? [],
       fallbacks: resolved.fallbacks,
+      ...(inherited ? { sameAsArchitect: true } : {}),
     };
   } catch {
     return {
       primary: profile.final_review_route,
       collaborators: profile.final_review_collaborators ?? [],
       fallbacks: [],
+      ...(inherited ? { sameAsArchitect: true } : {}),
     };
   }
+}
+
+function materializeFinalReview(
+  manual: ModelManual,
+  profileId: string,
+  taskType: TaskType,
+  primary: Route,
+  collaborators?: readonly Route[],
+): ModelManual {
+  const read = readFinalReviewTarget(manual, profileId, taskType);
+  const collabs = collaborators ?? read.collaborators;
+  const withRoute = setFinalReviewRoute(manual, profileId, primary);
+  const next = setFinalReviewCollaborators(withRoute, profileId, collabs.length ? collabs : undefined);
+  return collabs.length ? withSavedVersion(next) : next;
 }
 
 export function readTarget(manual: ModelManual, profileId: string, taskType: TaskType, target: GroupTarget): TargetRead {
@@ -343,7 +357,10 @@ export function applyRolePrimary(
   primary: Route | undefined,
 ): ModelManual {
   if (role === "direction") return setDirectionRoute(manual, profileId, primary);
-  if (role === "final-review") return setFinalReviewRoute(manual, profileId, primary);
+  if (role === "final-review") {
+    if (!primary) return setFinalReviewRoute(manual, profileId, undefined);
+    return materializeFinalReview(manual, profileId, taskType, primary);
+  }
   if (!primary) return manual;
   const prev = currentSlot(manual, profileId, taskType, role);
   return writeSlot(manual, profileId, taskType, role, primary, role === "worker" ? undefined : prev.collaborators);
@@ -357,11 +374,14 @@ export function applyRoleCollaborators(
   collaborators: readonly Route[],
 ): ModelManual {
   if (role === "worker") return manual;
+  if (role === "final-review") {
+    const read = readFinalReviewTarget(manual, profileId, taskType);
+    if (!read.primary) return manual;
+    return materializeFinalReview(manual, profileId, taskType, read.primary, collaborators);
+  }
   const next = role === "direction"
     ? setDirectionCollaborators(manual, profileId, collaborators.length ? collaborators : undefined)
-    : role === "final-review"
-      ? setFinalReviewCollaborators(manual, profileId, collaborators.length ? collaborators : undefined)
-      : writeSlot(manual, profileId, taskType, role, currentSlot(manual, profileId, taskType, role).primary, collaborators.length ? collaborators : undefined);
+    : writeSlot(manual, profileId, taskType, role, currentSlot(manual, profileId, taskType, role).primary, collaborators.length ? collaborators : undefined);
   return collaborators.length ? withSavedVersion(next) : next;
 }
 

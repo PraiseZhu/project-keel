@@ -661,6 +661,12 @@ async function plantImplement(h: ReturnType<typeof fakeHost>, specId: "bug-fix" 
     s.team = { ready: true, team_id: "t1", lead_session_id: "lead" };
     s.cursor = nodeId;
     s.pr_binding = { repo: "o/r", number: 34, base_ref: "main", base_sha: BASE_SHA, head_sha: HEAD_A };
+    for (const [id, node] of Object.entries(s.nodes)) {
+      if (id === nodeId) continue;
+      node.dispatch_state = "terminal";
+      if (node.status === "active") node.status = "succeeded";
+    }
+    s.consult_node = undefined;
     s.nodes[nodeId] = {
       status: "active",
       attempts: 1,

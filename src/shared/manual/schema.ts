@@ -1,9 +1,10 @@
 // ModelManual: the orchestrator's single source of model routes (stored in /kv).
 // routing.json is not read here; it still feeds the manual `roles` tool.
 
-export const MANUAL_VERSION = 1;
+export const MANUAL_VERSION = 2;
 export const KV_MAX_BYTES = 64 * 1024;
 export const MAX_FALLBACKS = 2;
+export const MAX_COLLABORATORS = 3;
 
 export const HARNESSES = ["codex", "claude-code", "pi"] as const;
 export type Harness = (typeof HARNESSES)[number];
@@ -27,6 +28,7 @@ export interface Route {
 export interface Slot {
   readonly primary: Route;
   readonly fallbacks?: readonly Route[];
+  readonly collaborators?: readonly Route[];
 }
 
 export type RoleSlots = { readonly [R in Role]?: Slot };
@@ -42,6 +44,8 @@ export interface Profile {
   readonly direction_route?: Route;
   /** Optional astra-final-review route. Omitted means fall back to the architect slot. */
   readonly final_review_route?: Route;
+  readonly direction_collaborators?: readonly Route[];
+  readonly final_review_collaborators?: readonly Route[];
   readonly inherit?: string;
   readonly nodes: ProfileNodes;
 }
@@ -49,7 +53,7 @@ export interface Profile {
 export type DefaultsByHarness = { readonly [H in Harness]?: string };
 
 export interface ModelManual {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly profiles: readonly Profile[];
   readonly defaults_by_harness: DefaultsByHarness;
 }
@@ -178,10 +182,15 @@ function parseSlot(raw: unknown, path: string): Slot {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ManualError("MANUAL_INVALID", "节点格子必须是对象。", path);
   const o = raw as Record<string, unknown>;
   const primary = parseRoute(o.primary, `${path}/primary`);
-  if (o.fallbacks === undefined) return { primary };
-  if (!Array.isArray(o.fallbacks)) throw new ManualError("MANUAL_INVALID", "fallbacks 必须是数组。", `${path}/fallbacks`);
-  if (o.fallbacks.length > MAX_FALLBACKS) throw new ManualError("MANUAL_INVALID", `备路线最多 ${MAX_FALLBACKS} 条。`, `${path}/fallbacks`);
-  return { primary, fallbacks: o.fallbacks.map((f, i) => parseRoute(f, `${path}/fallbacks/${i}`)) };
+  const fallbacks = parseRoutes(o.fallbacks, `${path}/fallbacks`, MAX_FALLBACKS);
+  const collaborators = parseRoutes(o.collaborators, `${path}/collaborators`, MAX_COLLABORATORS);
+  return { primary, ...(fallbacks ? { fallbacks } : {}), ...(collaborators ? { collaborators } : {}) };
+}
+
+function parseRoutes(raw: unknown, path: string, max: number): readonly Route[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > max) throw new ManualError('MANUAL_INVALID', `模型列表必须为数组，最多 ${max} 项。`, path);
+  return raw.map((route, index) => parseRoute(route, `${path}/${index}`));
 }
 
 function parseProfile(raw: unknown, path: string): Profile {
@@ -208,9 +217,14 @@ function parseProfile(raw: unknown, path: string): Profile {
   const withDirection = o.direction_route !== undefined
     ? { ...profile, direction_route: parseRoute(o.direction_route, `${path}/direction_route`) }
     : profile;
-  const withFinal = o.final_review_route !== undefined
+  const finalRoute = o.final_review_route !== undefined
     ? { ...withDirection, final_review_route: parseRoute(o.final_review_route, `${path}/final_review_route`) }
     : withDirection;
+  const directionCollaborators = parseRoutes(o.direction_collaborators, `${path}/direction_collaborators`, MAX_COLLABORATORS);
+  const finalCollaborators = parseRoutes(o.final_review_collaborators, `${path}/final_review_collaborators`, MAX_COLLABORATORS);
+  if (directionCollaborators?.length && !finalRoute.direction_route) throw new ManualError('MANUAL_INVALID', '方向协作模型必须有明确主路线。', `${path}/direction_collaborators`);
+  if (finalCollaborators?.length && !finalRoute.final_review_route) throw new ManualError('MANUAL_INVALID', '终审协作模型必须有明确主路线。', `${path}/final_review_collaborators`);
+  const withFinal = { ...finalRoute, ...(directionCollaborators ? { direction_collaborators: directionCollaborators } : {}), ...(finalCollaborators ? { final_review_collaborators: finalCollaborators } : {}) };
   if (o.inherit !== undefined) {
     if (typeof o.inherit !== "string" || !o.inherit.trim()) throw new ManualError("MANUAL_INVALID", "inherit 若填写必须是方案 id。", `${path}/inherit`);
     return { ...withFinal, inherit: o.inherit.trim() };
@@ -221,9 +235,13 @@ function parseProfile(raw: unknown, path: string): Profile {
 export function parseManual(raw: unknown): ModelManual {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ManualError("MANUAL_INVALID", "说明书必须是对象。", "");
   const o = raw as Record<string, unknown>;
-  if (o.version !== MANUAL_VERSION) throw new ManualError("MANUAL_INVALID", `说明书 version 必须是 ${MANUAL_VERSION}。`, "version");
+  if (o.version !== 1 && o.version !== MANUAL_VERSION) throw new ManualError("MANUAL_INVALID", `说明书 version 必须是 1 或 ${MANUAL_VERSION}。`, "version");
   if (!Array.isArray(o.profiles)) throw new ManualError("MANUAL_INVALID", "profiles 必须是数组。", "profiles");
   const profiles = o.profiles.map((p, i) => parseProfile(p, `profiles/${typeof (p as { id?: unknown })?.id === "string" ? (p as { id: string }).id : i}`));
+  if (o.version === 1 && profiles.some((profile) => profile.direction_collaborators?.length || profile.final_review_collaborators?.length
+    || Object.values(profile.nodes).some((roles) => Object.values(roles).some((slot) => slot.collaborators?.length)))) {
+    throw new ManualError('MANUAL_INVALID', '协作模型需要 version=2，旧版本配置不能暗中增加并行执行。', 'version');
+  }
   const seen = new Set<string>();
   for (const p of profiles) {
     if (seen.has(p.id)) throw new ManualError("MANUAL_INVALID", `方案 id 重复：${p.id}。`, `profiles/${p.id}`);
@@ -238,5 +256,5 @@ export function parseManual(raw: unknown): ModelManual {
     if (typeof id !== "string" || !id.trim()) throw new ManualError("MANUAL_INVALID", "默认方案 id 不能为空。", `defaults_by_harness/${h}`);
     defaults[h] = id.trim();
   }
-  return { version: 1, profiles, defaults_by_harness: defaults };
+  return { version: o.version, profiles, defaults_by_harness: defaults };
 }

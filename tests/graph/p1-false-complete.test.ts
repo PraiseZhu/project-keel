@@ -13,7 +13,8 @@ import {
   runDoneCheck,
   waitOnFromFacts,
 } from "../../src/main/tools/keel.ts";
-import type { GraphRunState } from "../../src/main/graph/state.ts";
+import type { GraphRunState, Next } from "../../src/main/graph/state.ts";
+import { nativeFinalArgs } from "../e2e/helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import type { GraphSpec } from "../../src/shared/graph/spec.ts";
@@ -619,20 +620,10 @@ describe("retry_verify rewinds the review (astra-final-review) without burning o
     expect(retry.result.next.kind).toBe("dispatch");
     const key = retry.result.next.dispatch_key as string;
     expect(key).toBe(`${id}:astra-final-review:2`);
-    const accepted: any = await runTool(ctx, "keel_report", {
+    const report: any = await runTool(ctx, "keel_report", nativeFinalArgs({
       run_id: id,
-      phase: "accepted",
-      dispatch_key: key,
-      worker_id: "audit-verifier",
-      worker_session_id: "audit-session",
-      dispatch_outcome: { dispatched: true },
-    });
-    expect(accepted.ok, accepted.message).toBe(true);
-    const report: any = await runTool(ctx, "keel_report", {
-      run_id: id,
-      phase: "final",
-      dispatch_key: key,
-      inline_report: {
+      dispatch: retry.result.next as Extract<Next, { kind: "dispatch" }>,
+      report: {
         status: "done",
         summary: "tests pass",
         head_sha: head,
@@ -643,7 +634,7 @@ describe("retry_verify rewinds the review (astra-final-review) without burning o
         sc_evidence: { "SC-1": true },
         verdict: "PASS",
       },
-    });
+    }));
     expect(report.ok, report.message).toBe(true);
     expect(read(h, id).verdict?.level).toBe("unit-test-verified");
     expect(read(h, id).cursor).toBe("report-ready");
@@ -669,20 +660,10 @@ describe("retry_verify rewinds the review (astra-final-review) without burning o
     expect(retry.ok, retry.message).toBe(true);
     expect(retry.result.next.kind).toBe("dispatch");
     const key = retry.result.next.dispatch_key as string;
-    const accepted: any = await runTool(ctx, "keel_report", {
+    const report: any = await runTool(ctx, "keel_report", nativeFinalArgs({
       run_id: id,
-      phase: "accepted",
-      dispatch_key: key,
-      worker_id: "audit-verifier",
-      worker_session_id: "audit-session",
-      dispatch_outcome: { dispatched: true },
-    });
-    expect(accepted.ok, accepted.message).toBe(true);
-    const report: any = await runTool(ctx, "keel_report", {
-      run_id: id,
-      phase: "final",
-      dispatch_key: key,
-      inline_report: {
+      dispatch: retry.result.next as Extract<Next, { kind: "dispatch" }>,
+      report: {
         status: "done",
         summary: "re-verify",
         head_sha: head,
@@ -693,7 +674,7 @@ describe("retry_verify rewinds the review (astra-final-review) without burning o
         sc_evidence: { "SC-1": true },
         verdict: "PASS",
       },
-    });
+    }));
     expect(report.ok, report.message).toBe(true);
     return key;
   }

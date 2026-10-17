@@ -1,4 +1,4 @@
-import type { AgentModel, FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
+import type { AgentModel, AgentModelsResponse, FetchResponse, Host, NodeResponse } from "../../src/main/host.ts";
 import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 
 export interface FakeHost extends Host {
@@ -34,6 +34,8 @@ export function fakeHost(opts: {
   confirm?: boolean;
   kv?: Record<string, unknown>;
   agentModels?: readonly AgentModel[];
+  /** When set, returned as-is so ok=false leftover catalogs cannot be treated as live. */
+  agentModelsResponse?: AgentModelsResponse;
   tasks?: CindyTasksApi;
 } = {}): FakeHost {
   const files = new Map<string, string>();
@@ -41,7 +43,7 @@ export function fakeHost(opts: {
   const h: FakeHost = {
     files, clock,
     kv: { ...(opts.kv ?? {}) },
-    agentModelList: [...(opts.agentModels ?? DEFAULT_AGENT_MODELS)],
+    agentModelList: [...(opts.agentModels ?? DEFAULT_AGENT_MODELS.map((model) => ({ ...model, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], visible: true })))],
     kvReads: 0,
     fetches: [], nodeCalls: [], confirms: [], broadcasts: [], progressed: [],
     async fetch(req) {
@@ -75,6 +77,7 @@ export function fakeHost(opts: {
       return { ...h.kv };
     },
     async agentModels() {
+      if (opts.agentModelsResponse) return opts.agentModelsResponse;
       return { ok: true, status: 200, models: h.agentModelList };
     },
     ...(opts.tasks ? { tasks: opts.tasks } : {}),

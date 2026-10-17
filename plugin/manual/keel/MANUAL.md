@@ -2,6 +2,8 @@
 
 主控协议：聊清需求后调 `keel_run({goal, sc, repo_dir, lead, scope, profile?, pr?, base_ref?})`；会改代码的 run 必须给 scope（可写文件或 glob），缺了直接 SCOPE_REQUIRED；要叠在别的 PR 分支上做就传 base_ref（分支名）。之后只照 `next` 做：`setup` 就 `start_team({worker_permission_mode:"bypassPermissions"})`，`keel_report({phase:"setup", outcome:{worker_permission_mode, team_id}})` 的 team_id 先取 start_team 回执，没有就用主控会话 `get_workspace_info` 的真实结构 `{ok:true, workflow:{workflow_id, lead_session_id, status}, workers}` 里的 `workflow.workflow_id`（主控还可取 `workflow.lead_session_id`）；`workflow` 为 null（worker 会话）则 human:setup。`dispatch` 带 `create_worker` 就原样传入并立刻报 accepted；带 `subagent` 就用自带 subagent 跑一次，不开 Worker、不报 accepted，完成后直接 final（见「subagent 派工」）。`reconcile` / `verify_stopped` 时主控在调用 `list_workers` 的同一时刻再调 `get_workspace_info`，把 `workflow.workflow_id` 作为 team_id 附进结果，不要抄 run 状态里记着的值。start_team 回执、setup、对账必须用同一种 ID。worker 回报后 `keel_report({phase:"final"})`；调查类节点的 worker 只在最后回复里交 NodeReport JSON，主控把它原样作 `inline_report` 传进去。只有 `next.kind=done` 才算完成；KEEL 永不合并。`decide` 时自己裁决，拿不准才问用户。pstack 手册是深读材料。
 
+`dispatch` 若带 `subagents`，必须按「subagent 派工」同批并行启动，收齐 `parallel_reports` 后回报父 `dispatch_key`；不能只处理第一项，也不能改走旧 `fanout` 入口。
+
 - 本机车道表与路径：`ghost_manual({ ghost_id: "keel", path: "keel/profile.md" })`
 - pstack 上游镜像与路由表：`ghost_manual({ ghost_id: "keel", path: "pstack/MANUAL.md" })`
 - 日常 Jev 用法：`ghost_manual({ ghost_id: "keel", path: "jev/MANUAL.md" })`
@@ -46,8 +48,8 @@
 
 | pstack（Cursor） | Keel（Cindy） |
 |---|---|
-| `Task` / subagent | KEEL 判定的只读一次性节点由主控自带 subagent 跑（`next.subagent`）；多模型并行经 `fanout` 开 Orca Worker |
-| `~/.cursor/rules/pstack-models.mdc` | `fanout({ op: "roles" })`（routing.json） |
+| `Task` / subagent | 只读一次性节点走 `next.subagent` 或同批 `next.subagents`，不能因模型不匹配改用 Worker；持续负责人走已授权 Worker |
+| `~/.cursor/rules/pstack-models.mdc` | 模型配置页的 `/kv.manual` 驱动 keel_run；旧独立 `fanout({op:"roles"})` 只读全局 routing.json，不代表此页设置 |
 | `/loop` | 短等待用 `pr_wait`（心跳轮询 ≤25 分钟）；长周期用 Cindy 定时任务 `schedule_create`（需用户同意） |
 | `scripts/watch-pr/watch-pr` | `pr_status` / `pr_wait` |
 | `scripts/worktree-audit.sh` | `worktree({op:"audit"})` |
@@ -87,6 +89,12 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 ## subagent 派工
 
-KEEL 判定只读、非终审/复核/验证/质询、且路由 agent 等于主控 harness 的一次性节点走 `next.subagent`，主控不自选。探索、研究两步不看路由：Claude Code / Codex 主控时第一次一律走 `next.subagent`，路由用不了时跑主控自己的模型，失败后才按路由开 Orca worker。Claude Code 用 Agent 工具：`subagent_type` 用 `keel-node`（不要用 general-purpose），有 `next.subagent.model` 就显式传（只会是 haiku / sonnet 别名），没有就不传，prompt 为 `task`，前台运行；不能设 effort。实际跑的是主控环境的模型，不是路由里的 provider。Codex 用自带子代理，任务内容为 `task`，不传模型。其它节点只有路由是 haiku / sonnet（Claude Code）或路由模型等于主控模型（Codex）才走 subagent；pi 一律 Orca。完成后有 `report_path` 就 `keel_report({phase:"final", dispatch_key})`，没有就把最后回复的 NodeReport 原样作 `inline_report`。禁止开 Orca worker、禁止报 accepted、禁止伪造 worker 回执，同一 dispatch_key 只派一次。subagent 失败（工具报错、拿不到报告）时照实 `phase=final` 交 `status=failed`；同一节点下一次 attempt 改走 Orca `create_worker`。超时会出 `human:<节点>` 门，先停掉 subagent 再选 retry/stop。
+只读一次性节点使用原生 sub，写入/持续负责人使用已授权 Worker。`next.subagent.required_route` 是用户选择的完整模型、来源、框架和推理强度，不是“可随意取近似模型”的建议。原生工具无法表达其中任一字段时，报告 `NATIVE_ROUTE_UNSUPPORTED` 并停在对应节点，不用主控模型、不换别名版本、不改开 Worker。Pi 没有可用原生 sub 时同样报告缺口。模型目录读取失败、模型停用或指定推理强度不支持时不得继续使用旧目录。
+
+`next.subagents` 表示真正协作，不是故障备选。主控在同一批并行启动所有独立成员（Codex code-mode 可用 `Promise.all`），自身推进不重叠工作，汇收后关闭原生 sub。每个成员的 `dispatch_key`、原生 id、报告路径各自独立。必须收齐所有报告才能进入下一步；任何失败或缺证据不得冒充全体通过。
+
+原生 sub 不报 accepted。单 sub 成功时 `keel_report({phase:"final",dispatch_key,native_agent_id,execution_route,inline_report})`；有文件报告时可以不填 inline_report。`execution_route` 来自实际工具选择/回执，不能把 required_route 原样抄作证明。多模型用父 dispatch_key，传 `parallel_reports:[{dispatch_key,native_agent_id,execution_route,report}]`；report 为完整 NodeReport，成员 native_agent_id 不能重复，route 必须与对应选择一致。工具会核对完整性、身份、HEAD 和结论，不会把 FAIL 成员吞掉。宿主不能提供可核实身份时按 blocked 回报，不声称实际跑通。超时先停止原生 sub，再答 retry/stop；重试仍保持原生通道。
+
+模型配置使用 `/kv.manual` 唯一真源；旧 v1 可读，协作列表用 v2。每次派工重读，运行中已派出的节点不偷偷换模型。显式 profile 必须与当前 lead 框架一致；修改方案的主控参考模型不会切换当前聊天模型。program 也读取该 lead 的默认方案，不再固定使用 sol。旧独立 `fanout({op:"roles"|"plan"})` 仍是全局 routing.json 的显式入口，不能当成模型配置页的执行器；使用设置页协作配置时应通过 `keel_run` 的 subagents 执行。
 
 插件任务（旧通道）走内部 `cindy.tasks`：`getRun` 只传 `runId`；`revision` / `expectedRevision` 必须是安全整数；create 回执丢失用 `list` 按 `requestKey` 找回，找不到开人工门，禁止重放 create；任务 running 时 `keel_wait` 内部 `getRun` 轮询，completed 后 `readMessages` 当 final。当前图不再引用该通道。

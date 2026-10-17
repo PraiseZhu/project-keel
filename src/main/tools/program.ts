@@ -9,6 +9,8 @@ import { readPrFacts } from "../graph/pr-facts.ts";
 import { DEFAULT_CONCURRENT_RUNS, Program, type OrchClient, type RunReport } from "../graph/program.ts";
 import type { GraphRunState, Next } from "../graph/state.ts";
 import { KeelError } from "../host.ts";
+import { loadRuntimeConfig } from '../config.ts';
+import { findProfile, resolveProfileForHarness } from '../manual/resolve.ts';
 import type { Frontier, InboxPointer, OpenGate, Unit } from "../../node/orch/store.ts";
 import type { Harness } from "../../shared/manual/schema.ts";
 
@@ -68,10 +70,15 @@ function reportOf(unit: Unit, run_id: string, next: Next, state: GraphRunState):
   return { run_id, unit_id: unit.id, status: "running", next };
 }
 
-function makeProgram(ctx: ToolContext, args: Record<string, unknown>, store: string): Program {
+async function makeProgram(ctx: ToolContext, args: Record<string, unknown>, store: string): Promise<Program> {
   const leadRaw = typeof args.lead === "string" ? args.lead : "codex";
-  const lead = (LEADS.has(leadRaw as Harness) ? leadRaw : "codex") as Harness;
-  const profileId = typeof args.profile === "string" && args.profile.trim() ? args.profile : "sol";
+  if (!LEADS.has(leadRaw as Harness)) throw new KeelError('INVALID_INPUT', 'program lead 必须是 codex / claude-code / pi。');
+  const lead = leadRaw as Harness;
+  const config = await loadRuntimeConfig(ctx.host);
+  const selectedProfile = typeof args.profile === 'string' && args.profile.trim()
+    ? findProfile(config.manual, args.profile) : resolveProfileForHarness(config.manual, lead);
+  if (selectedProfile.harness !== lead) throw new KeelError('PROFILE_HARNESS_MISMATCH', '所选方案与当前主控框架不同，配置选择不会切换主控。');
+  const profileId = selectedProfile.id;
   const remaining = typeof args.remaining_slots === "number" ? args.remaining_slots : 32;
   const window = typeof args.window === "number" ? args.window : DEFAULT_CONCURRENT_RUNS;
   const repoDir = typeof args.repo_dir === "string" && args.repo_dir.trim() ? args.repo_dir : undefined;
@@ -151,7 +158,7 @@ export async function keelProgram(ctx: ToolContext, args: Record<string, unknown
   if (op === "init") {
     return node(ctx, "orch/run", { store, op: "init", force: true });
   }
-  const program = makeProgram(ctx, args, store);
+  const program = await makeProgram(ctx, args, store);
   if (op === "add") {
     return program.addUnit({
       id: requireString(args, "id"),

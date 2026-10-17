@@ -199,7 +199,7 @@ describe("validateManual", () => {
 
   it("rejects Verifier and Worker of the same family, including gpt-6-luna vs openai/gpt-6-luna", () => {
     const same = cloneManual(DEFAULT_MANUAL);
-    (same.profiles[0]!.nodes.default!.verifier as { primary: { agent: string; model: string; provider_id: string; effort: string } }).primary = {
+    (same.profiles[0]! as { final_review_route: Route }).final_review_route = {
       agent: "pi",
       model: "grok-4.6",
       provider_id: "art-cindy",
@@ -214,7 +214,7 @@ describe("validateManual", () => {
       provider_id: "art-cindy",
       effort: "high",
     };
-    (prefixed.profiles[0]!.nodes.default!.verifier as { primary: { agent: string; model: string; provider_id: string; effort: string } }).primary = {
+    (prefixed.profiles[0]! as { final_review_route: Route }).final_review_route = {
       agent: "codex",
       model: "openai/gpt-6-luna",
       provider_id: "xd",

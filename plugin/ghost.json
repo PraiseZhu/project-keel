@@ -5,7 +5,7 @@
   "name": "KEEL",
   "description": "日常随时可问的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）。",
   "whenToUse": "用户要问 Jev 做选择、评分或是非判断；或要推进 PR、盯 CI 与评审、修 bug、按 pstack 方法做调查/重构/功能，以及清理 worktree、查派工角色时使用。",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -248,7 +248,7 @@
     },
     {
       "name": "keel_report",
-      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样（subagent 派工不报 accepted）；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report（subagent 交回后直接 final）。写代码节点越域返回 SCOPE_VIOLATION。返回 next。",
+      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样（subagent 派工不报 accepted）；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report（subagent 交回后直接 final）。写代码节点越域返回 SCOPE_VIOLATION。返回 next。 一次性 sub 不换主控模型、不回退 Worker；同批 subagents 用 parallel_reports 汇收，单 sub 成功须带真实 native_agent_id 与 execution_route。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -311,6 +311,21 @@
           },
           "inline_report": {
             "type": "object"
+          },
+          "execution_route": {
+            "type": "object",
+            "description": "原生 sub 实际执行的 agent/model/provider_id/effort；无法确认时不得伪造成功。"
+          },
+          "native_agent_id": {
+            "type": "string",
+            "description": "真实原生 sub 回执的 id。"
+          },
+          "parallel_reports": {
+            "type": "array",
+            "description": "next.subagents 的全量回报；每项含 dispatch_key、不同 native_agent_id、execution_route、report(NodeReport)。必须收齐所有协作模型，任一失败不得报全体成功。",
+            "items": {
+              "type": "object"
+            }
           }
         },
         "required": [

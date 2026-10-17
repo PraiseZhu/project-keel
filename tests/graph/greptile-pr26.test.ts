@@ -10,6 +10,7 @@ import {
   leadLoop,
   makeE2eHost,
   makeWorld,
+  nativeFinalArgs,
   startRun,
 } from "../e2e/helpers.ts";
 import { usePluginResearch } from "./helpers.ts";
@@ -94,10 +95,11 @@ describe("Greptile PR26 threads on 93d19dc", () => {
     // Explore runs on the lead's own subagent first, so it reports final without setup or accepted.
     if (next.kind !== "dispatch" || !next.subagent) throw new Error("explore subagent");
     const exploreKey = next.dispatch_key;
-    const finExplore: any = await runTool(makeContext(h, "c4", profile), "keel_report", {
-      run_id: started.result.run_id, phase: "final", dispatch_key: exploreKey,
-      inline_report: { status: "done", summary: "explore ok", files_changed: [], ran: [], sc_evidence: { "SC-1": true }, citation: "https://example.com/x" },
-    });
+    const finExplore: any = await runTool(makeContext(h, "c4", profile), "keel_report", nativeFinalArgs({
+      run_id: started.result.run_id,
+      dispatch: next,
+      report: { status: "done", summary: "explore ok", files_changed: [], ran: [], sc_evidence: { "SC-1": true }, citation: "https://example.com/x" },
+    }));
     next = nextOf(finExplore);
     expect(next.kind).toBe("dispatch");
     if (next.kind !== "dispatch") throw new Error("research dispatch");

@@ -392,18 +392,16 @@ describe("html entity decode", () => {
 
 describe("settings catalog focus restore", () => {
   it("keeps focus on the same control when a late catalog response redraws after change", async () => {
-    for (const act of ["agent", "model", "effort"] as const) {
+    for (const act of ["model", "effort"] as const) {
       const page = await boot({ holdAfter: 1 });
       const rows = page.doc.getElementById("model-rows")!;
       const before = page.select("explorer", act)!;
       expect(before).toBeTruthy();
       before.focus();
       expect(page.doc.activeElement).toBe(before);
-      const nextValue = act === "agent"
-        ? "claude-code"
-        : act === "model"
-          ? "openai/gpt-6-luna\txd"
-          : "low";
+      const nextValue = act === "model"
+        ? JSON.stringify(["codex", "gpt-6-astra", "art-cindy"])
+        : "low";
       before.value = nextValue;
       before.dispatchEvent(new FakeEvent("change", { bubbles: true }));
       await flush();
@@ -439,7 +437,7 @@ describe("settings catalog focus restore", () => {
     const page = await boot({ holdAfter: 1 });
     const model = page.select("explorer", "model")!;
     model.focus();
-    model.value = "openai/gpt-6-luna\txd";
+    model.value = JSON.stringify(["codex", "openai/gpt-6-luna", "xd"]);
     model.dispatchEvent(new FakeEvent("change", { bubbles: true }));
     await flush();
     const save = page.doc.querySelector("[data-act=\"save\"]")!;
@@ -479,7 +477,7 @@ describe("inline fallback panel", () => {
     const chip = page.select("worker", "toggle-fb")!;
     expect(chip).toBeTruthy();
     chip.click();
-    const row = chip.closest(".row")!;
+    const row = chip.closest(".role-editor")!;
     expect(row.classList.contains("open")).toBe(true);
     expect(chip.getAttribute("aria-expanded")).toBe("true");
     chip.click();
@@ -490,19 +488,19 @@ describe("inline fallback panel", () => {
     expect(page.select("final-review", "model")).toBeTruthy();
     expect(page.select("final-review", "toggle-fb")).toBeNull();
     const rowsEl = page.doc.getElementById("model-rows")!;
-    expect(rowsEl.querySelector('[data-row="direction"]')).toBeNull();
-    expect(rowsEl.querySelector('[data-row="verifier"]')).toBeNull();
+    expect(rowsEl.querySelector('[data-row="direction"]')).toBeTruthy();
+    expect(rowsEl.querySelector('[data-row="verifier"]')).toBeTruthy();
   });
 
   it("keeps an expanded worker panel open after another row redraws", async () => {
     const page = await boot();
     page.select("worker", "toggle-fb")!.click();
-    expect(page.select("worker", "toggle-fb")!.closest(".row")!.classList.contains("open")).toBe(true);
+    expect(page.select("worker", "toggle-fb")!.closest(".role-editor")!.classList.contains("open")).toBe(true);
     const explorer = page.select("explorer", "model")!;
-    explorer.value = "openai/gpt-6-luna\txd";
+    explorer.value = "codex\topenaai/gpt-6-luna\txd";
     explorer.dispatchEvent(new FakeEvent("change", { bubbles: true }));
     await flush();
-    expect(page.select("worker", "toggle-fb")!.closest(".row")!.classList.contains("open")).toBe(true);
+    expect(page.select("worker", "toggle-fb")!.closest(".role-editor")!.classList.contains("open")).toBe(true);
   });
 
   it("does not destroy an open fallback select when a late catalog arrives", async () => {
@@ -515,22 +513,20 @@ describe("inline fallback panel", () => {
     await flush();
     expect(live.isConnected).toBe(true);
     expect(page.doc.activeElement).toBe(live);
-    expect(page.select("worker", "toggle-fb")!.closest(".row")!.classList.contains("open")).toBe(true);
+    expect(page.select("worker", "toggle-fb")!.closest(".role-editor")!.classList.contains("open")).toBe(true);
   });
 
   it("keeps focus on the same fallback control when a late catalog response redraws after change", async () => {
-    for (const act of ["fb-agent", "fb-model", "fb-effort"] as const) {
+    for (const act of ["fb-model", "fb-effort"] as const) {
       const page = await boot({ holdAfter: 1 });
       page.select("worker", "toggle-fb")!.click();
       const before = page.select("worker", act, 0)!;
       expect(before).toBeTruthy();
       before.focus();
       expect(page.doc.activeElement).toBe(before);
-      const nextValue = act === "fb-agent"
-        ? "claude-code"
-        : act === "fb-model"
-          ? "grok-4.6\tart-cindy"
-          : "medium";
+      const nextValue = act === "fb-model"
+        ? JSON.stringify(["pi", "grok-4.6", "art-cindy"])
+        : "medium";
       before.value = nextValue;
       before.dispatchEvent(new FakeEvent("change", { bubbles: true }));
       await flush();
@@ -572,7 +568,7 @@ describe("inline fallback panel", () => {
     const page = await boot();
     page.select("worker", "toggle-fb")!.click();
     const model = page.select("worker", "fb-model", 0)!;
-    model.value = "grok-4.6\tart-cindy";
+    model.value = JSON.stringify(["pi", "grok-4.6", "art-cindy"]);
     model.dispatchEvent(new FakeEvent("change", { bubbles: true }));
     await flush();
     page.doc.querySelector('[data-act="save"]')!.click();
@@ -592,7 +588,7 @@ describe("inline fallback panel", () => {
     page.select("worker", "add-fb")!.click();
     await flush();
     const added = page.select("worker", "fb-model", 1)!;
-    added.value = "grok-4.6\tart-cindy";
+    added.value = JSON.stringify(["pi", "grok-4.6", "art-cindy"]);
     added.dispatchEvent(new FakeEvent("change", { bubbles: true }));
     await flush();
     page.doc.querySelector('[data-act="save"]')!.click();

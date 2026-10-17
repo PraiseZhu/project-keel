@@ -113,8 +113,6 @@ function parseLanes(raw: unknown, built: readonly LaneMatch[]): readonly LaneMat
 
 export async function loadRuntimeConfig(host: Host, built: KeelProfile = BUILT_PROFILE): Promise<RuntimeConfig> {
   const gen = cacheGen;
-  const hit = cache.get(host);
-  if (hit && hit.gen === gen) return hit.config;
   let kv: Record<string, unknown>;
   try {
     kv = await host.kvGet();

@@ -7,7 +7,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { makeContext, type ToolContext } from "../../src/main/context.ts";
 import { runTool } from "../../src/main/dispatch.ts";
-import { parseDispatchKey, type GraphRunState, type Next } from "../../src/main/graph/state.ts";
+import { parseDispatchKey, type GraphRunState, type Next, type SubagentParams } from "../../src/main/graph/state.ts";
+import type { Route } from "../../src/shared/manual/schema.ts";
 import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { ToolError } from "../../src/node/env.ts";
@@ -383,8 +384,12 @@ function commitOutOfScope(world: World): void {
   git(dir, "commit", "-q", "-m", "leak outside scope");
 }
 
+function dispatchRole(next: Extract<Next, { kind: "dispatch" }>): string | undefined {
+  return next.create_worker?.role ?? next.subagent?.role ?? next.subagents?.[0]?.role;
+}
+
 function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): Record<string, unknown> {
-  const role = next.create_worker?.role ?? next.subagent?.role;
+  const role = dispatchRole(next);
   const head = world.worktree ? localHead(world) : world.prHead;
   const report: Record<string, unknown> = {
     status: "done",
@@ -401,13 +406,63 @@ function inlineReport(next: Extract<Next, { kind: "dispatch" }>, world: World): 
   return report;
 }
 
-function writeKeelReport(pending: Extract<Next, { kind: "dispatch" }>, world: World): void {
-  const parsed = parseDispatchKey(pending.dispatch_key);
-  if (!parsed) throw new Error(`bad dispatch_key ${pending.dispatch_key}`);
-  const dir = pending.create_worker?.working_dir ?? pending.subagent?.working_dir ?? world.worktree ?? world.repoDir;
+function writeKeelReport(pending: Extract<Next, { kind: "dispatch" }>, world: World, arm?: SubagentParams & { dispatch_key?: string }): void {
+  const key = arm?.dispatch_key ?? pending.dispatch_key;
+  const parsed = parseDispatchKey(key.includes("/parallel/") ? key.slice(0, key.indexOf("/parallel/")) : key);
+  if (!parsed) throw new Error(`bad dispatch_key ${key}`);
+  const dir = pending.create_worker?.working_dir ?? arm?.working_dir ?? pending.subagent?.working_dir ?? pending.subagents?.[0]?.working_dir ?? world.worktree ?? world.repoDir;
   mkdirSync(join(dir, ".keel"), { recursive: true });
-  const body = { dispatch_key: pending.dispatch_key, ...inlineReport(pending, world) };
-  writeFileSync(join(dir, ".keel", `${parsed.nodeId}-${parsed.attempt}.md`), `\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\`\n`);
+  const body = { dispatch_key: key, ...inlineReport(pending, world) };
+  const file = arm?.report_path ?? pending.subagent?.report_path ?? join(dir, ".keel", `${parsed.nodeId}-${parsed.attempt}.md`);
+  writeFileSync(file, `\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\`\n`);
+}
+
+export function executionRouteOf(sub: SubagentParams): Route {
+  if (sub.required_route) return { ...sub.required_route };
+  return {
+    agent: sub.harness,
+    model: sub.model ?? sub.route.model,
+    provider_id: sub.route.provider_id,
+    ...(sub.effort ? { effort: sub.effort } : {}),
+  };
+}
+
+export function nativeFinalArgs(opts: {
+  run_id: string;
+  dispatch: Extract<Next, { kind: "dispatch" }>;
+  world?: World;
+  report?: Record<string, unknown>;
+  native_agent_id?: string;
+}): Record<string, unknown> {
+  const d = opts.dispatch;
+  const reportOf = (arm?: SubagentParams, key = d.dispatch_key): Record<string, unknown> => ({
+    dispatch_key: key,
+    ...(opts.report ?? (opts.world ? inlineReport(d, opts.world) : { status: "done", summary: "ok", files_changed: [], ran: [] })),
+  });
+  if (d.subagents?.length) {
+    return {
+      run_id: opts.run_id,
+      phase: "final",
+      dispatch_key: d.dispatch_key,
+      parallel_reports: d.subagents.map((arm, index) => ({
+        dispatch_key: arm.dispatch_key,
+        native_agent_id: `${opts.native_agent_id ?? "native"}-${index + 1}`,
+        execution_route: executionRouteOf(arm),
+        report: reportOf(arm, arm.dispatch_key),
+      })),
+    };
+  }
+  if (!d.subagent) throw new Error("nativeFinalArgs 需要 subagent 或 subagents");
+  return {
+    run_id: opts.run_id,
+    phase: "final",
+    dispatch_key: d.dispatch_key,
+    native_agent_id: opts.native_agent_id ?? "native-1",
+    execution_route: executionRouteOf(d.subagent),
+    ...(d.subagent.report_path && !opts.report && !opts.world ? {} : {
+      inline_report: opts.report ?? (opts.world ? inlineReport(d, opts.world) : { status: "done", summary: "ok" }),
+    }),
+  };
 }
 
 async function call(ctx: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -469,16 +524,13 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
         throw new Error(`产品缺陷：假主控看到 plugin_task dispatch（${next.plugin_task.phase}），应在 host.tasks 内完成`);
       }
       pending = next;
-      if (next.subagent) {
-        models.push({ role: next.subagent.role, model: next.subagent.model ?? next.subagent.route.model });
-        if (next.subagent.report_path) writeKeelReport(next, world);
-        last = await call(c, "keel_report", {
-          run_id: runId,
-          phase: "final",
-          dispatch_key: next.dispatch_key,
-          ...(next.subagent.report_path ? {} : { inline_report: inlineReport(next, world) }),
-        });
-        pending = undefined;
+      if (next.subagents?.length || next.subagent) {
+        const arms = next.subagents?.length ? next.subagents : [next.subagent!];
+        for (const arm of arms) {
+          models.push({ role: arm.role, model: arm.model ?? arm.route.model });
+          if (arm.report_path) writeKeelReport(next, world, arm);
+        }
+        last = await call(c, "keel_wait", { run_id: runId, max_minutes: 15 });
         if (!last.ok) {
           return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };
         }
@@ -546,13 +598,32 @@ export async function leadLoop(host: FakeHost, started: { run_id: string; next: 
             else if (!world.committedFix && !world.outOfScopeBeforeAccepted) commitFix(world);
           }
           const investigation = readGraph(host, runId).task_type === "investigation";
-          if (!investigation) writeKeelReport(pending, world);
-          last = await call(c, "keel_report", {
-            run_id: runId,
-            phase: "final",
-            dispatch_key: pending.dispatch_key,
-            ...(investigation ? { inline_report: inlineReport(pending, world) } : {}),
-          });
+          if (pending.subagents?.length || pending.subagent) {
+            world.workerSeq += 1;
+            if (!investigation) {
+              if (pending.subagents?.length) {
+                for (const arm of pending.subagents) {
+                  if (arm.report_path) writeKeelReport(pending, world, arm);
+                }
+              } else {
+                writeKeelReport(pending, world);
+              }
+            }
+            last = await call(c, "keel_report", nativeFinalArgs({
+              run_id: runId,
+              dispatch: pending,
+              world,
+              native_agent_id: `native-${world.workerSeq}`,
+            }));
+          } else {
+            if (!investigation) writeKeelReport(pending, world);
+            last = await call(c, "keel_report", {
+              run_id: runId,
+              phase: "final",
+              dispatch_key: pending.dispatch_key,
+              ...(investigation ? { inline_report: inlineReport(pending, world) } : {}),
+            });
+          }
           pending = undefined;
           if (!last.ok) {
             return { runId, worktree: started.worktree ?? world.worktree, next, steps, models, last, state: readGraph(host, runId) };

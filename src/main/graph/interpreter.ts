@@ -6,6 +6,7 @@ import { resolve } from "../manual/resolve.ts";
 import { findProfile, resolveDirection, resolveFinalReview } from "../../shared/manual/resolve.ts";
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
+import { sameRoute } from './collaboration.ts';
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief, reportPath } from "./brief.ts";
 import { scIdsFromMissing } from "./done.ts";
@@ -128,6 +129,7 @@ export type AdvanceEvent =
       revision?: number;
       task_run_id?: string;
       start_sha?: string;
+      execution_route?: Route;
     };
 
 export interface AdvanceOpts {
@@ -155,12 +157,7 @@ const AFTER_FINAL = "keel_report phase=final";
 const AFTER_SETUP = "keel_report phase=setup";
 const AFTER_RECONCILE = "keel_report phase=reconcile";
 const AFTER_RECOVER = "keel_report phase=recover";
-const CLAUDE_ALIAS = /(?:^|\/)claude-(haiku|sonnet)(?:-|$)/;
-/** Direction consult, final review, and adversarial interrogate stay on Orca even though they are read-only. */
-const NO_SUBAGENT = new Set([ASTRA_CONSULT_ID, "astra-final-review", "interrogate", "interrogate-architect"]);
-/** Explore and research always try the lead's own subagent first; the configured route is the Orca fallback. */
-const SUBAGENT_FIRST = new Set<string>(["explorer", "researcher"]);
-const SUBAGENT_NOTE = "用主控自带 subagent 跑一次：Claude Code 用 Agent 工具（subagent_type 用 keel-node，有 subagent.model 就显式传，没有就不传，前台运行）；Codex 用自带子代理，不传模型。不开 Orca worker，不报 accepted，不伪造 worker 回执，同一 dispatch_key 只派一次。交回后 keel_report({phase:\"final\", dispatch_key})；没有 report_path 时，把它最后回复里的 NodeReport 原样作为 inline_report。实际跑的是主控环境的模型。";
+const SUBAGENT_NOTE = '一次性任务只用原生 sub。按 required_route 核对当前工具的 model、provider 与 effort 能力，能准确执行才派；不能表达任一字段就报 NATIVE_ROUTE_UNSUPPORTED，不用主控模型或 Worker 顶替。subagents 必须在同一批并行启动，收齐独立 native_agent_id、execution_route 与报告后回 keel_report phase=final。不要伪造模型实际身份；失败后也不自动转 Worker。';
 
 export function classifyRetry(errorMode: ErrorMode | undefined, consecutiveFailures: number): { decision: RetryDecision; note: string } {
   if (consecutiveFailures >= 2) return { decision: "human", note: "连续 2 次失败，放弃该节点" };
@@ -221,7 +218,8 @@ function bumpFingerprint(state: GraphRunState, nodeId: string, signature: string
 function modelsAllow(models: readonly AgentModel[] | undefined, route: Route): boolean {
   if (!models) return true;
   if (models.length === 0) return false;
-  return models.some((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id);
+  return models.some((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id
+    && m.visible !== false && (!route.effort || m.efforts?.includes(route.effort)));
 }
 
 function routesForNode(manual: ModelManual, state: GraphRunState, role: Role, nodeId: string) {
@@ -272,27 +270,14 @@ function pickRoute(
   return { stop: "全部路线不可用" };
 }
 
-/**
- * Native-subagent model for a read-only one-shot node, or undefined when it must stay on Orca.
- * `onLead` marks a subagent that runs on the lead's own model because the configured route cannot.
- */
-function subagentModel(state: GraphRunState, specNode: GraphNode, route: Route, manual: ModelManual): { model?: string; onLead?: Route } | undefined {
-  if (specNode.writes || specNode.role === "verifier" || NO_SUBAGENT.has(specNode.id)) return undefined;
-  let lead: Route;
-  try { lead = findProfile(manual, state.profile_id).lead; } catch { return undefined; }
-  const sameHarness = route.agent === state.lead_harness;
-  if (state.lead_harness === "claude-code") {
-    const alias = sameHarness ? CLAUDE_ALIAS.exec(route.model)?.[1] : undefined;
-    if (alias) return { model: alias };
-  } else if (state.lead_harness === "codex") {
-    if (sameHarness && route.model === lead.model) return {};
-  } else {
-    return undefined;
-  }
-  return SUBAGENT_FIRST.has(specNode.role ?? "") ? { onLead: lead } : undefined;
+function subagentModel(state: GraphRunState, specNode: GraphNode, route: Route, manual: ModelManual): { model: string } | undefined {
+  void manual;
+  if (specNode.writes || state.lead_harness === 'pi' || route.agent !== state.lead_harness) return undefined;
+  return { model: route.model };
 }
 
 function subagentEligible(state: GraphRunState, specNode: GraphNode, manual: ModelManual, models: readonly AgentModel[] | undefined, preferFallback: boolean): boolean {
+  if (!specNode.writes) return true;
   try {
     if ((state.nodes[specNode.id]?.attempts ?? 0) >= 1) return false;
     const picked = pickRoute(manual, state, (specNode.role ?? "worker") as Role, specNode.writes, models, preferFallback, specNode.id);
@@ -306,34 +291,30 @@ function isSubagentChannel(node: NodeRunState | undefined): boolean {
   return node?.planned_params?.channel === "subagent";
 }
 
-function subagentDispatch(state: GraphRunState, specNode: GraphNode, node: NodeRunState, picked: { route: Route; note?: string }, alias: { model?: string; onLead?: Route }, leadProvider: string, now: number): Next {
+function subagentDispatch(state: GraphRunState, specNode: GraphNode, node: NodeRunState, picked: { route: Route; note?: string }, selected: { model: string }, now: number): Next {
   const key = node.dispatch_key!;
   const params = node.planned_params!;
   const investigation = state.task_type === "investigation";
-  // A subagent that cannot run the configured route runs on the lead's own model; report that, not the route.
-  const ran = alias.onLead ?? picked.route;
+  const requested = picked.route;
   const subagent: SubagentParams = {
     harness: state.lead_harness,
     role: params.role,
     working_dir: params.working_dir,
     task: params.initial_task,
-    route: { model: ran.model, provider_id: ran.provider_id },
-    ...(!alias.onLead && params.effort ? { effort: params.effort } : {}),
-    ...(alias.model ? { model: alias.model } : {}),
+    route: { model: requested.model, provider_id: requested.provider_id },
+    required_route: { ...picked.route },
+    require_exact_route: true,
+    ...(params.effort ? { effort: params.effort } : {}),
+    model: selected.model,
     ...(investigation ? {} : { report_path: reportPath({ id: specNode.id }, { run_id: state.run_id, goal: state.goal, worktree: state.worktree, taskType: state.task_type }, { attempt: node.attempts, dispatch_key: key }) }),
   };
-  const routeNote = alias.onLead ? `探索/研究先用主控自带 subagent（跑主控模型 ${alias.onLead.model}）；失败后改开 worker 跑 ${picked.route.model}。` : picked.note;
+  const routeNote = picked.note;
   const note = [routeNote, SUBAGENT_NOTE].filter(Boolean).join(" ");
   const next: Next = { kind: "dispatch", dispatch_key: key, subagent, after: AFTER_FINAL, note };
   node.dispatch_state = "running";
   node.dispatch_state_at = now;
   node.started_at = now;
-  node.actual_route = {
-    agent: state.lead_harness,
-    model: alias.model ?? ran.model,
-    provider_id: leadProvider,
-    ...(ran.effort ? { effort: ran.effort } : {}),
-  };
+  node.actual_route = undefined;
   state.status = "running";
   state.next = next;
   return next;
@@ -360,6 +341,7 @@ function completedKeelReports(state: GraphRunState, spec: GraphSpec): string[] {
     if (!nodeWritesReport(spec, id, state.consult_node)) continue;
     const specNode = spec.nodes.find((x) => x.id === id);
     if ((specNode?.kind === "plugin_task" || n.task) && !n.report_path) continue;
+    if (!n.report_path && n.planned_params?.channel === 'subagent') continue;
     const path = n.report_path ?? `${root}/.keel/${id}-${n.attempts}.md`;
     items.push({ id, path, rank: reportRank(id) });
   }
@@ -380,6 +362,7 @@ function brief(state: GraphRunState, spec: GraphSpec, node: GraphNode, dispatchK
   // Set only by the revise edges, so a CI-red entry into the same writer (pr graph fix-ci) keeps its own TASK.
   const returned = node.writes && state.nodes[node.id]?.revise_pending === true;
   const contextBits = [
+    ...(attachPrior ? Object.entries(state.nodes).filter(([, prior]) => !prior.report_path && prior.last_report && prior.planned_params?.channel === 'subagent').map(([id, prior]) => `已完成原生报告 ${id}：${JSON.stringify(prior.last_report).slice(0, 16000)}`) : []),
     !returned && node.writes && attempt >= 2 ? `这是第 ${attempt} 次尝试：先读下面的报告，不要重复上一轮的失败` : "",
     revise?.missing_sc?.length
       ? `done 门缺证据：${revise.missing_sc.join("、")}${revise.verify_report ? `。先读验证报告：${revise.verify_report}` : ""}`
@@ -462,12 +445,21 @@ async function planOrca(
       return finalReviewHuman("显式终审路线不可用：档位或模型不可用，不能换模型");
     }
   }
+  const configured = routesForNode(manual, state, role, specNode.id);
+  const collaborationRoutes = [picked.route, ...(configured.collaborators ?? [])];
+  if (specNode.writes && collaborationRoutes.length > 1) return nextDecide(state, `human:${specNode.id}`, '写入节点不能并行多个写手，请拆分独立范围。', ['stop'], true);
+  if (!specNode.writes) {
+    const incompatible = collaborationRoutes.find((route) => !modelsAllow(models, route)
+      || !subagentModel(state, specNode, route, manual)
+      || (specNode.role === 'verifier' && state.author_families.includes(family(route.model))));
+    if (incompatible) return nextDecide(state, `human:${specNode.id}`, 'NATIVE_ROUTE_UNSUPPORTED：所选模型、来源或框架不能由当前原生 sub 准确执行；不换模型、不改开 Worker。', ['retry', 'stop'], true, { required_route: incompatible });
+  }
   if (specNode.role === "architect") {
-    if ((state.budget.astra_left ?? 0) <= 0) {
+    if ((state.budget.astra_left ?? 0) < collaborationRoutes.length) {
       return nextDecide(state, "human:astra-budget", "Astra 预算用完，改为人工裁决", ["retry", "stop"], true);
     }
-    state.budget.astra_left -= 1;
-    state.astra_calls += 1;
+    state.budget.astra_left -= collaborationRoutes.length;
+    state.astra_calls += collaborationRoutes.length;
   }
   if (hasLiveWriter(specNode, node) && node.dispatch_key) {
     return requestWriterStop(state, node, node.dispatch_key, "retry", now);
@@ -485,9 +477,10 @@ async function planOrca(
     }
   }
   node.task = undefined;
+  node.collaborators = undefined;
   node.started_at = undefined;
   node.error_mode = undefined;
-  const sub = node.attempts === 0 ? subagentModel(state, specNode, picked.route, manual) : undefined;
+  const sub = subagentModel(state, specNode, picked.route, manual);
   node.attempts += 1;
   const key = dispatchKey(state.run_id, specNode.id, node.attempts);
   const label = await workerLabel(specNode.id, key);
@@ -498,6 +491,8 @@ async function planOrca(
     model: picked.route.model,
     provider_id: picked.route.provider_id,
     effort: picked.route.effort,
+    fast: false,
+    agent_device_id: 'local',
     working_dir: workingDir,
     initial_task: brief(state, spec, specNode, key, node.attempts),
     writes: specNode.writes,
@@ -521,9 +516,22 @@ async function planOrca(
     node.team_id = undefined;
     node.worker_label = undefined;
     node.worker_id = undefined;
-    let leadProvider = picked.route.provider_id;
-    try { leadProvider = findProfile(manual, state.profile_id).lead.provider_id; } catch { /* keep route provider */ }
-    return subagentDispatch(state, specNode, node, picked, sub, leadProvider, now);
+    const next = subagentDispatch(state, specNode, node, picked, sub, now);
+    if (collaborationRoutes.length > 1 && next.kind === 'dispatch' && next.subagent) {
+      const template = next.subagent;
+      const subagents = collaborationRoutes.map((route, index) => {
+        const armKey = `${key}/parallel/${index + 1}`;
+        const armPath = template.report_path?.replace(/\.md$/, `-parallel-${index + 1}.md`);
+        const taskBase = template.report_path && armPath ? template.task.replaceAll(template.report_path, armPath) : template.task;
+        const task = `${taskBase.replaceAll(key, armKey)}\n\n协作 ${index + 1}/${collaborationRoutes.length}：独立只读完成本任务，不等待其他协作模型。实际路线必须为 ${JSON.stringify(route)}；不能准确运行则报告 blocked，禁止替换。报告 dispatch_key=${armKey}。`;
+        return { ...template, model: route.model, effort: route.effort, route: { model: route.model, provider_id: route.provider_id }, required_route: route, dispatch_key: armKey, task, report_path: armPath };
+      });
+      node.collaborators = subagents.map((arm) => ({ dispatch_key: arm.dispatch_key, route: arm.required_route!, task: arm.task }));
+      const batch: Next = { kind: 'dispatch', dispatch_key: key, subagents, after: AFTER_FINAL, note: `${SUBAGENT_NOTE} 使用 parallel_reports 汇收全部成员；不要先启动一个等它完成再启动下一个。` };
+      state.next = batch;
+      return batch;
+    }
+    return next;
   }
   node.worker_label = label;
   node.team_id = state.team?.team_id;
@@ -534,6 +542,8 @@ async function planOrca(
     model: params.model,
     provider_id: params.provider_id,
     effort: params.effort,
+    fast: false,
+    agent_device_id: 'local',
     working_dir: params.working_dir,
     initial_task: params.initial_task,
   };
@@ -917,7 +927,8 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     node.started_at = now;
     return;
   }
-  if (node.planned_params) node.actual_route = {
+  if (event.execution_route && node.planned_params && !sameRoute(event.execution_route, node.planned_params as Route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', 'Worker 回执中的路线与所选模型、来源或档位不一致。');
+  if (node.planned_params) node.actual_route = event.execution_route ?? {
     agent: node.planned_params.agent as Route["agent"],
     model: node.planned_params.model,
     provider_id: node.planned_params.provider_id,
@@ -1181,6 +1192,11 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
     return;
   }
   node.dispatch_state = "reported";
+  if (isSubagentChannel(node) && event.execution_route) {
+    const expected = node.planned_params;
+    if (!expected || !sameRoute(event.execution_route, expected as Route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', '实际 sub 模型、来源或推理强度与选择不一致。');
+    node.actual_route = event.execution_route;
+  }
   node.report_path = event.report_path;
   if (event.report) node.last_report = { ...event.report, fresh: true };
   if (event.verdict) state.verdict = event.verdict;
@@ -1259,6 +1275,10 @@ function applyGateAnswer(state: GraphRunState, spec: GraphSpec, now: number): vo
   if (i < 0) return;
   const rec = state.sol_decisions[i]!;
   const answer = rec.answer;
+  if (!state.next.options.includes(answer)) {
+    state.sol_decisions.splice(i, 1);
+    return;
+  }
   const missing = Array.isArray((state.next.context as { missing?: unknown } | undefined)?.missing)
     ? ((state.next.context as { missing: string[] }).missing)
     : [];
@@ -1656,6 +1676,8 @@ async function computeNext(
             model: p.model,
             provider_id: p.provider_id,
             effort: p.effort,
+            fast: p.fast ?? false,
+            agent_device_id: p.agent_device_id ?? 'local',
             working_dir: p.working_dir,
             initial_task: p.initial_task,
           },
@@ -1697,7 +1719,8 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     if (!state.spec_id || !state.cursor) throw new KeelError("RUN_STATE_INVALID", `run ${runId} 尚未初始化`);
     const spec = specOf(state, opts);
     const cfg = opts.config ?? (await loadRuntimeConfig(host));
-    const models = opts.models ?? (await host.agentModels()).models;
+    const catalog = opts.models === undefined ? await host.agentModels() : undefined;
+    const models = opts.models ?? (catalog?.ok && catalog.status === 200 ? catalog.models : []);
     const now = host.now();
     await applyEvent(state, spec, event, opts.gates, now);
     applyGateAnswer(state, spec, now);

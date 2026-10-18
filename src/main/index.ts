@@ -5,13 +5,15 @@ import { BUILT_PROFILE, makeContext } from "./context.ts";
 import { DEFAULT_THRESHOLDS } from "../shared/types.ts";
 import { runTool } from "./dispatch.ts";
 import { loadGraphStates } from "./graph-snapshot.ts";
-import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleMainViewOpen, handleTurnEndMessage, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
+import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleTurnEndMessage, markPendingCard, scanDrivenRuns, type HostNudgeRun } from "./host-bridge.ts";
 import { ClockWatchdog, type ClockStatus } from "./graph/clock-watchdog.ts";
 import { NudgeController } from "./graph/nudge.ts";
 import { CLOCK_PING_METHOD, CLOCK_STATUS_PATH } from "../shared/clock.ts";
 import type { AgentModel, Host } from "./host.ts";
 import { parseKvResponse } from "../shared/kv-response.ts";
 import { toChildEntries } from "./host-fs.ts";
+import { knownDashboardPull, refreshDashboard, restoreDashboard, updateDashboardLocal } from "./dashboard/service.ts";
+import { status } from "./tools/pr.ts";
 
 declare const cindy: any;
 
@@ -29,7 +31,6 @@ const host: Host = {
   progress: (callId) => void cindy.send({ type: "tool-progress", callId }),
   badge: (unread, summary) => void cindy.send({ type: "badge", unread, ...(unread && summary ? { summary } : {}) }),
   broadcast: (m) => channel?.postMessage(m),
-  requestSchedule: (req) => cindy.agent.requestSchedule(req),
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   async kvGet() {
@@ -145,53 +146,42 @@ channel?.addEventListener("message", (ev: MessageEvent) => {
   if ((ev.data as { type?: string } | null)?.type === "manual-changed") invalidateRuntimeConfig();
 });
 
-// Panel requests: { reqId, op: "board" | "ledger" }. Deduplicate by reqId; the panel resends until acked.
-const seen = new Set<string>();
-channel?.addEventListener("message", async (ev: MessageEvent) => {
-  const m = ev.data as { reqId?: string; op?: string; lead_agent?: string; type?: string };
-  if (m?.type === "manual-changed") return;
-  if (!m?.reqId || seen.has(m.reqId) || m.op === undefined) return;
-  seen.add(m.reqId);
-  channel.postMessage({ type: "ack", reqId: m.reqId });
+const seen = new Map<string, number>();
+channel?.addEventListener("message", async (event: MessageEvent) => {
+  const message = event.data;
+  if (!message || typeof message !== "object" || typeof message.reqId !== "string" || message.reqId.length > 120 || typeof message.op !== "string") return;
+  if (seen.has(message.reqId)) return;
+  seen.set(message.reqId, Date.now());
+  while (seen.size > 256) seen.delete(seen.keys().next().value!);
+  const target = typeof message.panelId === "string" && message.panelId.length <= 80 ? message.panelId : undefined;
+  channel.postMessage({ type: "ack", reqId: message.reqId, ...(target ? { target } : {}) });
   const ctx = makeContext(host, "");
-  if (m.op === "board") {
-    const r = await runTool(ctx, "pr_status", { board: true });
-    if (!r.ok) channel.postMessage({ type: "error", reqId: m.reqId, message: r.message });
-  } else if (m.op === "ledger") {
-    const r = await runTool(ctx, "pstack_decide", { op: "read", limit: 100 });
-    channel.postMessage({ type: "ledger", reqId: m.reqId, ...(r.ok ? { rows: (r.result as any).rows } : { message: r.message }) });
-  } else if (m.op === "roles") {
-    const agent = (m as { lead_agent?: string }).lead_agent ?? "claude-code";
-    const r = await runTool(ctx, "fanout", { op: "roles", lead_agent: agent });
-    channel.postMessage({ type: "roles", reqId: m.reqId, lead_agent: agent, ...(r.ok ? { result: r.result } : { message: r.message }) });
-  } else if (m.op === "hooks-status") {
-    const r = await host.node("hooks/status", {});
-    channel.postMessage({ type: "hooks-status", reqId: m.reqId, ...(r.ok ? { result: r.result } : { message: r.message }) });
-  } else if (m.op === "clock-status") {
-    const file = await host.fs({ op: "read", root: "data", path: CLOCK_STATUS_PATH });
-    channel.postMessage({ type: "clock-status", reqId: m.reqId, ...(file.ok && file.content ? { result: JSON.parse(file.content) } : { result: { state: "unknown" } }) });
-  } else if (m.op === "restore") {
-    // Reopened panel: last board snapshot plus the most recent fanouts from the data dir.
-    const board = await host.fs({ op: "read", root: "data", path: "board/latest.json" });
-    if (board.ok && board.content) channel.postMessage({ type: "board", ...JSON.parse(board.content) });
-    const list = await host.fs({ op: "list", root: "data", path: "fanout" });
-    const names = (list.ok ? list.entries ?? [] : []).map((e: { name: string }) => e.name).filter((n: string) => n.endsWith(".json")).sort().slice(-5);
-    const fanouts = [];
-    for (const n of names) {
-      const r = await host.fs({ op: "read", root: "data", path: `fanout/${n}` });
-      if (r.ok && r.content) {
-        const f = JSON.parse(r.content);
-        fanouts.push({ fanout_id: f.fanout_id, kind: f.kind, created_at: f.created_at, ingested_at: f.ingested_at ?? null, status: f.status ?? null, reported: f.reported ?? [], task: String(f.task ?? "").slice(0, 120), lanes: (f.lanes ?? []).map((l: any) => ({ label: l.label, role: l.role, route: l.route, working_dir: l.working_dir })) });
-      }
+  const scope = message.scope === "all" ? "all" : "open";
+  try {
+    if (message.op === "dashboard-restore" && target) {
+      await restoreDashboard(ctx, scope, target);
+      channel.postMessage({ type: "dashboard-done", reqId: message.reqId, target });
+    } else if (message.op === "dashboard") {
+      const snapshot = await refreshDashboard(ctx, { scope, force: message.force === true });
+      channel.postMessage({ type: "dashboard-response", reqId: message.reqId, target, scope, complete: snapshot.complete, retryAt: snapshot.retryAt, error: snapshot.error });
+    } else if (message.op === "dashboard-local" && typeof message.key === "string") {
+      await updateDashboardLocal(ctx, scope, message.key);
+      channel.postMessage({ type: "dashboard-done", reqId: message.reqId, target });
+    } else if (message.op === "dashboard-detail" && typeof message.key === "string") {
+      const ref = knownDashboardPull(host, message.key);
+      if (!ref) throw new Error("这张 PR 不在已读取的看板里，请先刷新。");
+      const detail = await status(ctx, { repo: ref.repo, pr: ref.number }, { jev: false });
+      channel.postMessage({ type: "dashboard-detail", reqId: message.reqId, target, key: message.key, detail });
+    } else if (message.op === "hooks-status") {
+      const result = await host.node("hooks/status", {});
+      channel.postMessage({ type: "hooks-status", reqId: message.reqId, ...(result.ok ? { result: result.result } : { message: result.message }) });
+    } else if (message.op === "clock-status") {
+      const file = await host.fs({ op: "read", root: "data", path: CLOCK_STATUS_PATH });
+      channel.postMessage({ type: "clock-status", reqId: message.reqId, result: file.ok && file.content ? JSON.parse(file.content) : { state: "unknown" } });
+    } else {
+      channel.postMessage({ type: "dashboard-error", reqId: message.reqId, target, message: "此面板协议已更新，请重新打开 Keel 看板。" });
     }
-    channel.postMessage({ type: "fanouts", reqId: m.reqId, fanouts: fanouts.reverse() });
-    const runs = await handleMainViewOpen(nudge, host);
-    channel.postMessage({ type: "graph", reqId: m.reqId, runs });
-  } else if (m.op === "graph") {
-    const runs = await loadGraphStates(host);
-    channel.postMessage({ type: "graph", reqId: m.reqId, runs });
-  } else if (m.op === "schedule") {
-    const r = await host.requestSchedule?.({ name: "Keel PR 巡检", prompt: "调用 Keel 插件的 pr_status 工具（board:true）刷新我的 PR 看板，把可合并与阻塞的 PR 用一句话总结给我。不要合并任何 PR。", intervalMs: 60 * 60 * 1000 });
-    channel.postMessage(r?.ok ? { type: "scheduled", reqId: m.reqId } : { type: "error", reqId: m.reqId, message: r?.message ?? "无法打开自动化创建面板" });
+  } catch (error) {
+    channel.postMessage({ type: "dashboard-error", reqId: message.reqId, target, message: error instanceof Error ? error.message : "读取失败，请稍后重试。" });
   }
 });

@@ -10,6 +10,7 @@ import { keelGate, keelReport, keelRun, keelStatus, keelWait } from "./tools/kee
 import { worktreeTool } from "./tools/misc.ts";
 import { prOpen, prReady, prReply, prStatus, prThreads, prWait } from "./tools/pr.ts";
 import { pstackDecideTool, pstackStart } from "./tools/pstack.ts";
+import { trackDashboardResult } from "./dashboard/registry.ts";
 
 export type Handler = (ctx: ToolContext, args: Record<string, unknown>) => Promise<unknown>;
 
@@ -36,6 +37,7 @@ export async function runTool(ctx: ToolContext, tool: string, args: Record<strin
   const h = TOOLS[tool];
   if (!h) return { ok: false, errorCode: "UNKNOWN_TOOL", message: `Keel 没有 ${tool} 工具。` };
   try {
+    if (tool === "pr_status" && args?.board === true) return { ok: true, result: await h(ctx, args) };
     const cfg = await loadRuntimeConfig(ctx.host, ctx.profile);
     const inner: ToolContext = {
       host: ctx.host,
@@ -44,7 +46,13 @@ export async function runTool(ctx: ToolContext, tool: string, args: Record<strin
       thresholds: cfg.thresholds,
       ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
     };
-    return { ok: true, result: await h(inner, args ?? {}) };
+    const result = await h(inner, args ?? {});
+    try {
+      await trackDashboardResult(inner, tool, args ?? {}, result);
+    } catch {
+      ctx.host.broadcast({ type: "dashboard-warning", message: "操作已完成，但看板关联索引保存失败；当前账号的作者 PR 仍可从 GitHub 同步。" });
+    }
+    return { ok: true, result };
   } catch (e) {
     if (e instanceof KeelError) return { ok: false, errorCode: e.code, message: e.message, ...(e.data ? { data: e.data } : {}) };
     return { ok: false, errorCode: "REQUEST_FAILED", message: `执行失败：${e instanceof Error ? e.message : String(e)}` };

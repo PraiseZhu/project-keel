@@ -158,10 +158,4 @@ export async function prReply(p: { repo: string; pr: number; target_id: string; 
   return { posted: true, url: (JSON.parse(out) as { html_url?: string }).html_url ?? null, resolved: false };
 }
 
-export async function prBoard(profile: KeelProfile, p: { repos?: string[] }) {
-  const repos = p.repos?.length ? p.repos : profile.boardRepos;
-  const args = ["search", "prs", "--author", "@me", "--state", "open", "--json", "repository,number,title,url,isDraft,updatedAt", "--limit", "50"];
-  for (const r of repos) args.push("--repo", r);
-  const rows = await ghJson<{ repository: { nameWithOwner: string }; number: number; title: string; url: string; isDraft: boolean; updatedAt: string }[]>(args, { timeoutMs: 60_000 });
-  return rows.map((r) => ({ repo: r.repository.nameWithOwner, number: r.number, title: r.title, url: r.url, isDraft: r.isDraft, updatedAt: r.updatedAt, preset: resolveLane(profile, r.repository.nameWithOwner).rule.preset }));
-}
+export { prBoard } from "./board.ts";

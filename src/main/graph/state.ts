@@ -299,6 +299,7 @@ export interface GraphRunState {
   nudges: { since_progress: number; last_at?: number };
   human_inputs: number;
   updated_at: number;
+  progress?: { nodeId: string; dispatchKey: string; step: number; at: number };
   facts?: GraphFacts;
   late_reports: Array<{ dispatch_key: string; at: number }>;
   pending_astra_gate?: PendingAstraGate;

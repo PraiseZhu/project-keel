@@ -3,7 +3,7 @@
 // the public source tree never carries personal paths or internal repo names.
 import { spawnSync } from "node:child_process";
 import { build } from "esbuild";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,7 +35,7 @@ await build({ ...common, entryPoints: [join(root, "src/node/worker.ts")], outfil
 for (const bin of ["orch", "check-plan"]) await build({ ...common, define: { ...define, "import.meta.main": "false" }, entryPoints: [join(root, `src/node/bin/${bin}.ts`)], outfile: join(root, `plugin/node/${bin}.mjs`), format: "esm", platform: "node", target: "node20", banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" } });
 await build({ ...common, entryPoints: [join(root, "src/panel/panel.ts")], outfile: join(root, "plugin/panel.js"), format: "iife", platform: "browser" });
 await build({ ...common, entryPoints: [join(root, "src/panel/settings.ts")], outfile: join(root, "plugin/settings.js"), format: "iife", platform: "browser" });
-await build({ ...common, entryPoints: [join(root, "src/panel/graph-view.ts")], outfile: join(root, "plugin/graph-view.js"), format: "iife", platform: "browser" });
+rmSync(join(root, "plugin/graph-view.js"), { force: true });
 
 const graphValidateOut = join(root, "plugin/node/graph-validate.mjs");
 await build({ ...common, entryPoints: [join(root, "src/shared/graph/validate-cli.ts")], outfile: graphValidateOut, format: "esm", platform: "node", target: "node20" });
@@ -65,7 +65,7 @@ ${lanes}
 
 - 派工路由（routing.json）：${profile.routingPath ? "`" + profile.routingPath + "`" : "未配置（fanout 的 roles / plan 会 fail-closed）"}
 - 计划落点：${profile.plansDir ? "`" + profile.plansDir + "`" : "目标仓 docs/"}
-- 看板默认仓：${(profile.boardRepos ?? []).map((r) => "`" + r + "`").join("、") || "未配置"}
+- 看板范围：当前 GitHub 账号的全部作者 PR + 本机 Keel 已记录的关联 PR；旧 boardRepos 不再限制读取范围。
 
 ## 个人规则补充
 

@@ -5,7 +5,7 @@
   "name": "KEEL",
   "description": "日常随时可问的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）。",
   "whenToUse": "用户要问 Jev 做选择、评分或是非判断；或要推进 PR、盯 CI 与评审、修 bug、按 pstack 方法做调查/重构/功能，以及清理 worktree、查派工角色时使用。",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -248,7 +248,7 @@
     },
     {
       "name": "keel_report",
-      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样（subagent 派工不报 accepted）；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report（subagent 交回后直接 final）。写代码节点越域返回 SCOPE_VIOLATION。返回 next。 一次性 sub 不换主控模型、不回退 Worker；同批 subagents 用 parallel_reports 汇收，单 sub 成功须带真实 native_agent_id 与 execution_route。",
+      "description": "把节点结果交回 KEEL。phase：setup=start_team 原样；accepted=create_worker 回执（worker_id、worker_session_id、dispatch_outcome{dispatched,wakeKind}、queued_message_id）或插件任务的 task_id、revision、task_run_id 原样（subagent 派工不报 accepted）；reconcile=只读查询；recover=next 指定的恢复动作结果；final=报告路径或 inline_report（subagent 交回后直接 final）。写代码节点越域返回 SCOPE_VIOLATION。返回 next。 一次性 sub 不换主控模型、不回退 Worker；同批 subagents 用 parallel_reports 汇收，单 sub 成功须带真实 native_agent_id 与 execution_route。 phase=progress 只记录当前dispatch_key的真实子步骤step，不推进图、不派新任务、不代替final。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -263,7 +263,8 @@
               "accepted",
               "reconcile",
               "recover",
-              "final"
+              "final",
+              "progress"
             ]
           },
           "dispatch_key": {
@@ -326,6 +327,12 @@
             "items": {
               "type": "object"
             }
+          },
+          "step": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8,
+            "description": "progress：当前真实子步骤（从1开始），须属于当前节点的playbook_steps；只允许绑定的主控上报，不读聊天猜测。"
           }
         },
         "required": [
@@ -526,7 +533,7 @@
     },
     {
       "name": "pr_status",
-      "description": "读取 PR 状态（只读，调用本机 gh/git 访问 GitHub）：车道、上游 watch-pr 判定（冲突→评审线程→CI→合并闸→等待→可合并）、Ready 门禁、允许动作与下一步（Jev J8/J6 只在允许动作内排序）。可合并时只返回链接，插件不提供合并。board:true 时改为刷新“我名下 open PR”看板：每个 PR 的车道、判定、下一步，更新面板与未读角标。",
+      "description": "读取 PR 状态（只读，调用本机 gh/git 访问 GitHub）：车道、上游 watch-pr 判定（冲突→评审线程→CI→合并闸→等待→可合并）、Ready 门禁、允许动作与下一步（Jev J8/J6 只在允许动作内排序）。可合并时只返回链接，插件不提供合并。board:true 时改为刷新“我名下 open PR”看板：每个 PR 的车道、判定、下一步，更新面板与未读角标。 board:true 为跨仓库实时看板；不再只取前50/15条，不调用Jev，不修改PR。读取失败保留缓存并标明error，complete:false不是完整结果。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -549,14 +556,26 @@
           },
           "board": {
             "type": "boolean",
-            "description": "刷新我名下 open PR 看板，而不是读单个 PR。"
+            "description": "读取跨仓库 PR 看板，而不是单个 PR；不受 boardRepos 限制。"
           },
           "repos": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "board：限定 owner/name 列表；缺省用本机配置。"
+            "description": "兼容参数：仅筛选本次工具返回的 rows，不限制全局抓取与面板；total 仍为全局数量。"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "open",
+              "all"
+            ],
+            "description": "board:true 时：open进行中，all包含已合并/关闭。跨全部仓库分页读取本人PR并补充本机Keel关联。"
+          },
+          "refresh": {
+            "type": "boolean",
+            "description": "board:true 时请求刷新；more:true/complete:false 表示尚未分页完成，可继续调用，不把第一页当全部。"
           }
         }
       }
@@ -959,7 +978,7 @@
   "mainView": {
     "title": "KEEL",
     "icon": "chart-column",
-    "html": "graph-view.html"
+    "html": "panel.html"
   },
   "badge": true,
   "confirm": true,
@@ -972,7 +991,6 @@
     ]
   },
   "agent": {
-    "schedule": true,
     "background": true,
     "tasks": true
   },

@@ -551,8 +551,8 @@ describe("internal tool calls", () => {
     const names = new Set(Object.keys(TOOLS));
     const used: string[] = [];
     for (const f of files) for (const m of readFileSync(f, "utf8").matchAll(/runTool\([^,]+,\s*"([a-z_]+)"/g)) used.push(m[1]!);
-    expect(used.length).toBeGreaterThan(0);
     expect(used.filter((n) => !names.has(n))).toEqual([]);
+    expect(readFileSync("src/main/index.ts", "utf8")).toMatch(/runTool\(makeContext\([^\n]+\), msg\.tool, args\)/);
   });
 });
 

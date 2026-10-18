@@ -17,6 +17,7 @@ import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.
 import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
 import { collectParallelReports, readExecutionRoute, sameRoute } from '../graph/collaboration.ts';
+import { recordDashboardProgress } from "../dashboard/progress.ts";
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
 import { append, newRunId } from "../ledger.ts";
 import { findProfile, resolveProfileForHarness } from "../manual/resolve.ts";
@@ -1020,6 +1021,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
   const runId = requireString(args, "run_id");
   await assertNotRunWorker(ctx, runId);
   const phase = requireString(args, "phase");
+  if (phase === "progress") return recordDashboardProgress(ctx, args);
   if (!["setup", "accepted", "reconcile", "recover", "final"].includes(phase)) {
     throw new KeelError("INVALID_INPUT", "phase 须为 setup | accepted | reconcile | recover | final。");
   }

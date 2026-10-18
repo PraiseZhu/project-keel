@@ -65,7 +65,7 @@ export function dashboardFixture(now = Date.now()) {
   const waiting = makeRun(rows[3]!, "wait-ci", now - 90_000);
   waiting.nodes["wait-ci"]!.dispatch_state = undefined;
   saveRun(host, waiting);
-  const gate = makeRun(rows[4]!, "g-accept", now - 300_000, { status: "await_sol", next: { kind: "decide", gate_id: "g-accept", question: "这个交互是否符合你确认的边界？需要主控核对后继续。", options: ["adopt", "revise"] } });
+  const gate = makeRun(rows[4]!, "g-accept", now - 300_000, { status: "await_sol", next: { kind: "decide", gate_id: "human:approval", question: "这项操作需要你的明确授权，主控不会自行越过。", options: ["retry", "stop"] } });
   saveRun(host, gate);
   saveRun(host, makeRun(rows[5]!, "astra-final-review", now - 25_000));
   saveRun(host, makeRun(rows[6]!, "report-ready", now - 120_000, { status: "done" }));

@@ -84,7 +84,7 @@ function isLanePreset(v: unknown): v is LanePreset {
   return typeof v === "string" && Object.hasOwn(LANE_PRESETS, v);
 }
 
-function parseLanes(raw: unknown, built: readonly LaneMatch[]): readonly LaneMatch[] {
+export function parseLanes(raw: unknown, built: readonly LaneMatch[]): readonly LaneMatch[] {
   if (raw === undefined) return built;
   if (!Array.isArray(raw)) throw new KeelError("LANE_CONFIG_INVALID", "kv.lanes 必须是数组。");
   return raw.map((item, i) => {

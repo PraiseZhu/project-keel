@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -14,7 +14,8 @@ const renderHtml = async () => {
   .replace("<body>", '<body data-preview="fixture">')
   .replace("</body>", '<div style="position:fixed;bottom:0;left:0;padding:2px 6px;font:9px system-ui;background:#17212b;color:#adc3d1;z-index:1000;pointer-events:none">测试数据预览 · 不执行模型 / GitHub 写入</div></body>');
 };
-const output = join(root, "_tmp/dashboard-validation/keel-dashboard-preview.html");
+const requestedOutput = process.argv.find((argument) => argument.startsWith("--out="))?.slice(6);
+const output = requestedOutput ? resolve(root, requestedOutput) : join(root, "_tmp/dashboard-validation/keel-dashboard-preview.html");
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(output, await renderHtml());
 if (process.argv.includes("--export")) {

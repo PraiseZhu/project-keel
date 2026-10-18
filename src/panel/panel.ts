@@ -1,5 +1,5 @@
 import { BOARD_COLUMNS, BOARD_REFRESH_MS, pullUrl, type BoardCard, type BoardStage } from "../shared/dashboard.ts";
-import { activityOf, ageLabel, applyDashboardMessage, emptyDashboard, filteredCards, type DashboardFilters } from "./dashboard-model.ts";
+import { activityOf, ageLabel, applyDashboardMessage, cardState, emptyDashboard, filteredCards, type DashboardFilters } from "./dashboard-model.ts";
 import { cardBody, dashboardMarkup, escapeHtml, heading, icon } from "./dashboard-render.ts";
 
 const root = document.querySelector<HTMLElement>("#dashboard-root")!;
@@ -27,6 +27,8 @@ let renderFrame: number | undefined;
 let transportError = "";
 let trackingWarning = "";
 let selectedKey: string | null = null;
+let detailContext = "";
+let detailRequestId: string | undefined;
 let returnFocus: HTMLElement | null = null;
 let disposed = false;
 const elements = new Map<string, HTMLElement>();
@@ -67,13 +69,18 @@ function number(element: HTMLElement, value: number): void {
 
 function geometry(): void {
   const sections = Array.from(columns.querySelectorAll<HTMLElement>(".column"));
-  const stacked = getComputedStyle(columns).display === "flex" && getComputedStyle(columns).flexDirection === "column";
-  header.hidden = stacked;
-  if (!stacked) {
-    headerTrack.style.gap = getComputedStyle(columns).columnGap;
-    headerTrack.style.gridTemplateColumns = sections.map((section) => `${section.getBoundingClientRect().width}px`).join(" ");
+  const layout = getComputedStyle(columns);
+  const stacked = layout.display === "flex" && layout.flexDirection === "column";
+  const widths = columns.hidden || layout.display === "none" || stacked ? [] : sections.map((section) => section.getBoundingClientRect().width);
+  header.hidden = widths.length !== BOARD_COLUMNS.length || widths.some((width) => !Number.isFinite(width) || width <= 0);
+  if (!header.hidden) {
+    headerTrack.style.gap = layout.columnGap;
+    headerTrack.style.gridTemplateColumns = widths.map((width) => `${width}px`).join(" ");
     headerTrack.style.width = `${columns.scrollWidth}px`;
     header.scrollLeft = viewport.scrollLeft;
+  } else {
+    headerTrack.style.removeProperty("grid-template-columns");
+    headerTrack.style.removeProperty("width");
   }
   const tabs = select(".filter-tabs");
   tabs.classList.toggle("thumb-animate", canAnimate());
@@ -133,7 +140,7 @@ function render(): void {
         element.dataset.key = row.key;
         elements.set(row.key, element);
       }
-      const activity = activityOf(row, now);
+      const { activity, status } = cardState(row, now);
       const fingerprint = JSON.stringify([row.title, row.sessionLabel, row.state, row.isDraft, row.stage, activity, row.status, row.detail, row.step, row.error, row.headSha, row.ci]);
       if (bodies.get(row.key) !== fingerprint) {
         const focus = element.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.action : undefined;
@@ -153,12 +160,14 @@ function render(): void {
       element.classList.toggle("new-card", fresh && canAnimate());
       element.style.setProperty("--i", String(Math.min(index, 6)));
       element.style.setProperty("--delay", `${Math.min(index * 18, 100)}ms`);
-      element.setAttribute("aria-label", `${row.repo} #${row.number}，${row.status}`);
+      element.setAttribute("aria-label", `${row.repo} #${row.number}，${status}`);
       const time = element.querySelector<HTMLElement>("time[data-time]");
       if (time) {
         const timestamp = row.activityAt ?? (Date.parse(row.updatedAt) || 0);
         time.dataset.time = String(timestamp);
-        time.textContent = `${row.activityAt ? "活动" : "GitHub"} · ${ageLabel(timestamp, now)}`;
+        time.dataset.kind = row.activityAt ? "活动" : "GitHub";
+        time.title = timestamp ? new Date(timestamp).toLocaleString() : "尚无活动时间";
+        time.textContent = `${time.dataset.kind} · ${ageLabel(timestamp, now)}`;
       }
       if (list.children[index] !== element) list.insertBefore(element, list.children[index] ?? null);
     }
@@ -171,24 +180,32 @@ function render(): void {
   const empty = select("#board-empty");
   empty.hidden = rows.length > 0;
   columns.hidden = rows.length === 0;
-  if (!rows.length) {
-    const title = store.error || transportError ? "暂时无法读取 PR" : !store.complete ? "正在同步你的 PR" : store.rows.size ? "没有匹配的 PR" : "所有事情，都已告一段落。";
-    const detail = store.error || transportError || (store.complete ? "可以切换仓库、搜索条件，或查看已合并和已关闭的 PR。" : "正在分页读取当前 GitHub 账号，不限制仓库，也不只取前15条。" );
-    empty.innerHTML = `<div>${icon(store.error || transportError ? "alert" : "board")}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(detail)}</p><button type="button" class="text-link" data-clear-filters>查看所有 PR ${icon("arrow")}</button></div>`;
-  }
   const warning = transportError || store.error || trackingWarning;
+  const offline = Boolean(transportError) || store.connection === "offline" && Boolean(store.at || store.lastSuccessAt || store.error);
+  const uncertain = !store.complete || store.connection !== "live" || Boolean(warning);
+  if (!rows.length) {
+    const hasFilters = filters.repo !== "all" || Boolean(filters.query.trim()) || filters.filter !== "all";
+    const title = store.rows.size ? "没有匹配的 PR" : offline ? "暂时无法读取 PR" : store.connection === "partial" || warning ? "尚无可确认的 PR" : !store.complete ? "正在同步你的 PR" : store.scope === "all" ? "当前没有 PR" : "当前没有进行中的 PR";
+    const detail = store.rows.size ? `可以切换仓库、搜索条件或状态筛选。${uncertain ? "当前数据尚未完整确认，不能据此判断其他 PR 的状态。" : ""}`
+      : warning || (offline ? "保留上次读取结果，等待重新核对 GitHub。" : !store.complete ? "正在分页读取当前 GitHub 账号，不限制仓库，也不只取前15条。" : store.scope === "all" ? "当前账号与本机关联范围内没有可显示的 PR。" : "可以切换显示范围，查看已合并和已关闭的 PR。");
+    const action = hasFilters ? `<button type="button" class="text-link" data-clear-filters>查看所有 PR ${icon("arrow")}</button>`
+      : offline || warning ? `<button type="button" class="text-link" data-retry-dashboard${refreshing ? " disabled" : ""}>重试读取 ${icon("arrow")}</button>` : "";
+    empty.innerHTML = `<div>${icon(offline || warning ? "alert" : "board")}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(detail)}</p>${action}</div>`;
+  }
   const banner = select("#board-warning");
   banner.hidden = !warning;
   banner.textContent = warning;
   const waitingForQuota = store.retryAt && store.retryAt > now;
-  const connection = transportError || store.connection === "offline" && store.error ? "等待重新连接" : waitingForQuota ? "等待 API 配额恢复" : store.connection === "partial" ? "部分状态待确认" : refreshing || !store.complete ? "正在同步" : "持续同步中";
+  const connection = waitingForQuota ? "等待 API 配额恢复" : offline ? "等待重新连接" : store.connection === "partial" ? "部分状态待确认" : refreshing || !store.complete ? "正在同步" : "持续同步中";
   select("#sync-state span").textContent = connection;
   select("#sync-state").classList.toggle("is-error", Boolean(warning));
   select("#last-sync").textContent = store.lastSuccessAt ? `GitHub · ${ageLabel(store.lastSuccessAt, now)}` : "尚未读取 GitHub";
-  select("#coverage-note").textContent = store.complete ? `${store.rows.size} 个 PR · 每30秒刷新` : `已读取 ${store.rows.size}/${Math.max(store.total, store.rows.size)} · 分页未结束`;
+  select("#coverage-note").textContent = store.invalidFrame ? `保留 ${store.rows.size} 个 PR · 本轮数据不完整` : offline ? `${store.rows.size} 个缓存 PR · 等待重新核对`
+    : store.complete ? `${store.rows.size} 个 PR · ${uncertain ? "部分状态待确认" : "每30秒刷新"}` : `已读取 ${store.rows.size}/${Math.max(store.total, store.rows.size)} · 分页未结束`;
   select("#board-owner").textContent = store.owner ? `@${store.owner} · 不限仓库` : "GitHub 账号待确认";
   select<HTMLButtonElement>("#board-refresh").disabled = refreshing;
   updateRepos();
+  if (detailDialog.open) updateDetail();
   geometry();
   if (canAnimate()) for (const [key, element] of elements) {
     const previous = oldRects.get(key);
@@ -230,11 +247,16 @@ function finishRequest(reqId: string): void {
 
 async function ask(op: string, extra: Record<string, unknown> = {}): Promise<void> {
   if (disposed) return;
-  if (!channel) { transportError = "当前宿主不支持面板通信，请更新 Cindy 后重试。"; queueRender(); return; }
+  if (!channel) {
+    transportError = "当前宿主不支持面板通信，请更新 Cindy 后重试。";
+    if (op === "dashboard-detail" && detailDialog.open) select("#detail-policy").textContent = transportError;
+    queueRender(); return;
+  }
   if (op === "dashboard" && (refreshing || document.visibilityState === "hidden")) return;
   if (op === "dashboard") { refreshing = true; queueRender(); }
+  const requestedDetail = detailContext;
   await wake();
-  if (disposed) return;
+  if (disposed || op === "dashboard-detail" && (!detailDialog.open || requestedDetail !== detailContext)) return;
   const reqId = `${panelId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const message = { reqId, panelId, op, scope: store.scope, ...extra };
   const timeout = window.setTimeout(() => {
@@ -242,10 +264,13 @@ async function ask(op: string, extra: Record<string, unknown> = {}): Promise<voi
     if (op === "dashboard") {
       transportError = "宿主未在时限内返回，保留上次数据；稍后自动重试。";
       schedule(BOARD_REFRESH_MS);
+    } else if (op === "dashboard-detail" && reqId === detailRequestId && detailDialog.open) {
+      select("#detail-policy").textContent = "宿主未在时限内返回门禁信息；请重新打开详情重试。";
     }
     queueRender();
   }, 35_000);
   pending.set(reqId, { timeout, op });
+  if (op === "dashboard-detail") detailRequestId = reqId;
   channel.postMessage(message);
   let retries = 0;
   const resend = () => {
@@ -269,16 +294,32 @@ function closeRepoMenu(restoreFocus = false): void {
   if (restoreFocus) repoTrigger.focus();
 }
 
-function openDetail(key: string, element?: HTMLElement): void {
-  const row = store.rows.get(key);
-  if (!row) return;
-  selectedKey = key;
-  returnFocus = element ?? document.activeElement as HTMLElement;
+function updateDetail(): void {
+  const row = selectedKey ? store.rows.get(selectedKey) : undefined;
+  if (!row) { detailDialog.close(); return; }
+  const { status, detail } = cardState(row, Date.now());
   select("#detail-title").textContent = `${row.repo} #${row.number}`;
   const session = typeof row.sessionId === "string" && /^[A-Za-z0-9:_-]{8,160}$/.test(row.sessionId) ? `<a class="detail-link" href="cindy://sessions/${encodeURIComponent(row.sessionId)}">打开关联会话</a>` : "";
-  select("#detail-body").innerHTML = `<p>${escapeHtml(row.title)}</p><dl><dt>当前状态</dt><dd>${escapeHtml(row.status)}</dd><dt>来源</dt><dd>${row.linked ? "GitHub + 本机 Keel 关联记录" : "GitHub（本机尚无 Keel 流程记录）"}</dd><dt>当前提交</dt><dd><code>${escapeHtml(row.headSha || "待确认")}</code></dd><dt>流程说明</dt><dd>${escapeHtml(row.detail)}</dd></dl><a class="detail-link" href="${pullUrl(row.repo, row.number)}" target="_blank" rel="noopener noreferrer">在 GitHub 查看 PR ${icon("arrow")}</a>${session}<p id="detail-policy" role="status">正在核对该仓就绪与交接门禁…</p>`;
+  const freshness = transportError || store.connection === "offline" ? "以下为已读取的数据，尚未重新确认 GitHub 当前状态。" : store.connection === "partial" || !store.complete ? "部分状态尚未完成核对；请结合读取提示判断。" : "";
+  select("#detail-summary").innerHTML = `${freshness ? `<p role="status">${freshness}</p>` : ""}<p>${escapeHtml(row.title)}</p><dl><dt>当前状态</dt><dd>${escapeHtml(status)}</dd><dt>来源</dt><dd>${row.linked ? "GitHub + 本机 Keel 关联记录" : "GitHub（本机尚无 Keel 流程记录）"}</dd><dt>当前提交</dt><dd><code>${escapeHtml(row.headSha || "待确认")}</code></dd><dt>流程说明</dt><dd>${escapeHtml(detail)}</dd></dl><a class="detail-link" href="${pullUrl(row.repo, row.number)}" target="_blank" rel="noopener noreferrer">在 GitHub 查看 PR ${icon("arrow")}</a>${session}`;
+  const nextContext = JSON.stringify([store.owner, store.scope, row.key, row.headSha, row.state]);
+  if (detailContext !== nextContext) {
+    detailContext = nextContext;
+    detailRequestId = undefined;
+    const ended = row.state === "MERGED" || row.state === "CLOSED";
+    select("#detail-policy").textContent = ended ? "这是已结束 PR 的历史记录，不再推进就绪与交接门禁。" : "正在核对该仓就绪与交接门禁…";
+    if (!ended) void ask("dashboard-detail", { key: row.key });
+  }
+}
+
+function openDetail(key: string, element?: HTMLElement): void {
+  if (!store.rows.has(key)) return;
+  selectedKey = key;
+  detailContext = "";
+  returnFocus = element ?? document.activeElement as HTMLElement;
+  select("#detail-body").innerHTML = '<div id="detail-summary"></div><p id="detail-policy" role="status"></p>';
   if (!detailDialog.open) detailDialog.showModal();
-  void ask("dashboard-detail", { key });
+  updateDetail();
 }
 
 channel?.addEventListener("message", ({ data }) => {
@@ -292,22 +333,24 @@ channel?.addEventListener("message", ({ data }) => {
     finishRequest(data.reqId);
     if (data.scope !== store.scope) return;
     transportError = "";
-    schedule(data.retryAt && data.retryAt > Date.now() ? data.retryAt - Date.now() : data.error || data.complete ? BOARD_REFRESH_MS : 650);
+    schedule(data.retryAt && data.retryAt > Date.now() ? data.retryAt - Date.now() : data.complete || store.connection === "offline" ? BOARD_REFRESH_MS : 650);
     queueRender();
     return;
   }
   if (data.type === "dashboard-done" && data.target === panelId) { finishRequest(data.reqId); return; }
   if (data.type === "dashboard-error" && data.target === panelId) {
     const request = pending.get(data.reqId);
+    if (!request) return;
     finishRequest(data.reqId);
-    if (request?.op === "dashboard-detail") { const element = root.querySelector("#detail-policy"); if (element) element.textContent = String(data.message ?? "门禁信息暂不可读"); }
+    if (request?.op === "dashboard-detail") { const element = root.querySelector("#detail-policy"); if (element && data.reqId === detailRequestId && detailDialog.open) element.textContent = String(data.message ?? "门禁信息暂不可读"); }
     else { transportError = String(data.message ?? "读取失败"); schedule(BOARD_REFRESH_MS); queueRender(); }
     return;
   }
   if (data.type === "dashboard-warning") { trackingWarning = String(data.message ?? "部分关联记录不可读"); queueRender(); return; }
   if (data.type === "dashboard-invalidated" && typeof data.key === "string" && document.visibilityState !== "hidden") { void ask("dashboard-local", { key: data.key }); return; }
-  if (data.type === "dashboard-detail" && data.key === selectedKey && detailDialog.open) {
+  if (data.type === "dashboard-detail") {
     finishRequest(data.reqId);
+    if (data.key !== selectedKey || !detailDialog.open || data.reqId !== detailRequestId) return;
     const detail = data.detail;
     const element = root.querySelector("#detail-policy");
     if (element) element.textContent = detail && typeof detail === "object" ? String(detail.merge_hint ?? detail.rendered ?? "门禁信息已返回，请以 GitHub 当前提交为准。") : "门禁信息暂不可读。";
@@ -330,9 +373,9 @@ root.addEventListener("click", (event) => {
     return;
   }
   if (target.closest("[data-load-more]")) { maximumPerColumn += 40; queueRender(); return; }
-  if (target.closest(".search-clear")) { search.value = ""; filters.query = ""; search.focus(); queueRender(); return; }
-  if (target.closest("[data-clear-filters]")) { filters = { repo: "all", query: "", filter: "all", stage: null }; search.value = ""; queueRender(); return; }
-  if (target.closest("#board-refresh")) { transportError = ""; void ask("dashboard", { force: true }); return; }
+  if (target.closest(".search-clear")) { search.value = ""; filters.query = ""; search.closest(".search")?.classList.remove("has-value"); search.focus(); queueRender(); return; }
+  if (target.closest("[data-clear-filters]")) { filters = { repo: "all", query: "", filter: "all", stage: null }; focusedStage = null; search.value = ""; search.closest(".search")?.classList.remove("has-value"); maximumPerColumn = 40; queueRender(); return; }
+  if (target.closest("#board-refresh") || target.closest("[data-retry-dashboard]")) { transportError = ""; void ask("dashboard", { force: true }); return; }
   if (target.closest("[data-close-detail]")) { detailDialog.close(); return; }
   if (target.closest("a")) return;
   const card = target.closest<HTMLElement>(".pr-card[data-key]");
@@ -343,7 +386,8 @@ search.addEventListener("input", () => { filters.query = search.value; maximumPe
 select<HTMLSelectElement>("#scope-filter").addEventListener("change", (event) => {
   for (const key of [...pending.keys()]) finishRequest(key);
   store = emptyDashboard((event.target as HTMLSelectElement).value === "all" ? "all" : "open");
-  filters.repo = "all"; maximumPerColumn = 40; transportError = "";
+  filters.repo = "all"; maximumPerColumn = 40; transportError = ""; trackingWarning = "";
+  if (detailDialog.open) detailDialog.close();
   void ask("dashboard-restore").then(() => ask("dashboard", { force: true }));
   queueRender();
 });
@@ -358,7 +402,7 @@ repoList.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") { closeRepoMenu(true); focusedStage = null; queueRender(); } });
-detailDialog.addEventListener("close", () => { selectedKey = null; if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); });
+detailDialog.addEventListener("close", () => { selectedKey = null; detailContext = ""; detailRequestId = undefined; if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); });
 viewport.addEventListener("scroll", () => { header.scrollLeft = viewport.scrollLeft; }, { passive: true });
 const resize = new ResizeObserver(geometry);
 resize.observe(viewport);

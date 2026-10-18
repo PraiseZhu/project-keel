@@ -48,6 +48,7 @@ export interface BoardCard extends RemotePull {
   sessionId?: string;
   sessionLabel: string;
   activityAt?: number;
+  workflowAt?: number;
   step: { index: number | null; labels: readonly string[]; linear: boolean };
   error?: string;
 }
@@ -99,8 +100,9 @@ export function pullUrl(repo: string, number: number): string {
 export function withNewestActivity(previous: BoardCard | undefined, next: BoardCard): BoardCard {
   const safe = { ...next, url: pullUrl(next.repo, next.number) };
   if (previous && previous.runId && previous.runId === next.runId && previous.headSha === next.headSha
-    && previous.state === "OPEN" && next.state === "OPEN" && !previous.error && !next.error && (previous.activityAt ?? 0) > (next.activityAt ?? 0)) {
-    return { ...safe, activity: previous.activity, activityAt: previous.activityAt, stage: previous.stage, status: previous.status, detail: previous.detail, step: previous.step };
+    && previous.state === "OPEN" && next.state === "OPEN" && !previous.error && !next.error && previous.stage !== "handoff" && next.stage !== "handoff"
+    && (previous.workflowAt ?? previous.activityAt ?? 0) > (next.workflowAt ?? next.activityAt ?? 0)) {
+    return { ...safe, activity: previous.activity, activityAt: previous.activityAt, workflowAt: previous.workflowAt, stage: previous.stage, status: previous.status, detail: previous.detail, step: previous.step };
   }
   return safe;
 }

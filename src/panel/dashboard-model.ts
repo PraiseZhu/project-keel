@@ -11,6 +11,7 @@ export interface DashboardStore {
   total: number;
   complete: boolean;
   invalidFrame: boolean;
+  rowCount?: number;
   connection: "live" | "partial" | "offline";
   at: number;
   lastSuccessAt: number;
@@ -30,6 +31,7 @@ export function validCard(value: unknown): value is BoardCard {
   return validPullRef(row.repo, row.number) && row.key === pullKey(row.repo, row.number)
     && typeof row.title === "string" && typeof row.sessionLabel === "string" && typeof row.detail === "string" && typeof row.status === "string"
     && typeof row.headSha === "string" && typeof row.updatedAt === "string" && ciValid
+    && (row.workflowAt === undefined || typeof row.workflowAt === "number" && Number.isFinite(row.workflowAt))
     && ["local", "cloud", "handoff"].includes(row.stage)
     && ["running", "waiting", "needs-human", "ready", "handed-off", "paused", "done", "unknown", "stale", "closed"].includes(row.activity)
     && ["OPEN", "CLOSED", "MERGED", "UNKNOWN"].includes(row.state)
@@ -51,12 +53,21 @@ export function applyDashboardMessage(store: DashboardStore, raw: unknown, panel
       if (store.epoch) store.retiredEpochs.add(store.epoch);
       store.epoch = message.epoch;
     }
-    if (!message.keepExisting || store.owner !== message.owner) store.rows.clear();
+    if (store.owner !== message.owner) {
+      store.rows.clear();
+      store.total = 0;
+      store.at = 0;
+      store.lastSuccessAt = 0;
+      store.connection = "offline";
+      store.error = undefined;
+      store.retryAt = undefined;
+    } else if (!message.keepExisting && message.rowCount === undefined) store.rows.clear();
     store.owner = message.owner;
     store.generation = message.generation;
     store.seen.clear();
     store.complete = false;
-    store.invalidFrame = false;
+    store.rowCount = typeof message.rowCount === "number" ? message.rowCount : undefined;
+    store.invalidFrame = message.rowCount !== undefined && (!Number.isSafeInteger(message.rowCount) || Number(message.rowCount) < 0);
     return true;
   }
   if (message.epoch !== store.epoch || message.generation !== store.generation || message.owner !== store.owner) return false;
@@ -74,12 +85,15 @@ export function applyDashboardMessage(store: DashboardStore, raw: unknown, panel
     return true;
   }
   if (message.type === "dashboard-end") {
+    if (message.rowCount !== undefined && (!Number.isSafeInteger(message.rowCount) || Number(message.rowCount) < 0
+      || message.rowCount !== store.seen.size || store.rowCount !== undefined && message.rowCount !== store.rowCount)) store.invalidFrame = true;
+    if (store.rowCount !== undefined && store.rowCount !== store.seen.size) store.invalidFrame = true;
     store.complete = message.complete === true && !store.invalidFrame;
-    store.connection = store.invalidFrame ? "offline" : message.connection === "live" || message.connection === "partial" ? message.connection : "offline";
+    store.connection = store.invalidFrame ? "offline" : message.connection === "live" ? store.complete ? "live" : "partial" : message.connection === "partial" ? "partial" : "offline";
     if (store.complete) for (const key of store.rows.keys()) if (!store.seen.has(key)) store.rows.delete(key);
     store.total = typeof message.total === "number" ? Math.max(message.total, store.rows.size) : store.rows.size;
     store.at = typeof message.at === "number" ? message.at : store.at;
-    store.lastSuccessAt = typeof message.lastSuccessAt === "number" ? message.lastSuccessAt : store.lastSuccessAt;
+    if (!store.invalidFrame && typeof message.lastSuccessAt === "number") store.lastSuccessAt = message.lastSuccessAt;
     store.error = store.invalidFrame ? "看板收到不完整数据，保留已显示的卡片；请重试或重新打开面板。" : typeof message.error === "string" ? message.error : undefined;
     store.retryAt = typeof message.retryAt === "number" ? message.retryAt : undefined;
     return true;
@@ -89,6 +103,15 @@ export function applyDashboardMessage(store: DashboardStore, raw: unknown, panel
 
 export function activityOf(row: BoardCard, now: number): BoardActivity {
   return row.activity === "running" && (!row.activityAt || row.activityAt > now || now - row.activityAt > ACTIVITY_FRESH_MS) ? "stale" : row.activity;
+}
+
+export function cardState(row: BoardCard, now: number): { activity: BoardActivity; status: string; detail: string } {
+  const activity = activityOf(row, now);
+  return {
+    activity,
+    status: activity === "stale" && row.activity === "running" ? "活动待确认" : row.status,
+    detail: activity === "stale" && row.activity !== "stale" && !row.error ? "活动证据已过期；GitHub 刷新不会伪造任务心跳。" : row.detail,
+  };
 }
 
 export interface DashboardFilters {

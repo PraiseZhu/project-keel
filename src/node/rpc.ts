@@ -10,6 +10,7 @@ import { changedFiles, excludeKeel, gitDiff } from "./git/files.ts";
 import { readNodeReportFile } from "./git/report-file.ts";
 import { audit, createWorktree, gitState, originBaseSha, prune } from "./git/worktree.ts";
 import { prBoard, prOpen, prReady, prReply, prThreads } from "./pr/actions.ts";
+import { boardLinkedPull } from "./pr/board.ts";
 import { resolveExisting, snapshot } from "./pr/snapshot.ts";
 import { inspectVigil } from "./pr/vigil-handoff.ts";
 import { bothStopHookStatuses } from "./hooks-status.ts";
@@ -49,6 +50,7 @@ const methods: Record<string, Method> = {
   "pr/threads": (p, profile) => prThreads(profile, p as any),
   "pr/reply": (p) => prReply(p as any),
   "pr/board": (p, profile) => prBoard(profile, p as any),
+  "pr/board-linked": (p) => boardLinkedPull(p as { repo: string; number: number }),
   "git/state": (p) => gitState(p.repo_dir),
   "git/base-sha": (p) => originBaseSha(p as any),
   "git/patch-id": (p) => patchId(p as any),

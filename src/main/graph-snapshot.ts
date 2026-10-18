@@ -1,7 +1,7 @@
 // Read-only load of runs/*/graph-state.json from the plugin data dir.
 
 import type { Host } from "./host.ts";
-import type { GraphState } from "../panel/graph-model.ts";
+import type { GraphState } from "./store/runs.ts";
 
 /** Old create-on-write leftovers: only run_id / status / nudge_* fields, never nodes, spec_id, or goal. */
 export function isPlaceholderRun(r: { nodes?: unknown; spec_id?: unknown; goal?: unknown }): boolean {

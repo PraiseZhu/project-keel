@@ -7,6 +7,7 @@ import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { KeelError } from "../host.ts";
 import { node, requireString, type ToolContext } from "../context.ts";
 import { loadReplyConfirm } from "../config.ts";
+import { refreshDashboard } from "../dashboard/service.ts";
 import { assertNotHandedOff, currentHandoff, writeHandoff, type HandoffRecord } from "../handoff.ts";
 import { judge, judgeItems } from "../judge.ts";
 import { append } from "../ledger.ts";
@@ -223,19 +224,8 @@ export async function prReply(ctx: ToolContext, args: Record<string, unknown>) {
 }
 
 export async function prBoard(ctx: ToolContext, args: Record<string, unknown>) {
-  const rows = await node<{ repo: string; number: number; title: string; url: string; isDraft: boolean; preset: string }[]>(ctx, "pr/board", Array.isArray(args.repos) ? { repos: args.repos } : {});
-  const detailed = [];
-  for (const r of rows.slice(0, 15)) {
-    try {
-      const s = await status(ctx, { repo: r.repo, pr: r.number }, { jev: false });
-      detailed.push({ repo: r.repo, number: r.number, title: r.title, url: r.url, preset: r.preset, decision: s.decision, next_action: s.nextAction, handed_off: s.handedOff, mergeable: s.mergeable });
-    } catch (e) {
-      detailed.push({ repo: r.repo, number: r.number, title: r.title, url: r.url, preset: r.preset, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
-    }
-  }
-  const ready = detailed.filter((d) => "mergeable" in d && d.mergeable).length;
-  ctx.host.broadcast({ type: "board", rows: detailed, at: new Date(ctx.host.now()).toISOString() });
-  ctx.host.badge(ready > 0, ready ? `${ready} 个 PR 可合并` : undefined);
-  await ctx.host.fs({ op: "write", root: "data", path: "board/latest.json", content: JSON.stringify({ at: new Date(ctx.host.now()).toISOString(), rows: detailed }) });
-  return { rows: detailed, total: rows.length, shown: detailed.length, mergeable: ready };
+  const snapshot = await refreshDashboard(ctx, { scope: args.scope === "all" ? "all" : "open", force: args.refresh === true });
+  const repos = Array.isArray(args.repos) ? args.repos.filter((repo): repo is string => typeof repo === "string") : [];
+  const rows = repos.length ? snapshot.rows.filter((row) => repos.some((repo) => repo.toLowerCase() === row.repo.toLowerCase())) : snapshot.rows;
+  return { ...snapshot, rows, shown: rows.length, more: !snapshot.complete };
 }

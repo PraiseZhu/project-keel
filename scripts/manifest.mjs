@@ -102,6 +102,17 @@ Object.assign(reportTool.parameters.properties, {
   parallel_reports: { type: 'array', description: 'next.subagents 的全量回报；每项含 dispatch_key、不同 native_agent_id、execution_route、report(NodeReport)。必须收齐所有协作模型，任一失败不得报全体成功。', items: { type: 'object' } },
 });
 reportTool.description += ' 一次性 sub 不换主控模型、不回退 Worker；同批 subagents 用 parallel_reports 汇收，单 sub 成功须带真实 native_agent_id 与 execution_route。';
+reportTool.parameters.properties.phase.enum.push("progress");
+reportTool.parameters.properties.step = { type: "integer", minimum: 1, maximum: 8, description: "progress：当前真实子步骤（从1开始），须属于当前节点的playbook_steps；只允许绑定的主控上报，不读聊天猜测。" };
+reportTool.description += " phase=progress 只记录当前dispatch_key的真实子步骤step，不推进图、不派新任务、不代替final。";
+const boardTool = tools.find((tool) => tool.name === "pr_status");
+boardTool.parameters.properties.board.description = "读取跨仓库 PR 看板，而不是单个 PR；不受 boardRepos 限制。";
+boardTool.parameters.properties.repos.description = "兼容参数：仅筛选本次工具返回的 rows，不限制全局抓取与面板；total 仍为全局数量。";
+Object.assign(boardTool.parameters.properties, {
+  scope: { type: "string", enum: ["open", "all"], description: "board:true 时：open进行中，all包含已合并/关闭。跨全部仓库分页读取本人PR并补充本机Keel关联。" },
+  refresh: { type: "boolean", description: "board:true 时请求刷新；more:true/complete:false 表示尚未分页完成，可继续调用，不把第一页当全部。" },
+});
+boardTool.description += " board:true 为跨仓库实时看板；不再只取前50/15条，不调用Jev，不修改PR。读取失败保留缓存并标明error，complete:false不是完整结果。";
 
 const manifest = {
   schemaVersion: 3,
@@ -128,14 +139,14 @@ const manifest = {
   // tool behind the setup card until a key is saved.
   setup: { requires: [] },
   panel: { title: "KEEL", html: "panel.html" },
-  mainView: { title: "KEEL", icon: "chart-column", html: "graph-view.html" },
+  mainView: { title: "KEEL", icon: "chart-column", html: "panel.html" },
   badge: true,
   confirm: true,
   fs: true,
   sessionContext: true,
   card: {},
   subscribe: { topics: ["turn"] },
-  agent: { schedule: true, background: true, tasks: true },
+  agent: { background: true, tasks: true },
   manual: {
     items: [
       { dir: "manual/keel", name: "keel", description: "中文入口：工具地图、车道、用户规则覆盖层、Cursor→Cindy 对照、并行派工协议。" },

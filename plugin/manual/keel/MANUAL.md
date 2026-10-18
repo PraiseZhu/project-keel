@@ -15,7 +15,7 @@
 |---|---|---|
 | 日常问 Jev | `jev` | 与旧 typesafe-jev `evaluate` 参数完全相同，或简写 `{question, kind, options}` |
 | 开一次图运行 | `keel_run` | 聊清需求后调用，必须带 `lead`（codex / claude-code / pi）；返回 `{run_id, profile, next}`，之后只照 next 做 |
-| 交回节点结果 | `keel_report` | `setup` / `accepted` / `reconcile` / `recover` / `final` |
+| 交回节点结果 | `keel_report` | `setup` / `accepted` / `reconcile` / `recover` / `final`；`progress` 只记录真实子步骤 |
 | 阻塞等待 | `keel_wait` | CI / 插件任务 / 在途节点，最长 15 分钟 |
 | 回答方向门 | `keel_gate` | `run_id` + `gate_id` + `answer`；done 门选 `waive` 时还要 `authorization_source` |
 | 看 run 状态 | `keel_status` | 不推进图 |
@@ -86,6 +86,22 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 6. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。
+
+## 看板与真实步骤
+
+面板和主视图只读展示三列：本地工作流 → 云端检查至全绿 → 已交接。`pr_status({board:true, scope:"open"|"all", refresh?:true})` 按当前 GitHub 账号跨仓分页；`complete:false` 或 `more:true` 说明尚未读完，按返回的重试时间继续调用。旧 `boardRepos` 不再缩小全局看板范围；`repos` 只筛选本次工具返回的 `rows`，不影响全局读取、`total` 或面板。界面的仓库筛选在本地进行。
+
+本人在其它电脑创建的 PR 从 GitHub 统一读取；本机 Keel 索引还补充处理过的非本人作者 PR。其它电脑未共享的非本人 PR 关联与私有运行步骤不能凭空取得。未关联流程显示「步骤 ?」。Mini 内部盯梢未接入，只在已有有效交接记录时标「已交接」，不推断已可合并。
+
+执行中如需显示本地步骤，由绑定的主控在实际进入该步骤时调用：
+
+```json
+{"run_id":"<本次run>","phase":"progress","dispatch_key":"<当前在途派工key>","step":4}
+```
+
+这是 `keel_report` 的只记账分支：不推进图、不派工、不代替 `final`，不要为了让灯亮定时假报。编号必须来自当前节点的 `playbook_steps`（从1开始）；feature/refactoring 共8步，bug-fix 共6步。没有真实步骤回报时保留未知位置，不从聊天推断。错误会话、旧派工 key、已结束节点和超范围步骤都拒绝。
+
+PR 状态每30秒读取（面板可见时）；本地回报立即更新卡片。API失败、配额不足、部分不可读分别显示错误并保留已读卡片。不要把 GitHub 的 `updatedAt` 或刷新时间当作任务心跳，也不要把 `done` 当成 PR 已合并。查询详情继续使用原车道门禁判定，不执行写操作。
 
 ## subagent 派工
 

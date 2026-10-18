@@ -2,7 +2,7 @@ import { ACTIVITY_FRESH_MS, CLOUD_STEPS, HANDOFF_STEPS, LOCAL_STEPS, type BoardC
 import type { GraphRunState } from "../graph/state.ts";
 import type { HandoffRecord } from "../handoff.ts";
 
-const LOCAL_NODES = new Set(["explore", "research", "architect-plan", "implement", "astra-unstick", "g-retry-plan", "g-retry-implement"]);
+const LOCAL_NODES = new Set(["explore", "research", "architect-plan", "implement", "astra-unstick", "g-retry-plan", "g-retry-implement", "open-pr"]);
 const NODE_NAMES: Record<string, string> = {
   explore: "调查代码", research: "查证资料", "architect-plan": "制定方案", implement: "实现与本地验证", "astra-unstick": "处理实现阻塞",
   "open-pr": "整理提交并推送", "wait-ci": "等待云端检查", "fix-ci": "处理 CI", "triage-threads": "处理评审", "astra-final-review": "验证当前提交",
@@ -31,7 +31,13 @@ export function projectPull(pull: RemotePull, options: { now: number; ref?: Mana
   const local = !finished && !handoff && run && LOCAL_NODES.has(run.cursor);
   const labels = local && run.task_type in LOCAL_STEPS ? LOCAL_STEPS[run.task_type as keyof typeof LOCAL_STEPS] : CLOUD_STEPS;
   const remote = remoteStatus(pull);
-  const activityAt = run ? Math.max(Number(run.nodes?.[run.cursor]?.dispatch_state_at) || 0, Number(run.updated_at) || 0) : undefined;
+  const currentNode = run?.nodes?.[run.cursor];
+  const reported = run?.progress;
+  const progress = local && reported && Number.isInteger(reported.step) && reported.step > 0 && reported.step <= labels.length
+    && reported.nodeId === run.cursor && Boolean(currentNode?.dispatch_key) && reported.dispatchKey === currentNode?.dispatch_key
+    && Number.isFinite(reported.at) && reported.at > 0 && reported.at <= now ? reported : undefined;
+  const dispatchAt = currentNode?.dispatch_state_at;
+  const activityAt = Math.max(typeof dispatchAt === "number" && Number.isFinite(dispatchAt) && dispatchAt > 0 && dispatchAt <= now ? dispatchAt : 0, progress?.at ?? 0);
   const sessionId = run?.sol_session_id ?? ref?.sessionId;
   const card: BoardCard = {
     ...pull, stage: handoff ? "handoff" : local ? "local" : "cloud",
@@ -39,6 +45,7 @@ export function projectPull(pull: RemotePull, options: { now: number; ref?: Mana
     status: remote.status, detail: remote.detail, linked: Boolean(ref || run || handoff),
     sessionLabel: (typeof run?.goal === "string" ? run.goal.trim().slice(0, 200) : "") || pull.title || "未关联任务",
     ...(run?.run_id ? { runId: run.run_id } : ref?.runId ? { runId: ref.runId } : {}),
+    ...(run && Number.isFinite(run.updated_at) ? { workflowAt: run.updated_at } : {}),
     ...(sessionId ? { sessionId } : {}), ...(activityAt ? { activityAt } : {}),
     step: { labels: handoff ? HANDOFF_STEPS : labels, index: handoff ? 0 : local ? null : remote.index, linear: Boolean(local) },
   };
@@ -49,6 +56,10 @@ export function projectPull(pull: RemotePull, options: { now: number; ref?: Mana
   }
   if (!run || finished) {
     if (!run) card.step.index = null;
+    if (!run && ref?.runId && !finished) {
+      card.activity = "unknown";
+      card.detail = `关联流程待确认：当前运行记录不可核实，不能确认自动推进。GitHub：${remote.status}。${remote.detail}`;
+    }
     if (!card.linked && !finished) card.detail = `未关联本机 Keel 流程，仅显示 GitHub 事实。${remote.detail}`;
     return card;
   }
@@ -65,13 +76,18 @@ export function projectPull(pull: RemotePull, options: { now: number; ref?: Mana
     card.status = "本轮已结束";
     card.detail = `Keel 本轮工作流已结束，不表示 PR 已合并或仍在自动推进。GitHub：${remote.status}。`;
   } else if (pending) {
-    card.activity = "needs-human";
-    card.status = "等待你的决定";
+    const human = typeof pending.gate_id === "string" && pending.gate_id.startsWith("human:");
+    card.activity = human ? "needs-human" : "waiting";
+    card.status = human ? "等待你的决定" : "等待主控裁决";
     card.detail = typeof pending.question === "string" ? pending.question.slice(0, 450) : "工作流正在等待主控决定。";
   } else if (run.status === "stopped") {
     card.activity = "paused";
     card.status = "工作流已暂停";
     card.detail = run.next?.kind === "stop" && typeof run.next.reason === "string" ? run.next.reason.slice(0, 450) : "Keel 工作流已停止；GitHub PR 状态仍独立同步。";
+  } else if (run.cursor === "open-pr" && run.next?.kind === "wait" && run.next.call.tool === "pr_open") {
+    card.activity = "waiting";
+    card.status = NODE_NAMES["open-pr"]!;
+    card.detail = "等待 pr_open 完成真实提交与推送；GitHub 的旧提交检查结果不代表本轮已推送。";
   } else if (run.status === "running" && run.nodes?.[run.cursor]?.dispatch_state === "running") {
     card.activity = activityAt && now >= activityAt && now - activityAt <= ACTIVITY_FRESH_MS ? "running" : "stale";
     card.status = card.activity === "stale" ? "活动待确认" : NODE_NAMES[run.cursor] ?? "任务已派发";
@@ -80,12 +96,9 @@ export function projectPull(pull: RemotePull, options: { now: number; ref?: Mana
     card.status = NODE_NAMES[run.cursor] ?? "本地工作流";
     card.detail = "当前节点包含多个子步骤；尚未上报具体步骤，不猜测进度。";
   }
-  const progress = run.progress;
-  if (local && progress && Number.isInteger(progress.step) && progress.step > 0 && progress.step <= labels.length && progress.nodeId === run.cursor && progress.dispatchKey === run.nodes?.[run.cursor]?.dispatch_key) {
+  if (progress) {
     card.step.index = progress.step - 1;
-    card.activityAt = progress.at;
-    if (card.activity === "stale" && progress.at <= now && now - progress.at <= ACTIVITY_FRESH_MS) {
-      card.activity = "running";
+    if (card.activity === "running" && progress.at >= (dispatchAt ?? 0)) {
       card.status = labels[progress.step - 1] ?? card.status;
       card.detail = "当前步骤来自主控明确上报，未从聊天内容推断。";
     }

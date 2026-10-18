@@ -1,12 +1,13 @@
 import { BOARD_REFRESH_MS, pullKey, pullUrl, validPullRef, withNewestActivity, type BoardScope, type BoardSnapshot, type BoardCard, type PullPage, type RemotePull, type ManagedPull } from "../../shared/dashboard.ts";
 import { node, type ToolContext } from "../context.ts";
 import { KeelError, type Host } from "../host.ts";
-import { readHandoff } from "../handoff.ts";
+import { currentDashboardHandoff, prepareDashboardHandoffContext } from "./handoff.ts";
 import { boardEvidence } from "./registry.ts";
 import { projectPull } from "./project.ts";
 
 interface Scan {
   generation: number;
+  cycle: number;
   owner: string;
   rows: Map<string, BoardCard>;
   cursor?: string;
@@ -21,6 +22,8 @@ interface Scan {
   previous?: BoardSnapshot;
   retryAt?: number;
   inFlight?: Promise<BoardSnapshot>;
+  localVersions: Map<string, number>;
+  warnings: Set<string>;
 }
 
 const hosts = new WeakMap<Host, Map<BoardScope, Scan>>();
@@ -31,7 +34,7 @@ function scanFor(host: Host, scope: BoardScope): Scan {
   if (!scopes) { scopes = new Map(); hosts.set(host, scopes); }
   let scan = scopes.get(scope);
   if (!scan) {
-    scan = { generation: 0, owner: "", rows: new Map(), cursors: new Set(), total: 0, remoteDone: false, linkedOffset: 0, collecting: false, lastAttempt: 0 };
+    scan = { generation: 0, cycle: 0, owner: "", rows: new Map(), cursors: new Set(), total: 0, remoteDone: false, linkedOffset: 0, collecting: false, lastAttempt: 0, localVersions: new Map(), warnings: new Set() };
     scopes.set(scope, scan);
   }
   return scan;
@@ -39,7 +42,7 @@ function scanFor(host: Host, scope: BoardScope): Scan {
 
 function meta(snapshot: BoardSnapshot, generation: number) {
   const { rows: _rows, ...rest } = snapshot;
-  return { ...rest, generation, epoch };
+  return { ...rest, generation, epoch, rowCount: snapshot.rows.length };
 }
 
 function sendRows(host: Host, scope: BoardScope, generation: number, owner: string, rows: BoardCard[], target?: string): void {
@@ -58,9 +61,15 @@ function sendRows(host: Host, scope: BoardScope, generation: number, owner: stri
 }
 
 export function sendDashboard(host: Host, snapshot: BoardSnapshot, generation: number, target?: string): void {
-  host.broadcast({ type: "dashboard-begin", ...meta(snapshot, generation), ...(target ? { target } : {}) });
+  host.broadcast({ type: "dashboard-begin", ...meta(snapshot, generation), keepExisting: true, ...(target ? { target } : {}) });
   sendRows(host, snapshot.scope, generation, snapshot.owner, snapshot.rows, target);
   host.broadcast({ type: "dashboard-end", ...meta(snapshot, generation), ...(target ? { target } : {}) });
+}
+
+function publishDashboard(host: Host, scan: Scan, snapshot: BoardSnapshot): BoardSnapshot {
+  scan.generation += 1;
+  sendDashboard(host, snapshot, scan.generation);
+  return snapshot;
 }
 
 function validCache(value: unknown, scope: BoardScope): value is BoardSnapshot {
@@ -73,9 +82,10 @@ function validCache(value: unknown, scope: BoardScope): value is BoardSnapshot {
 
 export async function restoreDashboard(ctx: ToolContext, scope: BoardScope, target: string): Promise<void> {
   const scan = scanFor(ctx.host, scope);
-  if (!scan.snapshot) {
+  const cycle = scan.cycle;
+  if (!scan.snapshot && !scan.inFlight && !scan.collecting) {
     const file = await ctx.host.fs({ op: "read", root: "data", path: `board/dashboard-${scope}.json` });
-    if (!scan.snapshot && file.ok && file.content) {
+    if (!scan.snapshot && !scan.inFlight && !scan.collecting && scan.cycle === cycle && file.ok && file.content) {
       try {
         const saved: unknown = JSON.parse(file.content);
         if (validCache(saved, scope)) {
@@ -86,7 +96,7 @@ export async function restoreDashboard(ctx: ToolContext, scope: BoardScope, targ
       } catch { scan.snapshot = undefined; }
     }
   }
-  if (scan.snapshot) sendDashboard(ctx.host, scan.snapshot, scan.generation, target);
+  if (scan.snapshot && (!scan.owner || scan.snapshot.owner === scan.owner)) sendDashboard(ctx.host, scan.snapshot, scan.generation, target);
 }
 
 function placeholder(ref: ManagedPull, previous?: BoardCard): RemotePull {
@@ -109,11 +119,11 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
   const scan = scanFor(ctx.host, scope);
   if (scan.inFlight) return scan.inFlight;
   const now = ctx.host.now();
-  if (scan.snapshot && ((scan.retryAt && now < scan.retryAt) || (!scan.collecting && !options.force && now - scan.lastAttempt < BOARD_REFRESH_MS))) return scan.snapshot;
-  if (scan.snapshot && now - scan.lastAttempt < 500) return scan.snapshot;
+  if (scan.snapshot && ((scan.retryAt && now < scan.retryAt) || (!scan.collecting && !options.force && now - scan.lastAttempt < BOARD_REFRESH_MS))) return publishDashboard(ctx.host, scan, scan.snapshot);
+  if (scan.snapshot && now - scan.lastAttempt < 500) return publishDashboard(ctx.host, scan, scan.snapshot);
   scan.lastAttempt = now;
   if (!scan.collecting) {
-    scan.generation += 1;
+    scan.cycle += 1;
     scan.previous = scan.snapshot;
     scan.rows = new Map();
     scan.cursors = new Set();
@@ -124,21 +134,25 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
     scan.total = 0;
     scan.collecting = true;
     scan.retryAt = undefined;
+    scan.warnings.clear();
+    scan.localVersions.clear();
   }
   const work = async (): Promise<BoardSnapshot> => {
-    let began = false;
-    const delta: BoardCard[] = [];
-    let warning: string | undefined;
     try {
       const evidence = await boardEvidence(ctx.host);
+      const handoffContext = await prepareDashboardHandoffContext(ctx);
       const add = async (pull: RemotePull, error?: string): Promise<void> => {
         let handoff = null;
-        try { handoff = await readHandoff(ctx.host, pull.repo, pull.number); } catch { warning = "部分交接记录无法读取，未推断 mini 的进展。"; }
+        let handoffError: string | undefined;
+        try { handoff = await currentDashboardHandoff(handoffContext, pull); } catch {
+          handoffError = "当前交接状态无法核实，不能确认 mini 是否接手。";
+          scan.warnings.add("部分交接状态无法核实，未推断 mini 的进展。");
+        }
         const prior = scan.rows.get(pull.key) ?? (scan.snapshot?.owner === scan.owner ? scan.snapshot.rows.find((row) => row.key === pull.key) : undefined);
         const card = withNewestActivity(prior, projectPull(pull, { now: ctx.host.now(), ref: evidence.refs.get(pull.key), run: evidence.runs.get(pull.key), handoff }));
         if (error) { card.error = error; card.activity = "stale"; card.status = "状态暂不可读"; card.detail = error; card.step.index = null; }
+        else if (handoffError) { card.error = handoffError; card.activity = "unknown"; card.status = "交接状态待确认"; card.detail = handoffError; card.step.index = null; }
         scan.rows.set(pull.key, card);
-        delta.push(card);
       };
       if (!scan.remoteDone) {
         const page = await node<PullPage>(ctx, "pr/board", { scope, ...(scan.cursor ? { cursor: scan.cursor } : {}) });
@@ -147,8 +161,6 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
         if (!first && scan.owner !== page.owner) throw new KeelError("BOARD_OWNER_CHANGED", "GitHub 账号在分页中变更，已停止混合不同账号的数据。");
         if (first) {
           scan.owner = page.owner;
-          ctx.host.broadcast({ type: "dashboard-begin", generation: scan.generation, epoch, scope, owner: page.owner, keepExisting: scan.previous?.owner === page.owner });
-          began = true;
         }
         scan.total = page.total;
         for (const pull of page.rows) await add(pull);
@@ -166,7 +178,7 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
             const pull = await node<RemotePull>(ctx, "pr/board-linked", { repo: ref.repo, number: ref.number });
             if (scope === "all" || pull.state === "OPEN") await add(pull);
           } catch {
-            warning = "部分 Keel 已关联 PR 无法读取；这些卡片保留并标为待确认。";
+            scan.warnings.add("部分 Keel 已关联 PR 无法读取；这些卡片保留并标为待确认。");
             await add(placeholder(ref, previous.get(pullKey(ref.repo, ref.number))), "关联 PR 的 GitHub 状态无法读取，请检查网络或访问权限。");
           }
         }));
@@ -176,6 +188,7 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
       const complete = scan.remoteDone && scan.linkedOffset >= (scan.linked?.length ?? 0);
       scan.collecting = !complete;
       const rows = [...scan.rows.values()];
+      const warning = [...scan.warnings].join(" ");
       const snapshot: BoardSnapshot = {
         version: 1, scope, owner: scan.owner, rows, total: Math.max(scan.total, rows.length), complete,
         connection: warning || rows.some((row) => row.error) ? "partial" : "live",
@@ -184,9 +197,7 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
         ...(scan.retryAt ? { retryAt: scan.retryAt } : {}),
       };
       scan.snapshot = snapshot;
-      if (!began && scan.generation === 0) ctx.host.broadcast({ type: "dashboard-begin", generation: scan.generation, epoch, scope, owner: scan.owner });
-      sendRows(ctx.host, scope, scan.generation, scan.owner, delta);
-      ctx.host.broadcast({ type: "dashboard-end", ...meta(snapshot, scan.generation) });
+      publishDashboard(ctx.host, scan, snapshot);
       if (complete) {
         const content = JSON.stringify(snapshot);
         if (new TextEncoder().encode(content).length < 12 * 1024 * 1024) {
@@ -200,6 +211,12 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
       const ownerChanged = code === "BOARD_OWNER_CHANGED";
       const previous = ownerChanged ? undefined : scan.snapshot ?? scan.previous;
       const retained = new Map<string, BoardCard>();
+      if (ownerChanged) {
+        scan.cycle += 1;
+        scan.owner = "";
+        scan.rows.clear();
+        scan.localVersions.clear();
+      }
       if (!ownerChanged) {
         if (scan.previous?.owner === scan.owner) for (const row of scan.previous.rows) retained.set(row.key, row);
         if (scan.snapshot?.owner === scan.owner) for (const row of scan.snapshot.rows) retained.set(row.key, row);
@@ -215,7 +232,7 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
         error: ownerChanged ? "GitHub 账号已变更，正在重新读取，不混用旧账号数据。" : `同步失败（${code}），保留上次数据。请检查 GitHub 登录、网络或 API 配额。`, retryAt: scan.retryAt,
       };
       scan.snapshot = snapshot;
-      sendDashboard(ctx.host, snapshot, scan.generation);
+      publishDashboard(ctx.host, scan, snapshot);
       return snapshot;
     }
   };
@@ -235,8 +252,16 @@ export async function updateDashboardLocal(ctx: ToolContext, scope: BoardScope, 
   const scan = scanFor(ctx.host, scope);
   const row = scan.rows.get(key) ?? scan.snapshot?.rows.find((card) => card.key === key);
   if (!row || !scan.snapshot) return;
+  const cycle = scan.cycle;
+  const owner = scan.owner;
+  const version = (scan.localVersions.get(key) ?? 0) + 1;
+  scan.localVersions.set(key, version);
   const evidence = await boardEvidence(ctx.host);
-  const handoff = await readHandoff(ctx.host, row.repo, row.number);
+  const handoffContext = await prepareDashboardHandoffContext(ctx);
+  const handoff = await currentDashboardHandoff(handoffContext, row);
+  if (scan.cycle !== cycle || scan.owner !== owner || scan.localVersions.get(key) !== version) return;
+  const current = scan.rows.get(key) ?? scan.snapshot?.rows.find((card) => card.key === key);
+  if (current !== row || !scan.snapshot) return;
   const projected = projectPull(row, { now: ctx.host.now(), ref: evidence.refs.get(key), run: evidence.runs.get(key), handoff });
   if (row.error) Object.assign(projected, { error: row.error, activity: "stale", detail: row.error, status: "状态暂不可读" });
   if (!scan.collecting || scan.rows.has(key)) scan.rows.set(key, projected);

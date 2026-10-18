@@ -29,7 +29,9 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 - PR 生命周期、CI、评审从 GitHub 读取；具体任务步骤只取本机 Keel 的结构化回报。其它电脑的私有流程记录不自动同步；缺记录显示「步骤 ?」，Mini 内部盯梢步骤未接入时只显示已交接，绝不伪造进度。完成一轮 Keel 不等于 PR 已合并或仍在自动推进。
 - GitHub 刷新不充当任务心跳。活动证据过期时停止显示“正在运行”；失联、隐藏页面或系统开启“减少动态效果”时停止循环动效。看板只读，不自动开任务、改 PR、合并或发布消息。
 
-本地结构化步骤协议见 `plugin/manual/keel/MANUAL.md`；设计来源见 `docs/dashboard-source.md`。开发预览用 `node scripts/dashboard-preview.mjs`；它使用明确标注的测试数据，不执行真实模型或 GitHub 写入。
+本地结构化步骤协议见 `plugin/manual/keel/MANUAL.md`；设计来源见 `docs/dashboard-source.md`，各类加载、筛选、PR和流程状态的预期见 `docs/dashboard-states.md`。开发预览用 `node scripts/dashboard-preview.mjs`；它使用明确标注的测试数据，不执行真实模型或 GitHub 写入。
+
+查询直接使用运行插件那台电脑上的 GitHub CLI 有效授权（`gh api graphql --hostname github.com`），不是插件单独持有的 GitHub App 安装令牌。个人授权通常按账号共用每小时5000个 GraphQL 点数，而不是每小时5000个PR或每台电脑各5000次；实际额度及每个查询的cost以GitHub返回为准。REST和GraphQL分别计量，另有短时限流。面板隐藏停止后续轮询，配额不足时等待reset，手动刷新不会绕过退避。[GitHub官方限额说明](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)。
 
 ## 模型配置与执行
 

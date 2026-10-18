@@ -9,6 +9,33 @@ const PATH = "board/managed.json";
 const tails = new WeakMap<Host, Promise<void>>();
 const relevant = new Set(["pr_open", "pr_status", "pr_wait", "pr_ready", "pr_threads", "pr_reply", "keel_run", "keel_report", "keel_wait", "keel_gate"]);
 
+function runGeneration(runId?: string): number | undefined {
+  const match = typeof runId === "string" ? /^run-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})-[a-f0-9]{4}$/.exec(runId) : null;
+  if (!match) return undefined;
+  const timestamp = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().replace(/[-:T]/g, "").slice(0, 14) === match.slice(1).join("") ? timestamp : undefined;
+}
+
+function currentRun(candidates: GraphRunState[], ref?: ManagedPull): GraphRunState | undefined {
+  const associated = candidates.find((run) => run.run_id === ref?.runId);
+  const associatedGeneration = runGeneration(ref?.runId);
+  if (ref?.runId && associatedGeneration === undefined) return associated;
+  const eligible = ref?.runId ? candidates.filter((run) => {
+    const generation = runGeneration(run.run_id);
+    return generation !== undefined && generation >= associatedGeneration!;
+  }) : candidates;
+  if (!eligible.length) return associated;
+  if (eligible.length === 1) {
+    const only = eligible[0]!;
+    return ref?.runId && !associated && runGeneration(only.run_id) === associatedGeneration ? undefined : only;
+  }
+  const generations = eligible.map((run) => runGeneration(run.run_id));
+  if (generations.some((generation) => generation === undefined)) return associated;
+  const latest = Math.max(...generations as number[]);
+  const newest = eligible.filter((run) => runGeneration(run.run_id) === latest);
+  return newest.length === 1 ? newest[0] : newest.find((run) => run.run_id === ref?.runId);
+}
+
 export function runRef(run: Partial<GraphRunState>): ManagedPull | null {
   const legacy = resultRef(run.pr);
   const repo = run.pr_binding?.repo ?? run.gh_repo ?? run.repo ?? legacy?.repo;
@@ -29,12 +56,18 @@ export async function managedPulls(host: Host): Promise<ManagedPull[]> {
   return parsed.rows.filter((row) => row && validPullRef(row.repo, row.number));
 }
 
-async function register(host: Host, ref: ManagedPull): Promise<void> {
+async function register(host: Host, ref: ManagedPull, newRun: boolean): Promise<void> {
   const previous = tails.get(host) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(async () => {
     const rows = new Map((await managedPulls(host)).map((row) => [pullKey(row.repo, row.number), row]));
     const key = pullKey(ref.repo, ref.number);
-    rows.set(key, { ...rows.get(key), ...ref });
+    const existing = rows.get(key);
+    if (existing?.runId && ref.runId !== existing.runId) {
+      const incoming = runGeneration(ref.runId), current = runGeneration(existing.runId);
+      const newer = incoming !== undefined && current !== undefined && incoming > current;
+      if (!ref.runId || (!newer && !(newRun && (incoming === undefined || current === undefined || incoming === current)))) return;
+    }
+    rows.set(key, { ...(existing?.runId === ref.runId ? existing : {}), ...ref });
     const written = await host.fs({ op: "write", root: "data", path: PATH, content: JSON.stringify({ version: 1, rows: [...rows.values()] }) });
     if (!written.ok) throw new KeelError("BOARD_REGISTRY_WRITE_FAILED", "PR 操作已完成，但看板关联索引保存失败。");
   });
@@ -75,23 +108,33 @@ export async function trackDashboardResult(ctx: ToolContext, tool: string, args:
     }
   }
   if (!ref) return;
-  const sessionId = ctx.sessionId ?? run?.sol_session_id;
-  await register(ctx.host, { ...ref, ...(runId ? { runId } : {}), ...(sessionId ? { sessionId } : {}), at: ctx.host.now() });
+  const sessionId = run?.sol_session_id ?? ctx.sessionId;
+  await register(ctx.host, { ...ref, ...(runId ? { runId } : {}), ...(sessionId ? { sessionId } : {}), at: ctx.host.now() }, tool === "keel_run");
   ctx.host.broadcast({ type: "dashboard-invalidated", key: pullKey(ref.repo, ref.number) });
 }
 
 export async function boardEvidence(host: Host): Promise<{ refs: Map<string, ManagedPull>; runs: Map<string, GraphRunState> }> {
   const refs = new Map((await managedPulls(host)).map((row) => [pullKey(row.repo, row.number), row]));
   const runs = new Map<string, GraphRunState>();
+  const candidates = new Map<string, GraphRunState[]>();
   for (const raw of await loadGraphStates(host)) {
     const run = raw as unknown as GraphRunState;
     const ref = runRef(run);
     if (!ref) continue;
     const key = pullKey(ref.repo, ref.number);
-    const previous = runs.get(key);
-    if (!previous || Number(run.updated_at) > Number(previous.updated_at)) {
+    const group = candidates.get(key) ?? [];
+    group.push(run);
+    candidates.set(key, group);
+  }
+  for (const [key, group] of candidates) {
+    const run = currentRun(group, refs.get(key));
+    if (run) {
       runs.set(key, run);
-      refs.set(key, { ...refs.get(key), ...ref });
+      const existing = refs.get(key);
+      refs.set(key, { ...(existing?.runId === run.run_id ? existing : {}), ...runRef(run)! });
+    } else if (!refs.has(key)) {
+      const { repo, number, at } = runRef(group[0]!)!;
+      refs.set(key, { repo, number, at });
     }
   }
   return { refs, runs };

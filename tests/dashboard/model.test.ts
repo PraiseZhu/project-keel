@@ -110,7 +110,7 @@ describe("dashboard packet reducer", () => {
     const current = projectPull(pull, { now, run });
     applyDashboardMessage(store, packet("dashboard-begin"), "panel");
     applyDashboardMessage(store, packet("dashboard-page", { rows: [current] }), "panel");
-    const old = { ...current, activityAt: now - 100_000, activity: "stale" as const };
+    const old = { ...current, workflowAt: now - 100_000, activityAt: now - 100_000, activity: "stale" as const };
     applyDashboardMessage(store, packet("dashboard-page", { rows: [old] }), "panel");
     expect(store.rows.get(pull.key)?.activity).toBe("running");
     applyDashboardMessage(store, packet("dashboard-page", { rows: [{ ...old, state: "MERGED", activity: "closed" }] }), "panel");

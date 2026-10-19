@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hookCommand, withKeelStop, type HookPaths } from "../../src/node/hooks-install.ts";
-import { hasKeelStop, KEEL_STOP_MARK, readStopHookStatus, statusFromConfigText } from "../../src/node/hooks-status.ts";
+import { gatePathOf, hasKeelStop, KEEL_STOP_MARK, readStopHookStatus, statusFromConfigText } from "../../src/node/hooks-status.ts";
 import { STOP_HOOK_LABELS, renderStopHookStatus } from "../../src/panel/hooks-status.ts";
 import { dispatch } from "../../src/node/rpc.ts";
 
@@ -20,7 +20,16 @@ const PATHS: HookPaths = {
   codexConfig: "/fixture/codex-home/hooks.json",
   agentsDir: "/fixture/.claude/agents",
 };
-const installedConfig = () => withKeelStop({}, hookCommand("claude-code", PATHS)).next;
+const installedConfig = (paths: HookPaths = PATHS) => withKeelStop({}, hookCommand("claude-code", paths)).next;
+
+/** A plugin dir whose gate script really exists, so the hook counts as live. */
+async function livePaths(): Promise<HookPaths> {
+  const dir = await tmp();
+  const pluginDir = path.join(dir, "it's plugin");
+  await mkdir(path.join(pluginDir, "hooks"), { recursive: true });
+  await writeFile(path.join(pluginDir, "hooks/keel-stop-gate.js"), "");
+  return { ...PATHS, pluginDir };
+}
 
 async function tmp() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "keel-hook-status-"));
@@ -35,9 +44,16 @@ describe("Stop hook install status", () => {
     expect(JSON.stringify(installed)).toContain(KEEL_STOP_MARK);
     expect(hasKeelStop(installed)).toBe(true);
     expect(hasKeelStop({ hooks: { Stop: [{ hooks: [{ type: "command", command: "node /x/keel-stop-gate.mjs --harness codex" }] }] } })).toBe(true);
-    expect(statusFromConfigText(JSON.stringify(installed))).toBe("installed");
+    expect(statusFromConfigText(JSON.stringify(installed), () => true)).toBe("installed");
     expect(statusFromConfigText(JSON.stringify({ hooks: { Stop: [] } }))).toBe("not_installed");
     expect(statusFromConfigText("not-json")).toBe("unreadable");
+  });
+
+  it("a hook whose gate script is gone (plugin moved or removed) counts as not installed", async () => {
+    const live = await livePaths();
+    expect(gatePathOf(hookCommand("codex", live))).toBe(path.join(live.pluginDir, "hooks/keel-stop-gate.js"));
+    expect(statusFromConfigText(JSON.stringify(installedConfig(live)))).toBe("installed");
+    expect(statusFromConfigText(JSON.stringify(installedConfig()))).toBe("not_installed");
   });
 
   it("reads fixture files, never the real home configs", async () => {
@@ -45,7 +61,7 @@ describe("Stop hook install status", () => {
     const claude = path.join(dir, "settings.json");
     const missing = path.join(dir, "missing.json");
     const bad = path.join(dir, "bad.json");
-    await writeFile(claude, `${JSON.stringify(installedConfig(), null, 2)}\n`);
+    await writeFile(claude, `${JSON.stringify(installedConfig(await livePaths()), null, 2)}\n`);
     await writeFile(bad, "{");
     expect(await readStopHookStatus(claude)).toBe("installed");
     expect(await readStopHookStatus(missing)).toBe("not_installed");
@@ -57,7 +73,7 @@ describe("Stop hook install status", () => {
     const dir = await tmp();
     const claude = path.join(dir, "claude.json");
     const codex = path.join(dir, "codex.json");
-    await writeFile(claude, JSON.stringify(installedConfig()));
+    await writeFile(claude, JSON.stringify(installedConfig(await livePaths())));
     await writeFile(codex, JSON.stringify({ hooks: { Stop: [] } }));
     const out = await dispatch("hooks/status", { claude_config: claude, codex_config: codex });
     expect(out.result).toEqual({ claude_code: "installed", codex: "not_installed" });

@@ -239,10 +239,34 @@ describe("changing the writer's harness", () => {
     expect(same.notice).toBeUndefined();
     expect(readStages(same.manual, "sol").code?.fallbacks).toHaveLength(1);
     const odd = setReviewRoutes(DEFAULT_MANUAL, "grok", DEFAULT_MANUAL.profiles[1]!.final_review_route!, { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd" });
+    // The odd backup is on the writer's harness, so changing the writer within Claude Code now drops it too.
     const r = change(odd, "claude-code", "code", "primary", "model", opus);
-    expect(r.notice).toBeUndefined();
+    expect(r.notice).toContain("做检查的备用已清掉");
+    expect(readStages(r.manual, "grok").review.fallbacks).toEqual([]);
     const writer = change(odd, "claude-code", "code", "primary", "model", valueOf("codex", "gpt-6.1-sol", "art-cindy"));
     expect(readStages(writer.manual, "grok").review.primary?.agent).toBe("claude-code");
+  });
+});
+
+describe("做检查 never shares the writer's model family", () => {
+  const grokCodex = valueOf("codex", "grok-4.6", "art-cindy");
+  const grokClaude = valueOf("claude-code", "grok-4.6", "art-cindy");
+
+  it("does not offer grok on Claude Code to review grok written on Codex", () => {
+    const m = change(DEFAULT_MANUAL, "claude-code", "code", "primary", "model", grokCodex).manual;
+    const v = view(m, "claude-code");
+    expect(offered(control(v, "review", "primary", "model"))).not.toContain(grokClaude);
+    expect(offered(control(v, "review", "fallback", "model"))).not.toContain(grokClaude);
+    expect(offered(control(v, "review", "primary", "model"))).toContain(sonnet);
+  });
+
+  it("drops a same-family review backup when the writer switches to that family", () => {
+    const base = setReviewRoutes(DEFAULT_MANUAL, "grok", { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "xhigh" }, { agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "high" });
+    const withCodexWriter = setCodeRoutes(base, "grok", { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "high" });
+    const r = change(withCodexWriter, "claude-code", "code", "primary", "model", grokCodex);
+    expect(readStages(r.manual, "grok").review.fallbacks).toEqual([]);
+    expect(r.notice).toContain("做检查的备用已清掉");
+    expect(validateManual(r.manual, models, { manual: r.manual })).toEqual([]);
   });
 });
 

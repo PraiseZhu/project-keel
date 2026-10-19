@@ -183,6 +183,14 @@ describe("ensureHook against a temp Cindy tree", () => {
     expect(p.claudeConfig).toBe("/U/.claude/settings.json");
     expect(p.codexConfig).toBe("/U/Library/Application Support/Cindy/codex-home/hooks.json");
   });
+
+  it("follows Cindy's namespace layout: cindy-brain/_ns/<ns>/<id> keeps data in ghost-fs/_ns__<ns>__<id>", () => {
+    const p = defaultHookPaths("/U/owners/abc/cindy-brain/_ns/xd/keel/node", "/U")!;
+    expect(p.pluginDir).toBe("/U/owners/abc/cindy-brain/_ns/xd/keel");
+    expect(p.dataDir).toBe("/U/owners/abc/ghost-fs/_ns__xd__keel");
+    expect(p.agentsDir).toBe("/U/.claude/agents");
+    expect(defaultHookPaths("/U/owners/abc/other/_ns/xd/keel/node", "/U")).toBeNull();
+  });
 });
 
 describe("hook command quoting (review F16-01 / CodeQL)", () => {

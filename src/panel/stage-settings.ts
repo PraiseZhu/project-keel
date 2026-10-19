@@ -4,6 +4,7 @@ import { DEFAULT_MANUAL, cloneManual, type AgentModel, type Harness, type ModelM
 import {
   allowedHarnesses,
   blockedReason,
+  clashesWithWriter,
   readStages,
   RESEARCH_PARALLEL,
   RESEARCH_SUB,
@@ -139,6 +140,7 @@ interface Ctx {
   readonly models: readonly AgentModel[];
   readonly lead: StageHarness;
   readonly writer?: Harness;
+  readonly writerModel?: string;
 }
 
 /** Models a stage may pick: visible, runnable, on an allowed harness, deduped by agent × id × gateway. */
@@ -146,7 +148,7 @@ function candidates(stage: StageId, ctx: Ctx, onlyAgent?: string): AgentModel[] 
   const seen = new Set<string>();
   const out: AgentModel[] = [];
   for (const m of ctx.models) {
-    if (!stageModelAllowed(stage, m, ctx.lead, ctx.writer)) continue;
+    if (!stageModelAllowed(stage, m, ctx.lead, ctx.writer, ctx.writerModel)) continue;
     if (onlyAgent !== undefined && m.agent !== onlyAgent) continue;
     const key = `${m.agent}\t${m.id}\t${m.providerId}`;
     if (seen.has(key)) continue;
@@ -281,7 +283,7 @@ export function buildStageView(manual: ModelManual, harness: StageHarness, model
   const stages = readStages(manual, profile.id);
   const code = stages.code;
   const writer = code?.primary.agent;
-  const ctx: Ctx = { models, lead: harness, ...(writer ? { writer } : {}) };
+  const ctx: Ctx = { models, lead: harness, ...(code ? { writer: code.primary.agent, writerModel: code.primary.model } : {}) };
   const planAllowed = allowedHarnesses("plan", harness);
   const reviewAllowed = allowedHarnesses("review", harness, writer);
   const rowOf = (id: StageId, description: string, primary: ReturnType<typeof routeControls>, fallback?: ReturnType<typeof routeControls>): StageRowView => {
@@ -356,39 +358,40 @@ export interface StageChangeResult {
 }
 
 /** The catalog copy of a default route, re-fitted to the catalog's efforts. undefined = not runnable here. */
-function fitDefault(route: Route | undefined, ctx: Ctx, writer: Harness): Route | undefined {
+function fitDefault(route: Route | undefined, ctx: Ctx): Route | undefined {
   if (!route) return undefined;
   const hit = findModel(ctx.models, route.agent, route.model, route.provider_id);
-  if (!hit || !stageModelAllowed("review", hit, ctx.lead, writer)) return undefined;
+  if (!hit || !stageModelAllowed("review", hit, ctx.lead, ctx.writer, ctx.writerModel)) return undefined;
   return routeAfterModelChange(ctx.models, modelValue(route), route.effort);
 }
 
 /** Default 做检查 pair for a writer: the shipped profile of that harness, else the first allowed model. */
-function defaultReviewPair(models: readonly AgentModel[], lead: StageHarness, writer: Harness): { primary: Route; fallback?: Route } | undefined {
-  const ctx: Ctx = { models, lead, writer };
-  const shipped = DEFAULT_MANUAL.profiles.find((p) => p.id === DEFAULT_MANUAL.defaults_by_harness[writer]);
-  let primary = fitDefault(shipped?.final_review_route, ctx, writer);
+function defaultReviewPair(models: readonly AgentModel[], lead: StageHarness, writer: Route): { primary: Route; fallback?: Route } | undefined {
+  const ctx: Ctx = { models, lead, writer: writer.agent, writerModel: writer.model };
+  const shipped = DEFAULT_MANUAL.profiles.find((p) => p.id === DEFAULT_MANUAL.defaults_by_harness[writer.agent]);
+  let primary = fitDefault(shipped?.final_review_route, ctx);
   if (!primary) {
     const first = candidates("review", ctx)[0];
     primary = first ? routeAfterModelChange(models, optionOf(first).value, undefined) : undefined;
   }
   if (!primary) return undefined;
-  const fallback = fitDefault(shipped?.final_review_fallbacks?.[0], ctx, writer);
+  const fallback = fitDefault(shipped?.final_review_fallbacks?.[0], ctx);
   return fallback && modelValue(fallback) !== modelValue(primary) ? { primary, fallback } : { primary };
 }
 
 type ReviewFix = { manual: ModelManual; kind?: "primary" | "fallback" | "none"; route?: Route };
 
-/** After the writer moved to another harness, 做检查 must not stay on the writer's harness. */
+/** After 写代码 changed, 做检查 must not stay on the writer's harness or model family. */
 function reconcileReview(manual: ModelManual, profileId: string, lead: StageHarness, models: readonly AgentModel[], writer: Route): ReviewFix {
   const review = readStages(manual, profileId).review;
   if (!review.primary) return { manual };
-  if (review.primary.agent === writer.agent) {
-    const pair = defaultReviewPair(models, lead, writer.agent);
+  if (clashesWithWriter(review.primary.agent, review.primary.model, writer)) {
+    const pair = defaultReviewPair(models, lead, writer);
     if (!pair) return { manual, kind: "none" };
     return { manual: setReviewRoutes(manual, profileId, pair.primary, pair.fallback), kind: "primary", route: pair.primary };
   }
-  if (review.fallbacks[0]?.agent === writer.agent) return { manual: setReviewRoutes(manual, profileId, review.primary, undefined), kind: "fallback" };
+  const backup = review.fallbacks[0];
+  if (backup && clashesWithWriter(backup.agent, backup.model, writer)) return { manual: setReviewRoutes(manual, profileId, review.primary, undefined), kind: "fallback" };
   return { manual };
 }
 
@@ -439,7 +442,7 @@ export function applyStageChange(manual: ModelManual, harness: StageHarness, mod
   const backup = code?.fallbacks?.[0];
   const keep = backup && backup.agent === next.agent ? backup : undefined;
   const written = setCodeRoutes(manual, id, next, keep);
-  if (!code || code.primary.agent === next.agent) return { manual: written };
+  if (!code) return { manual: written };
   const fix = reconcileReview(written, id, harness, models, next);
   const notice = writerChangeNotice(next, models, backup !== undefined && keep === undefined, fix);
   return { manual: fix.manual, ...(notice ? { notice } : {}) };

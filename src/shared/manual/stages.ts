@@ -1,6 +1,7 @@
 // Four work stages over the ModelManual, and the rules that keep every selectable route runnable.
 // 查资料 is the lead's own one-shot sub (fixed per lead, not configurable); 想方案 / 写代码 / 做检查 are Workers.
 
+import { family } from "../fanout.ts";
 import type { AgentModel, Harness, ModelManual, Profile, Route, Slot } from "./schema.ts";
 
 export const STAGE_HARNESSES = ["claude-code", "codex"] as const;
@@ -54,9 +55,15 @@ export function allowedHarnesses(stage: StageId, lead: StageHarness, writer?: Ha
   return [...STAGE_HARNESSES];
 }
 
-export function stageModelAllowed(stage: StageId, model: Pick<AgentModel, "agent" | "id" | "providerId" | "visible">, lead: StageHarness, writer?: Harness): boolean {
+/** 做检查 must differ from 写代码 in harness and in model family (grok on Codex vs grok on Claude Code still clash). */
+export function clashesWithWriter(agent: string, model: string, writer: { readonly agent: string; readonly model: string }): boolean {
+  return agent === writer.agent || family(model) === family(writer.model);
+}
+
+export function stageModelAllowed(stage: StageId, model: Pick<AgentModel, "agent" | "id" | "providerId" | "visible">, lead: StageHarness, writer?: Harness, writerModel?: string): boolean {
   if (model.visible === false) return false;
   if (blockedReason(model.agent, model.providerId, model.id)) return false;
+  if (stage === "review" && writerModel !== undefined && family(model.id) === family(writerModel)) return false;
   return (allowedHarnesses(stage, lead, writer) as string[]).includes(model.agent);
 }
 

@@ -24,6 +24,8 @@ export function stageCatalog(): AgentModel[] {
     entry({ id: "openai/gpt-6.1-sol", name: "GPT-6.1 Sol", agent: "codex", providerId: "xd", providerName: XD, efforts: EFFORTS, defaultEffort: "high" }),
     entry({ id: "gpt-6-astra", name: "GPT-6 Astra", agent: "codex", providerId: "art-cindy", providerName: ART, efforts: EFFORTS, defaultEffort: "xhigh" }),
     entry({ id: "openai/gpt-6-astra", name: "GPT-6 Astra", agent: "codex", providerId: "xd", providerName: XD, efforts: EFFORTS, defaultEffort: "xhigh" }),
+    // Same family on both harnesses: grok on Codex writes, grok on Claude Code must not review it.
+    entry({ id: "grok-4.6", name: "Grok 4.6", agent: "codex", providerId: "art-cindy", providerName: ART, efforts: SHORT, defaultEffort: "high" }),
     entry({ id: "gpt-6-luna", name: "GPT-6 Luna", agent: "codex", providerId: "art-cindy", providerName: ART, efforts: [] }),
     // Pi is never offered.
     entry({ id: "grok-4.6", name: "Grok 4.6", agent: "pi", providerId: "art-cindy", providerName: ART, efforts: SHORT }),

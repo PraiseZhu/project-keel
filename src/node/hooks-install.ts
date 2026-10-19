@@ -133,14 +133,29 @@ export async function ensureHook(target: HookTarget, paths: HookPaths): Promise<
   }
 }
 
-/** Paths for a worker running from <owners>/<owner>/cindy-brain/keel/node/; null when the layout is not Cindy's. */
+/**
+ * Paths for a worker running from <owner>/cindy-brain/<id>/node/ or, after Cindy's namespace migration,
+ * <owner>/cindy-brain/_ns/<ns>/<id>/node/ (data then lives in <owner>/ghost-fs/_ns__<ns>__<id>).
+ * null when the layout is not Cindy's.
+ */
 export function defaultHookPaths(workerDir: string, home = os.homedir()): HookPaths | null {
   const pluginDir = path.dirname(workerDir);
-  const brain = path.dirname(pluginDir);
-  if (path.basename(brain) !== "cindy-brain") return null;
+  const id = path.basename(pluginDir);
+  const parent = path.dirname(pluginDir);
+  let owner: string;
+  let dataName: string;
+  if (path.basename(parent) === "cindy-brain") {
+    owner = path.dirname(parent);
+    dataName = id;
+  } else if (path.basename(path.dirname(parent)) === "_ns" && path.basename(path.dirname(path.dirname(parent))) === "cindy-brain") {
+    owner = path.dirname(path.dirname(path.dirname(parent)));
+    dataName = `_ns__${path.basename(parent)}__${id}`;
+  } else {
+    return null;
+  }
   return {
     pluginDir,
-    dataDir: path.join(path.dirname(brain), "ghost-fs", path.basename(pluginDir)),
+    dataDir: path.join(owner, "ghost-fs", dataName),
     claudeConfig: defaultHookConfigPath("claude-code", home),
     codexConfig: defaultHookConfigPath("codex", home),
     agentsDir: path.join(home, ".claude", "agents"),

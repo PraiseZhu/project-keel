@@ -6,7 +6,7 @@ import { ASTRA_CONSULT_ID, advance, createRun } from "../../src/main/graph/inter
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
-import { cloneManual, DEFAULT_MANUAL, type AgentModel, type ModelManual } from "../../src/shared/manual/schema.ts";
+import { cloneManual, DEFAULT_MANUAL, type AgentModel, type ModelManual, type Profile, type Route } from "../../src/shared/manual/schema.ts";
 import { DEFAULT_THRESHOLDS } from "../../src/shared/types.ts";
 import { fakeHost, typesafeAnswering } from "../helpers/fakeHost.ts";
 import { appendixCAgentModels, legacyGrokInheritManual } from "../manual/model-manual.test.ts";
@@ -126,6 +126,14 @@ function cfg(manual: ModelManual) {
   return { manual, lanes: [], limits: DEFAULT_LIMITS, thresholds: DEFAULT_THRESHOLDS };
 }
 
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+function solOf(manual: ModelManual): Mutable<Profile> {
+  return manual.profiles.find((p) => p.id === "sol") as Mutable<Profile>;
+}
+
+const luna: Route = { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" };
+
 async function dispatchNode(entry: string, manual: ModelManual, models: readonly AgentModel[], profile_id = "sol") {
   const spec = PSTACK_GRAPHS.feature;
   const h = fakeHost({ node: nodeOk, agentModels: models });
@@ -143,7 +151,8 @@ async function dispatchNode(entry: string, manual: ModelManual, models: readonly
   });
   const opts = { spec, config: cfg(manual), models };
   const first = await advance(h, "run-dir", { type: "tick" }, opts);
-  if (first.next.kind === "dispatch") return first;
+  // 想方案 / 做检查 are Workers, so the first answer is always the team setup.
+  expect(first.next.kind).toBe("setup");
   return advance(h, "run-dir", {
     type: "report", phase: "setup",
     outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
@@ -151,101 +160,82 @@ async function dispatchNode(entry: string, manual: ModelManual, models: readonly
   }, opts);
 }
 
+function workerOf(out: Awaited<ReturnType<typeof dispatchNode>>) {
+  expect(out.next.kind).toBe("dispatch");
+  if (out.next.kind !== "dispatch") throw new Error("dispatch");
+  expect(out.next.subagent).toBeUndefined();
+  expect(out.next.subagents).toBeUndefined();
+  expect(out.next.create_worker).toBeTruthy();
+  return out.next.create_worker!;
+}
+
 describe("astra-consult direction_route dispatch", () => {
   const models = appendixCAgentModels();
 
-  it("dispatches the explicit direction_route and does not fall back when it is unavailable", async () => {
+  it("dispatches the explicit direction_route as one Worker and does not fall back when it is unavailable", async () => {
     const manual = cloneManual(DEFAULT_MANUAL);
-    (manual.profiles[0] as { direction_gate: string; direction_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).direction_gate = "astra";
-    (manual.profiles[0] as { direction_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).direction_route = {
-      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
-    };
+    solOf(manual).direction_gate = "astra";
+    solOf(manual).direction_route = luna;
     const hit = await dispatchNode(ASTRA_CONSULT_ID, manual, models);
-    expect(hit.next.kind).toBe("dispatch");
-    if (hit.next.kind === "dispatch") {
-      expect(hit.next.create_worker).toBeUndefined();
-      expect(hit.next.subagent).toMatchObject({ harness: "codex", model: "gpt-6-luna", effort: "high" });
-    }
+    expect(workerOf(hit)).toMatchObject({ role: "keel-architect", agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
+    expect(hit.state.astra_calls).toBe(1);
+    expect(hit.state.budget.astra_left).toBe(3);
 
     const missing = cloneManual(manual);
-    (missing.profiles[0] as { direction_route: { model: string } }).direction_route.model = "no-such-model";
+    solOf(missing).direction_route = { ...luna, model: "no-such-model" };
     const stopped = await dispatchNode(ASTRA_CONSULT_ID, missing, models);
     expect(stopped.next.kind).toBe("stop");
     if (stopped.next.kind === "stop") expect(stopped.next.reason).toMatch(/全部路线不可用/);
   });
 
-  it("falls back to the architect slot only when direction_route is omitted", async () => {
+  it("falls back to the architect slot only when direction_route is omitted, and ignores per-task-type columns", async () => {
     const hit = await dispatchNode(ASTRA_CONSULT_ID, DEFAULT_MANUAL, models);
-    expect(hit.next.kind).toBe("dispatch");
-    if (hit.next.kind === "dispatch") {
-      expect(hit.next.create_worker).toBeUndefined();
-      expect(hit.next.subagent).toMatchObject({ harness: "codex", model: "gpt-6-astra", effort: "xhigh" });
-    }
+    expect(workerOf(hit)).toMatchObject({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
 
     const tasked = cloneManual(DEFAULT_MANUAL);
-    (tasked.profiles[0] as { nodes: typeof tasked.profiles[0]["nodes"] }).nodes = {
-      ...tasked.profiles[0]!.nodes,
-      feature: {
-        architect: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "medium" } },
-      },
-    };
+    solOf(tasked).nodes = { ...solOf(tasked).nodes, feature: { architect: { primary: luna } } };
     const feat = await dispatchNode(ASTRA_CONSULT_ID, tasked, models);
-    expect(feat.next.kind).toBe("dispatch");
-    if (feat.next.kind === "dispatch") expect(feat.next.subagent?.model).toBe("gpt-6-luna");
+    expect(workerOf(feat).model).toBe("anthropic/claude-opus-5-5");
   });
 
   it("does not apply direction_route to architect-plan or astra-final-review", async () => {
     const manual = cloneManual(DEFAULT_MANUAL);
-    (manual.profiles[0] as { direction_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).direction_route = {
-      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
-    };
-    const plan = await dispatchNode("architect-plan", manual, models);
-    expect(plan.next.kind).toBe("dispatch");
-    if (plan.next.kind === "dispatch") {
-      expect(plan.next.create_worker).toBeUndefined();
-      expect(plan.next.subagent).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
-      expect(plan.next.subagent?.model).not.toBe("gpt-6-luna");
-    }
-    const review = await dispatchNode("astra-final-review", manual, models);
-    expect(review.next.kind).toBe("dispatch");
-    if (review.next.kind === "dispatch") {
-      expect(review.next.create_worker).toBeUndefined();
-      expect(review.next.subagent).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
-    }
+    solOf(manual).direction_route = luna;
+    const plan = workerOf(await dispatchNode("architect-plan", manual, models));
+    expect(plan).toMatchObject({ role: "keel-architect", agent: "claude-code", model: "anthropic/claude-opus-5-5", effort: "xhigh" });
+    expect(plan.model).not.toBe("gpt-6-luna");
+    const review = workerOf(await dispatchNode("astra-final-review", manual, models));
+    expect(review).toMatchObject({ role: "keel-verifier", agent: "claude-code", model: "anthropic/claude-opus-5-5", effort: "xhigh" });
+  });
+
+  it("ignores direction_collaborators: a consult is one Worker and costs one astra point", async () => {
+    const manual = cloneManual(DEFAULT_MANUAL);
+    solOf(manual).direction_route = luna;
+    solOf(manual).direction_collaborators = [{ ...luna, provider_id: "xd", model: "openai/gpt-6-luna" }, { ...luna, effort: "low" }];
+    const out = await dispatchNode(ASTRA_CONSULT_ID, { ...manual, version: 2 }, models);
+    expect(workerOf(out)).toMatchObject({ model: "gpt-6-luna", effort: "high" });
+    expect(out.state.astra_calls).toBe(1);
+    expect(out.state.budget.astra_left).toBe(3);
+    expect(Object.values(out.state.nodes).every((n) => !n.collaborators?.length)).toBe(true);
   });
 });
 
 describe("astra-final-review final_review_route dispatch", () => {
   const models = appendixCAgentModels();
 
-  it("dispatches Claude plan as Opus and default final review as Astra", async () => {
-    const plan = await dispatchNode("architect-plan", DEFAULT_MANUAL, models, "grok");
-    expect(plan.next.kind).toBe("dispatch");
-    if (plan.next.kind === "dispatch") {
-      expect(plan.next.create_worker).toBeUndefined();
-      expect(plan.next.subagent).toMatchObject({
-        harness: "claude-code", model: "anthropic/claude-opus-5-5",
-      });
-    }
-    const review = await dispatchNode("astra-final-review", DEFAULT_MANUAL, models, "grok");
-    expect(review.next.kind).toBe("decide");
-    if (review.next.kind === "decide") {
-      expect(review.next.question).toMatch(/NATIVE_ROUTE_UNSUPPORTED/);
-      expect(review.next.gate_id).toBe("human:astra-final-review");
-    }
-    const consult = await dispatchNode(ASTRA_CONSULT_ID, DEFAULT_MANUAL, models, "grok");
-    expect(consult.next.kind).toBe("dispatch");
-    if (consult.next.kind === "dispatch") {
-      expect(consult.next.create_worker).toBeUndefined();
-      expect(consult.next.subagent).toMatchObject({ model: "anthropic/claude-opus-5-5" });
-    }
+  it("dispatches the Claude Code lead's plan, consult and final review as Codex astra Workers", async () => {
+    const plan = workerOf(await dispatchNode("architect-plan", DEFAULT_MANUAL, models, "grok"));
+    expect(plan).toMatchObject({ role: "keel-architect", agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    const review = workerOf(await dispatchNode("astra-final-review", DEFAULT_MANUAL, models, "grok"));
+    expect(review).toMatchObject({ role: "keel-verifier", agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    const consult = workerOf(await dispatchNode(ASTRA_CONSULT_ID, DEFAULT_MANUAL, models, "grok"));
+    expect(consult).toMatchObject({ agent: "codex", model: "gpt-6-astra", effort: "xhigh" });
   });
 
   it("opens a human gate when the explicit route is unavailable and retries the same route", async () => {
     const manual = cloneManual(DEFAULT_MANUAL);
-    (manual.profiles[0] as { final_review_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).final_review_route = {
-      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
-    };
+    solOf(manual).final_review_route = luna;
+    delete solOf(manual).final_review_fallbacks;
     const missing = models.filter((m) => m.id !== "gpt-6-luna");
     const spec = PSTACK_GRAPHS.feature;
     const h = fakeHost({ node: nodeOk, agentModels: missing });
@@ -283,13 +273,7 @@ describe("astra-final-review final_review_route dispatch", () => {
       s.sol_decisions.push({ gate_id: "human:astra-final-review", attempt: 1, answer: "retry" });
     });
     const retried = await advance(h, "run-fr", { type: "tick" }, { spec, config: cfg(manual), models });
-    expect(retried.next.kind).toBe("dispatch");
-    if (retried.next.kind === "dispatch") {
-      expect(retried.next.create_worker).toBeUndefined();
-      expect(retried.next.subagent).toMatchObject({
-        harness: "codex", model: "gpt-6-luna", effort: "high",
-      });
-    }
+    expect(workerOf(retried)).toMatchObject({ agent: "codex", model: "gpt-6-luna", effort: "high" });
 
     const h2 = fakeHost({ node: nodeOk, agentModels: missing });
     await createRun(h2, {
@@ -318,25 +302,41 @@ describe("astra-final-review final_review_route dispatch", () => {
     expect(stopped.next.kind).toBe("stop");
   });
 
-  it("keeps omitted-field fallback and stop behavior on old manuals", async () => {
+  it("uses final_review_fallbacks, in order, before opening the human gate", async () => {
+    const noOpus = models.filter((m) => m.id !== "anthropic/claude-opus-5-5");
+    const viaBackup = await dispatchNode("astra-final-review", DEFAULT_MANUAL, noOpus);
+    expect(workerOf(viaBackup)).toMatchObject({ agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "xhigh" });
+    if (viaBackup.next.kind === "dispatch") expect(viaBackup.next.note).toMatch(/主路线 anthropic\/claude-opus-5-5 不可用，改用 anthropic\/claude-sonnet-5-5/);
+
+    const noClaude = models.filter((m) => m.agent !== "claude-code");
+    const gated = await dispatchNode("astra-final-review", DEFAULT_MANUAL, noClaude);
+    expect(gated.next.kind).toBe("decide");
+    if (gated.next.kind === "decide") expect(gated.next.gate_id).toBe("human:astra-final-review");
+
+    const noAstraPrimary = models.filter((m) => m.id !== "gpt-6-astra");
+    const grokBackup = await dispatchNode("astra-final-review", DEFAULT_MANUAL, noAstraPrimary, "grok");
+    expect(workerOf(grokBackup)).toMatchObject({ agent: "codex", model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" });
+  });
+
+  it("keeps omitted-field fallback and stop behavior on manuals without final_review_route", async () => {
     const inherited = legacyGrokInheritManual();
-    const noPrimary = models.filter((m) => m.id !== "gpt-6-astra");
-    const fallback = await dispatchNode("astra-final-review", inherited, noPrimary, "grok");
-    expect(fallback.next.kind).toBe("decide");
-    if (fallback.next.kind === "decide") {
-      expect(fallback.next.question).toMatch(/NATIVE_ROUTE_UNSUPPORTED/);
-    }
-    const none = models.filter((m) => !m.id.includes("astra"));
-    const stopped = await dispatchNode("astra-final-review", inherited, none, "grok");
+    const ok = await dispatchNode("astra-final-review", inherited, models, "grok");
+    expect(workerOf(ok)).toMatchObject({ agent: "claude-code", model: "anthropic/claude-opus-5-5" });
+    const noOpus = models.filter((m) => m.id !== "anthropic/claude-opus-5-5");
+    const stopped = await dispatchNode("astra-final-review", inherited, noOpus, "grok");
     expect(stopped.next.kind).toBe("stop");
+    if (stopped.next.kind === "stop") expect(stopped.next.reason).toMatch(/全部路线不可用/);
+
     const emptyExplicit = cloneManual(DEFAULT_MANUAL);
-    (emptyExplicit.profiles[0] as { final_review_route: { agent: "codex"; model: string; provider_id: string; effort: string } }).final_review_route = {
-      agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high",
-    };
+    solOf(emptyExplicit).final_review_route = luna;
     const empty = await dispatchNode("astra-final-review", emptyExplicit, []);
     expect(empty.next.kind).toBe("decide");
     if (empty.next.kind === "decide") expect(empty.next.gate_id).toBe("human:astra-final-review");
-    const emptyOmitted = await dispatchNode("astra-final-review", DEFAULT_MANUAL, []);
+
+    const omitted = cloneManual(DEFAULT_MANUAL);
+    delete solOf(omitted).final_review_route;
+    delete solOf(omitted).final_review_fallbacks;
+    const emptyOmitted = await dispatchNode("astra-final-review", omitted, []);
     expect(emptyOmitted.next.kind).toBe("stop");
   });
 });

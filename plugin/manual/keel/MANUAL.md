@@ -103,14 +103,23 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 PR 状态每30秒读取（面板可见时）；本地回报立即更新卡片。API失败、配额不足、部分不可读分别显示错误并保留已读卡片。不要把 GitHub 的 `updatedAt` 或刷新时间当作任务心跳，也不要把 `done` 当成 PR 已合并。查询详情继续使用原车道门禁判定，不执行写操作。
 
-## subagent 派工
+## 派工：查资料用 sub，其余开 Worker
 
-只读一次性节点使用原生 sub，写入/持续负责人使用已授权 Worker。`next.subagent.required_route` 是用户选择的完整模型、来源、框架和推理强度，不是“可随意取近似模型”的建议。原生工具无法表达其中任一字段时，报告 `NATIVE_ROUTE_UNSUPPORTED` 并停在对应节点，不用主控模型、不换别名版本、不改开 Worker。Pi 没有可用原生 sub 时同样报告缺口。模型目录读取失败、模型停用或指定推理强度不支持时不得继续使用旧目录。
+原则：一次性任务用主控自带的原生 sub，长任务开 Worker。四个环节固定如下：
 
-`next.subagents` 表示真正协作，不是故障备选。主控在同一批并行启动所有独立成员（Codex code-mode 可用 `Promise.all`），自身推进不重叠工作，汇收后关闭原生 sub。每个成员的 `dispatch_key`、原生 id、报告路径各自独立。必须收齐所有报告才能进入下一步；任何失败或缺证据不得冒充全体通过。
+| 环节 | 图节点 | 怎么派 | 模型 |
+|---|---|---|---|
+| 查资料 | explorer / researcher | 主控自带原生 sub，一次并行 3 个，每个只查一个角度 | 不可配置：Claude Code 主控填 `model=haiku`（主控不是 Claude 模型时不填）；Codex 主控填同网关的 `gpt-6-luna`（不可用时不填） |
+| 想方案 | architect-plan、astra-unstick、方向裁决 | 1 个 Worker，主控自己先出一版 | 说明书 architect，必须是和主控不同的执行框架 |
+| 写代码 | 写入节点 | 1 个 Worker | 说明书 worker（主选 + 同框架备用） |
+| 做检查 | astra-final-review | 1 个 Worker | 说明书 final_review_route（+ final_review_fallbacks），必须和写代码不同执行框架、不同模型族；运行时会跳过与写手同框架的路线 |
 
-原生 sub 不报 accepted。单 sub 成功时 `keel_report({phase:"final",dispatch_key,native_agent_id,execution_route,inline_report})`；有文件报告时可以不填 inline_report。`execution_route` 来自实际工具选择/回执，不能把 required_route 原样抄作证明。多模型用父 dispatch_key，传 `parallel_reports:[{dispatch_key,native_agent_id,execution_route,report}]`；report 为完整 NodeReport，成员 native_agent_id 不能重复，route 必须与对应选择一致。工具会核对完整性、身份、HEAD 和结论，不会把 FAIL 成员吞掉。宿主不能提供可核实身份时按 blocked 回报，不声称实际跑通。超时先停止原生 sub，再答 retry/stop；重试仍保持原生通道。
+查资料的 `next.subagents` 是一批并行成员，不是故障备选。主控在同一批全部启动（Codex code-mode 可用 `Promise.all`），自身推进不重叠工作，收齐后关闭这些 sub。Codex 同一会话最多同时开 6 个子助手，跑完不关也占名额。每个成员的 `dispatch_key`、原生 id、报告路径各自独立；必须收齐所有报告才能进入下一步，任何失败或缺证据不得冒充全体通过。Pi 主控没有可用的查资料子助手，会停在人工门。
 
-模型配置使用 `/kv.manual` 唯一真源；旧 v1 可读，协作列表用 v2。每次派工重读，运行中已派出的节点不偷偷换模型。显式 profile 必须与当前 lead 框架一致；修改方案的主控参考模型不会切换当前聊天模型。program 也读取该 lead 的默认方案，不再固定使用 sol。旧独立 `fanout({op:"roles"|"plan"})` 仍是全局 routing.json 的显式入口，不能当成模型配置页的执行器；使用设置页协作配置时应通过 `keel_run` 的 subagents 执行。
+原生 sub 不报 accepted。收齐后用父 dispatch_key 回 `keel_report({phase:"final",dispatch_key,parallel_reports:[{dispatch_key,native_agent_id,execution_route,report}]})`；report 为完整 NodeReport，成员 native_agent_id 不能重复。查资料的 `execution_route` 只核对执行框架（agent）与主控一致，模型、网关、推理强度跟主控走，照实填写，不能编造。工具会核对完整性、身份、HEAD 和结论，不会把 FAIL 成员吞掉。宿主不能提供可核实身份时按 blocked 回报。超时先停止原生 sub，再答 retry/stop；重试仍保持原生通道，不改开 Worker。
+
+想方案、写代码、做检查都需要先 `start_team`，再按 `next.create_worker` 原样开 Worker。主路线报不可用时按该环节的备用顺序降级并写明原因，用尽即停，不自找替代。
+
+模型配置使用 `/kv.manual` 唯一真源，设置页只编辑两套方案（我用 Claude Code 时 / 我用 Codex 时），只给能跑通的选项：不出现 Pi，不出现 Claude Code + Art Cindy 的 GPT（网关 403）。按任务类型分列的旧配置不再生效，统一读默认列。每次派工重读，运行中已派出的节点不偷偷换模型。显式 profile 必须与当前 lead 框架一致；说明书里的 lead 路线只是参考，不会切换当前聊天模型。program 也读取该 lead 的默认方案。旧独立 `fanout({op:"roles"|"plan"})` 仍是全局 routing.json 的显式入口，不能当成模型配置页的执行器。
 
 插件任务（旧通道）走内部 `cindy.tasks`：`getRun` 只传 `runId`；`revision` / `expectedRevision` 必须是安全整数；create 回执丢失用 `list` 按 `requestKey` 找回，找不到开人工门，禁止重放 create；任务 running 时 `keel_wait` 内部 `getRun` 轮询，completed 后 `readMessages` 当 final。当前图不再引用该通道。

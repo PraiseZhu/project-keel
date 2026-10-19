@@ -30,7 +30,7 @@ function workerModel(run: LeadRun, role: string): string | undefined {
 }
 
 describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
-  it("正常路径：作者 grok 族、验证者 gpt 族、真实测试、PR head=已验证 head → done", async () => {
+  it("正常路径（Codex 主控）：写代码 Codex gpt 族、做检查 Claude Code claude 族、真实测试、PR head=已验证 head → done", async () => {
     const world = makeWorld();
     const host = makeE2eHost(world);
     const started = await startRun(host, {
@@ -42,16 +42,42 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
     });
     const run = await leadLoop(host, started, world);
     expect(run.next.kind, `未完成：${JSON.stringify(run.next)}`).toBe("done");
-    expect(family(workerModel(run, "keel-worker") ?? "")).toBe("grok");
-    expect(family(workerModel(run, "keel-verifier") ?? "")).toBe("gpt");
+    expect(workerModel(run, "keel-worker")).toBe("gpt-6.1-sol");
+    expect(workerModel(run, "keel-verifier")).toBe("anthropic/claude-opus-5-5");
+    expect(family(workerModel(run, "keel-worker") ?? "")).toBe("gpt");
+    expect(family(workerModel(run, "keel-verifier") ?? "")).toBe("claude");
+    expect(run.state.author_agents).toEqual(["codex"]);
+    expect(run.state.nodes["astra-final-review"]?.planned_params?.agent).toBe("claude-code");
     expect(run.state.verdict?.level).toBe("unit-test-verified");
     expect(run.state.verdict?.head).toBe(world.prHead);
-    expect(run.state.verdict?.by_family).toBe("gpt");
+    expect(run.state.verdict?.by_family).toBe("claude");
     expect(kinds(run)).toContain("setup");
     expect(kinds(run)).toContain("dispatch");
     expect(kinds(run)).toContain("wait");
     // Happy path is two worker sessions: one writer, then one non-author review.
     expect(run.models.map((m) => m.role)).toEqual(["keel-worker", "keel-verifier"]);
+    expect(run.steps.every((s) => s.kind !== "dispatch" || (!s.subagent && !s.subagents))).toBe(true);
+  });
+
+  it("正常路径（Claude Code 主控）：写代码 Claude Code sonnet、做检查 Codex astra，全程只有 Worker", async () => {
+    const world = makeWorld();
+    const host = makeE2eHost(world);
+    const started = await startRun(host, {
+      goal: "修登录报错",
+      repo_dir: world.repoDir,
+      lead: "claude-code",
+      sc: [...SC],
+      scope: ["src/**"],
+    });
+    const run = await leadLoop(host, started, world);
+    expect(run.next.kind, `未完成：${JSON.stringify(run.next)}`).toBe("done");
+    expect(workerModel(run, "keel-worker")).toBe("anthropic/claude-sonnet-5-5");
+    expect(workerModel(run, "keel-verifier")).toBe("gpt-6-astra");
+    expect(run.state.author_agents).toEqual(["claude-code"]);
+    expect(run.state.nodes["astra-final-review"]?.planned_params?.agent).toBe("codex");
+    expect(run.state.verdict?.by_family).toBe("gpt");
+    expect(run.models.map((m) => m.role)).toEqual(["keel-worker", "keel-verifier"]);
+    expect(run.steps.every((s) => s.kind !== "dispatch" || (!s.subagent && !s.subagents))).toBe(true);
   });
 
   it("同族验证者不能 done", async () => {
@@ -69,7 +95,7 @@ describe("假主控 e2e：bug-fix 从 keel_run 到 done", () => {
         if (next.kind !== "wait") return;
         if (state.cursor !== "report-ready") return;
         if (!state.verdict?.by_family) return;
-        state.verdict.by_family = "grok";
+        state.verdict.by_family = "gpt";
         h.files.set(`runs/${runId}/graph-state.json`, JSON.stringify(state));
       },
       stopWhen: (next) => next.kind === "decide" && next.gate_id === "done",

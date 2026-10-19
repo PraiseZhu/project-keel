@@ -47,7 +47,8 @@ describe("interpreter next kinds", () => {
       dispatch_outcome: { created: true, delivered: true, queued: false },
     }, { spec });
     expect(acc.next.kind).toBe("wait");
-    expect(readState(h).author_families).toContain(family("grok-4.6"));
+    expect(readState(h).author_families).toContain(family("gpt-6.1-sol"));
+    expect(readState(h).author_agents).toEqual(["codex"]);
     const fin = await advance(h, "run1", {
       type: "report",
       phase: "final",
@@ -140,12 +141,16 @@ describe("interpreter next kinds", () => {
     const ver = afterResearch.next.kind === "dispatch" ? afterResearch : await advance(h3, "run4", { type: "tick" }, { spec: s3 });
     expect(ver.next.kind).toBe("dispatch");
     if (ver.next.kind !== "dispatch") throw new Error("verify");
-    expect(ver.next.create_worker).toBeUndefined();
-    expect(ver.next.subagent?.role).toBe("keel-verifier");
-    expect(ver.next.subagent?.model).toBe("gpt-6-luna");
+    // 做检查 is a Worker on the other harness and model family than the Codex writer, never a native sub.
+    expect(ver.next.subagent).toBeUndefined();
+    expect(ver.next.subagents).toBeUndefined();
+    expect(ver.next.create_worker).toMatchObject({ role: "keel-verifier", agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
+    await advance(h3, "run4", {
+      type: "report", phase: "accepted", dispatch_key: ver.next.dispatch_key,
+      worker_id: "wv", worker_session_id: "wsv", dispatch_outcome: { created: true, delivered: true, queued: false },
+    }, { spec: s3 });
     const done = await advance(h3, "run4", {
       type: "report", phase: "final", dispatch_key: ver.next.dispatch_key, inline_report: { status: "done" },
-      execution_route: ver.next.subagent?.required_route,
     }, { spec: s3 });
     expect(done.next.kind).toBe("done");
   });
@@ -172,17 +177,20 @@ describe("interpreter next kinds", () => {
   });
 
   it("verifier skips author families and stops when none remain", async () => {
-    expect(family("gpt-6-luna")).toBe("gpt");
-    const { h, spec } = await boot({ entry: "verify", author_families: ["gpt", "grok"] });
+    expect(family("anthropic/claude-opus-5-5")).toBe("claude");
+    const { h, spec } = await boot({ entry: "verify", author_families: ["gpt", "claude"] });
+    // 做检查 runs in a Worker, so the team is set up first and only then does route selection run out of candidates.
     const first = await advance(h, "run1", { type: "tick" }, { spec });
-    expect(first.next.kind).toBe("stop");
-    if (first.next.kind !== "stop") throw new Error("stop");
-    expect(first.next.reason).toMatch(/不同族/);
+    expect(first.next.kind).toBe("setup");
+    const second = await setupOk(h, spec);
+    expect(second.next.kind).toBe("stop");
+    if (second.next.kind !== "stop") throw new Error("stop");
+    expect(second.next.reason).toMatch(/不同族/);
   });
 });
 
 const emptyCtx = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
-const plannedWorker = { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" };
+const plannedWorker = { agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" };
 
 describe("planned worker replay and accepted resolved route", () => {
   it("re-tick before accepted keeps the same key and fast:false / local", async () => {
@@ -231,6 +239,7 @@ describe("planned worker replay and accepted resolved route", () => {
   it("accepted resolved that differs in model, provider, or effort is EXECUTION_ROUTE_MISMATCH", async () => {
     const mismatches = [
       { id: "run-mis-model", resolved: { ...plannedWorker, model: "gpt-6-luna" } },
+      { id: "run-mis-agent", resolved: { ...plannedWorker, agent: "claude-code" } },
       { id: "run-mis-provider", resolved: { ...plannedWorker, provider_id: "xd", providerId: "xd" } },
       { id: "run-mis-effort", resolved: { ...plannedWorker, effort: "low" } },
     ];
@@ -262,7 +271,7 @@ describe("planned worker replay and accepted resolved route", () => {
       worker_id: "w1",
       worker_session_id: "ws1",
       dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
-      resolved: { agent: "pi", model: "grok-4.6", providerId: "art-cindy", effort: "high" },
+      resolved: { agent: "codex", model: "gpt-6.1-sol", providerId: "art-cindy", effort: "high" },
     });
     expect(out.ok, JSON.stringify(out)).toBe(true);
     expect(out.result.next.kind).toBe("wait");

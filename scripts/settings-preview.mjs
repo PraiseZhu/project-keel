@@ -11,7 +11,7 @@ let kv = { manual: structuredClone(DEFAULT_MANUAL), previewUnrelatedPreference: 
 let models = [];
 let catalogStatus = 200;
 let saveStatus = 204;
-const routes = DEFAULT_MANUAL.profiles.flatMap((profile) => [profile.lead, profile.direction_route, profile.final_review_route,
+const routes = DEFAULT_MANUAL.profiles.flatMap((profile) => [profile.lead, profile.direction_route, profile.final_review_route, ...(profile.final_review_fallbacks ?? []),
   ...Object.values(profile.nodes).flatMap((roles) => Object.values(roles).flatMap((slot) => [slot.primary, ...(slot.fallbacks ?? [])]))]).filter(Boolean);
 for (const route of routes) {
   if (models.some((model) => model.id === route.model && model.providerId === route.provider_id && model.agent === route.agent)) continue;

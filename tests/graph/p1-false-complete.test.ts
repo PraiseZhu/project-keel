@@ -14,7 +14,7 @@ import {
   waitOnFromFacts,
 } from "../../src/main/tools/keel.ts";
 import type { GraphRunState, Next } from "../../src/main/graph/state.ts";
-import { nativeFinalArgs } from "../e2e/helpers.ts";
+import { workerFinalArgs } from "../e2e/helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import type { GraphSpec } from "../../src/shared/graph/spec.ts";
@@ -620,7 +620,7 @@ describe("retry_verify rewinds the review (astra-final-review) without burning o
     expect(retry.result.next.kind).toBe("dispatch");
     const key = retry.result.next.dispatch_key as string;
     expect(key).toBe(`${id}:astra-final-review:2`);
-    const report: any = await runTool(ctx, "keel_report", nativeFinalArgs({
+    const report: any = await runTool(ctx, "keel_report", workerFinalArgs({
       run_id: id,
       dispatch: retry.result.next as Extract<Next, { kind: "dispatch" }>,
       report: {
@@ -660,7 +660,7 @@ describe("retry_verify rewinds the review (astra-final-review) without burning o
     expect(retry.ok, retry.message).toBe(true);
     expect(retry.result.next.kind).toBe("dispatch");
     const key = retry.result.next.dispatch_key as string;
-    const report: any = await runTool(ctx, "keel_report", nativeFinalArgs({
+    const report: any = await runTool(ctx, "keel_report", workerFinalArgs({
       run_id: id,
       dispatch: retry.result.next as Extract<Next, { kind: "dispatch" }>,
       report: {

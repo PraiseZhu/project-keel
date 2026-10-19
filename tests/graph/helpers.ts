@@ -4,6 +4,7 @@ import type { InitRunOpts } from "../../src/main/graph/state.ts";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import type { GraphSpec, NodeKind } from "../../src/shared/graph/spec.ts";
+import { cloneManual, DEFAULT_MANUAL, type ModelManual, type Profile } from "../../src/shared/manual/schema.ts";
 import { fakeHost, type FakeHost } from "../helpers/fakeHost.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
 
@@ -45,8 +46,22 @@ export function miniSpec(): GraphSpec {
   };
 }
 
+/**
+ * The shipped graphs have no plugin_task node and the default manual has no 查资料 slot, but the legacy plugin_task
+ * channel still reads a researcher slot from the manual. Tests that drive plugin_task research install one.
+ */
+export function pluginResearchManual(): ModelManual {
+  const manual = cloneManual(DEFAULT_MANUAL);
+  const sol = manual.profiles.find((p) => p.id === "sol")!;
+  (sol as { nodes: Profile["nodes"] }).nodes = {
+    default: { ...sol.nodes.default, researcher: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } } },
+  };
+  return manual;
+}
+
 export async function boot(extra: Partial<InitRunOpts> = {}, host?: FakeHost): Promise<{ h: FakeHost; spec: GraphSpec; opts: AdvanceOpts }> {
   const h = host ?? fakeHost({
+    kv: { manual: pluginResearchManual() },
     node: (method: string) => {
       if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "feat/x", head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } };
       return { ok: false, message: method };

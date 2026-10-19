@@ -26,10 +26,11 @@ function model(partial: AgentModel): AgentModel {
   return { name: partial.id, visible: true, ...partial };
 }
 
-/** Stub /agent-models covering every Appendix C id × agent × provider. */
+/** Stub /agent-models covering every default route id × agent × provider (plus the extra rows other tests reuse). */
 export function appendixCAgentModels(): AgentModel[] {
   return [
     model({ id: "gpt-6.1-sol", agent: "codex", providerId: "art-cindy", providerName: "Art Cindy", efforts: gptEfforts }),
+    model({ id: "openai/gpt-6.1-sol", agent: "codex", providerId: "xd", providerName: "XD", efforts: gptEfforts }),
     model({ id: "gpt-6-luna", agent: "codex", providerId: "art-cindy", providerName: "Art Cindy", efforts: gptEfforts }),
     model({ id: "openai/gpt-6-luna", agent: "codex", providerId: "xd", providerName: "XD", efforts: gptEfforts }),
     model({ id: "gpt-6-astra", agent: "codex", providerId: "art-cindy", providerName: "Art Cindy", efforts: gptEfforts }),
@@ -43,7 +44,7 @@ export function appendixCAgentModels(): AgentModel[] {
   ];
 }
 
-/** Pre-redesign Claude profile: inherit sol, no direction_route. */
+/** Claude profile that inherits sol's slots and has no direction_route / final_review_route of its own. */
 export function legacyGrokInheritManual(): ModelManual {
   const sol = cloneManual(DEFAULT_MANUAL).profiles.find((p) => p.id === "sol")!;
   return {
@@ -64,11 +65,32 @@ export function legacyGrokInheritManual(): ModelManual {
   };
 }
 
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+function profileOf(manual: ModelManual, id: string): Mutable<Profile> {
+  return manual.profiles.find((p) => p.id === id) as Mutable<Profile>;
+}
+
 function setPrimary(manual: ModelManual, profileId: string, taskType: TaskType, role: Role, route: Route): void {
   const profile = manual.profiles.find((p) => p.id === profileId)!;
   const slot = profile.nodes[taskType]![role]!;
   (slot as { primary: Route }).primary = route;
 }
+
+/** A manual whose sol profile has the given stage routes; everything else stays at the defaults. */
+function solWith(edit: (sol: Mutable<Profile>) => void): ModelManual {
+  const manual = cloneManual(DEFAULT_MANUAL);
+  edit(profileOf(manual, "sol"));
+  return manual;
+}
+
+function issuesOf(manual: ModelManual, models: readonly AgentModel[] = appendixCAgentModels()) {
+  return validateManual(manual, models, { manual });
+}
+
+const codexAstra: Route = { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" };
+const claudeOpus: Route = { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" };
+const claudeSonnet: Route = { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "xhigh" };
 
 function kvOfByteSize(size: number, extra: Record<string, unknown> = {}): { kv: Record<string, unknown>; bytes: number } {
   const kv: Record<string, unknown> = { manual: DEFAULT_MANUAL, ...extra, pad: "" };
@@ -80,71 +102,104 @@ function kvOfByteSize(size: number, extra: Record<string, unknown> = {}): { kv: 
   return { kv, bytes: bytes() };
 }
 
-describe("Appendix C defaults", () => {
-  it("validate against a stub catalog that contains every Appendix C model", () => {
-    const issues = validateManual(DEFAULT_MANUAL, appendixCAgentModels(), { manual: DEFAULT_MANUAL });
-    expect(issues).toEqual([]);
+describe("four-stage defaults", () => {
+  it("validate against a stub catalog that contains every default route", () => {
+    expect(validateManual(DEFAULT_MANUAL, appendixCAgentModels(), { manual: DEFAULT_MANUAL })).toEqual([]);
   });
 
-  it("Sol 主控 is the Codex default; grok 主控 is an independent Claude profile", () => {
-    expect(resolveProfileForHarness(DEFAULT_MANUAL, "codex")).toMatchObject({ id: "sol", harness: "codex", name: "Sol 主控" });
+  it("Codex 主控 (sol): 想方案 and 做检查 on Claude Code, 写代码 on Codex with an XD backup", () => {
+    const sol = resolveProfileForHarness(DEFAULT_MANUAL, "codex");
+    expect(sol).toMatchObject({ id: "sol", harness: "codex", name: "Codex 主控", direction_gate: "lead" });
+    expect(sol.inherit).toBeUndefined();
+    expect(sol.direction_route).toBeUndefined();
+    expect(sol.nodes.default?.architect).toEqual({ primary: claudeOpus });
+    expect(sol.nodes.default?.worker).toEqual({
+      primary: { agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" },
+      fallbacks: [{ agent: "codex", model: "openai/gpt-6.1-sol", provider_id: "xd", effort: "high" }],
+    });
+    expect(sol.final_review_route).toEqual(claudeOpus);
+    expect(sol.final_review_fallbacks).toEqual([claudeSonnet]);
+  });
+
+  it("Claude Code 主控 (grok): 想方案 and 做检查 on Codex astra, 写代码 on Claude Code sonnet with an opus backup", () => {
     const grok = resolveProfileForHarness(DEFAULT_MANUAL, "claude-code");
-    expect(grok).toMatchObject({ id: "grok", harness: "claude-code" });
+    expect(grok).toMatchObject({ id: "grok", harness: "claude-code", name: "Claude Code 主控", direction_gate: "astra" });
     expect(grok.inherit).toBeUndefined();
-    expect(grok.direction_gate).toBe("astra");
-    expect(grok.direction_route).toEqual({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
-    expect(grok.final_review_route).toEqual({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
-    expect(grok.lead).toEqual({ agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "high" });
-    expect(grok.nodes.default?.explorer?.primary).toEqual({ agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "medium" });
-    expect(grok.nodes.default?.researcher?.primary).toEqual({ agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "high" });
-    expect(grok.nodes.default?.worker?.primary).toEqual({ agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" });
-    expect(grok.nodes.default?.verifier?.primary).toEqual({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
-    expect(grok.nodes.default?.architect?.primary).toEqual({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" });
-    expect(family(grok.nodes.default!.verifier!.primary.model)).not.toBe("claude");
+    expect(grok.direction_route).toBeUndefined();
+    expect(grok.nodes.default?.architect).toEqual({ primary: codexAstra });
+    expect(grok.nodes.default?.worker).toEqual({
+      primary: { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" },
+      fallbacks: [{ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "high" }],
+    });
+    expect(grok.final_review_route).toEqual(codexAstra);
+    expect(grok.final_review_fallbacks).toEqual([{ agent: "codex", model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" }]);
     expect(() => resolveProfileForHarness(DEFAULT_MANUAL, "pi")).toThrow(KeelError);
   });
 
-  it("Codex defaults keep the recommended five slots and 主控自己定", () => {
-    const sol = resolveProfileForHarness(DEFAULT_MANUAL, "codex");
-    expect(sol.direction_gate).toBe("lead");
-    expect(sol.direction_route).toBeUndefined();
-    expect(sol.final_review_route).toBeUndefined();
-    expect("final_review_route" in sol).toBe(false);
-    expect(sol.lead).toEqual({ agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" });
-    expect(sol.nodes.default?.explorer?.primary).toMatchObject({ model: "gpt-6-luna", effort: "medium" });
-    expect(sol.nodes.default?.researcher?.primary).toMatchObject({ model: "gpt-6-luna", effort: "high" });
-    expect(sol.nodes.default?.worker?.primary).toMatchObject({ agent: "pi", model: "grok-4.6", effort: "high" });
-    expect(sol.nodes.default?.verifier?.primary).toMatchObject({ model: "gpt-6-luna", effort: "high" });
-    expect(sol.nodes.default?.architect?.primary).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
+  it("has no explorer / researcher / verifier slots, no task-type columns, and no collaborators", () => {
+    expect(DEFAULT_MANUAL.version).toBe(2);
+    for (const profile of DEFAULT_MANUAL.profiles) {
+      expect(Object.keys(profile.nodes), profile.id).toEqual(["default"]);
+      expect(Object.keys(profile.nodes.default!).sort(), profile.id).toEqual(["architect", "worker"]);
+      expect(profile.direction_collaborators, profile.id).toBeUndefined();
+      expect(profile.final_review_collaborators, profile.id).toBeUndefined();
+      expect(profile.nodes.default!.worker!.collaborators, profile.id).toBeUndefined();
+    }
+  });
+
+  it("keeps the stage invariants the validator enforces: 想方案 off the lead's harness, 做检查 off the writer's harness and family", () => {
+    for (const profile of DEFAULT_MANUAL.profiles) {
+      const plan = resolve(DEFAULT_MANUAL, profile.id, "default", "architect");
+      const code = resolve(DEFAULT_MANUAL, profile.id, "default", "worker");
+      const review = resolveFinalReview(DEFAULT_MANUAL, profile.id, "default");
+      expect(plan.primary.agent, `${profile.id} plan`).not.toBe(profile.harness);
+      for (const route of code.fallbacks) expect(route.agent, `${profile.id} code backup`).toBe(code.primary.agent);
+      for (const route of [review.primary, ...review.fallbacks]) {
+        expect(route.agent, `${profile.id} review`).not.toBe(code.primary.agent);
+        expect(family(route.model), `${profile.id} review`).not.toBe(family(code.primary.model));
+      }
+    }
   });
 
   it("mutating sol slots does not change grok defaults", () => {
     const manual = cloneManual(DEFAULT_MANUAL);
-    (manual.profiles[0]!.nodes.default!.explorer as { primary: Route }).primary = { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "low" };
-    expect(DEFAULT_MANUAL.profiles.find((p) => p.id === "grok")!.nodes.default!.explorer!.primary.effort).toBe("medium");
-    expect(resolve(manual, "grok", "default", "explorer").primary.effort).toBe("medium");
+    const solWorker = profileOf(manual, "sol").nodes.default!.worker as { primary: Route };
+    solWorker.primary = { ...solWorker.primary, effort: "low" };
+    expect(resolve(manual, "sol", "default", "worker").primary.effort).toBe("low");
+    expect(resolve(manual, "grok", "default", "worker").primary.effort).toBe("high");
+    expect(resolve(DEFAULT_MANUAL, "sol", "default", "worker").primary.effort).toBe("high");
   });
 });
 
-describe("resolve fallback order", () => {
-  it("uses nodes[taskType][role], then nodes.default[role], then inherit", () => {
+describe("resolve", () => {
+  it("reads only nodes.default (then inherit); per-task-type columns are ignored", () => {
     const manual = legacyGrokInheritManual();
-    const sol = manual.profiles[0] as Profile;
-    (sol as { nodes: Profile["nodes"] }).nodes = {
+    const sol = profileOf(manual, "sol");
+    sol.nodes = {
       ...sol.nodes,
-      "bug-fix": {
-        explorer: {
-          primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "low" },
-        },
-      },
+      "bug-fix": { worker: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "low" } } },
+      feature: { architect: { primary: codexAstra } },
     };
-    expect(resolve(manual, "sol", "bug-fix", "explorer").primary.effort).toBe("low");
-    expect(resolve(manual, "sol", "bug-fix", "worker").primary).toMatchObject({ model: "grok-4.6", agent: "pi" });
-    expect(resolve(manual, "grok", "bug-fix", "explorer").primary.effort).toBe("low");
-    expect(resolve(manual, "grok", "feature", "architect").primary).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
-    expect(resolve(manual, "sol", "default", "verifier").fallbacks).toEqual([
-      { agent: "codex", model: "openai/gpt-6-luna", provider_id: "xd", effort: "high" },
-    ]);
+    const worker = resolve(manual, "sol", "default", "worker");
+    expect(worker.primary).toMatchObject({ model: "gpt-6.1-sol", effort: "high" });
+    expect(resolve(manual, "sol", "bug-fix", "worker")).toEqual(worker);
+    expect(resolve(manual, "grok", "bug-fix", "worker")).toEqual(worker);
+    expect(resolve(manual, "sol", "feature", "architect").primary).toEqual(claudeOpus);
+    expect(resolve(manual, "grok", "feature", "architect").primary).toEqual(claudeOpus);
+    expect(worker.fallbacks).toEqual([{ agent: "codex", model: "openai/gpt-6.1-sol", provider_id: "xd", effort: "high" }]);
+  });
+
+  it("does not resolve a slot that only exists in a task-type column", () => {
+    const lead = { agent: "codex" as const, model: "gpt-6.1-sol", provider_id: "art-cindy" };
+    const manual: ModelManual = {
+      version: 2,
+      profiles: [{
+        id: "solo", name: "x", harness: "codex", lead, direction_gate: "lead",
+        nodes: { "bug-fix": { worker: { primary: { agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy" } } } },
+      }],
+      defaults_by_harness: {},
+    };
+    expect(() => resolve(manual, "solo", "bug-fix", "worker")).toThrow(expect.objectContaining({ code: "MANUAL_SLOT_UNRESOLVED" }));
   });
 
   it("throws with a diagnostic on unknown profile, dangling inherit, cycle, and missing slot", () => {
@@ -189,38 +244,100 @@ describe("validateManual", () => {
       model({ id: "plain", agent: "codex", providerId: "art-cindy", efforts: [] }),
     ];
     const withEffort = cloneManual(DEFAULT_MANUAL);
-    setPrimary(withEffort, "sol", "default", "explorer", { agent: "codex", model: "plain", provider_id: "art-cindy", effort: "high" });
+    setPrimary(withEffort, "sol", "default", "worker", { agent: "codex", model: "plain", provider_id: "art-cindy", effort: "high" });
     expect(validateManual(withEffort, models, { manual: withEffort }).some((i) => i.message.includes("未声明档位"))).toBe(true);
 
     const noEffort = cloneManual(DEFAULT_MANUAL);
-    setPrimary(noEffort, "sol", "default", "explorer", { agent: "codex", model: "plain", provider_id: "art-cindy" });
-    expect(validateManual(noEffort, models, { manual: noEffort }).some((i) => i.path.includes("explorer"))).toBe(false);
+    setPrimary(noEffort, "sol", "default", "worker", { agent: "codex", model: "plain", provider_id: "art-cindy" });
+    expect(validateManual(noEffort, models, { manual: noEffort }).some((i) => i.path.includes("worker/primary"))).toBe(false);
   });
 
-  it("rejects Verifier and Worker of the same family, including gpt-6-luna vs openai/gpt-6-luna", () => {
-    const same = cloneManual(DEFAULT_MANUAL);
-    (same.profiles[0]! as { final_review_route: Route }).final_review_route = {
-      agent: "pi",
-      model: "grok-4.6",
-      provider_id: "art-cindy",
-      effort: "high",
-    };
-    expect(validateManual(same, appendixCAgentModels(), { manual: same }).some((i) => i.message.includes("同模型族"))).toBe(true);
+  it("想方案 must run on the other harness than the lead", () => {
+    const sameAsLead = solWith((sol) => {
+      sol.nodes = { default: { ...sol.nodes.default, architect: { primary: codexAstra } } };
+    });
+    const issues = issuesOf(sameAsLead);
+    expect(issues.some((i) => i.path === "profiles/sol/nodes/default/architect/primary" && i.message.includes("想方案要换一家"))).toBe(true);
 
-    const prefixed = cloneManual(DEFAULT_MANUAL);
-    (prefixed.profiles[0]!.nodes.default!.worker as { primary: { agent: string; model: string; provider_id: string; effort: string } }).primary = {
-      agent: "codex",
-      model: "gpt-6-luna",
-      provider_id: "art-cindy",
-      effort: "high",
+    const claudeLead = cloneManual(DEFAULT_MANUAL);
+    profileOf(claudeLead, "grok").nodes = { default: { ...profileOf(claudeLead, "grok").nodes.default, architect: { primary: claudeOpus } } };
+    expect(issuesOf(claudeLead).some((i) => i.path === "profiles/grok/nodes/default/architect/primary" && i.message.includes("想方案要换一家"))).toBe(true);
+  });
+
+  it("写代码 backups must stay on the primary's harness", () => {
+    const manual = solWith((sol) => {
+      sol.nodes = { default: { ...sol.nodes.default, worker: { primary: sol.nodes.default!.worker!.primary, fallbacks: [claudeSonnet] } } };
+    });
+    expect(issuesOf(manual).some((i) => i.path === "profiles/sol/nodes/default/worker/fallbacks/0" && i.message.includes("同一家"))).toBe(true);
+  });
+
+  it("做检查 must not run on the writer's harness, primary or backup", () => {
+    const primarySame = solWith((sol) => { sol.final_review_route = codexAstra; });
+    expect(issuesOf(primarySame).some((i) => i.path === "profiles/sol/final_review_route" && i.message.includes("不是同一家"))).toBe(true);
+
+    const backupSame = solWith((sol) => { sol.final_review_fallbacks = [codexAstra]; });
+    expect(issuesOf(backupSame).some((i) => i.path === "profiles/sol/final_review_fallbacks/0" && i.message.includes("不是同一家"))).toBe(true);
+
+    const noExplicit = solWith((sol) => {
+      delete sol.final_review_route;
+      delete sol.final_review_fallbacks;
+      sol.nodes = { default: { ...sol.nodes.default, architect: { primary: codexAstra } } };
+    });
+    // the architect slot doubles as 做检查 when no explicit route exists; it is also wrong as 想方案 for a Codex lead
+    expect(issuesOf(noExplicit).some((i) => i.message.includes("做检查要和写代码不是同一家"))).toBe(true);
+  });
+
+  it("做检查 must not share the writer's model family, including openai/ prefixed ids", () => {
+    const models = [...appendixCAgentModels(), model({ id: "openai/gpt-6-astra", agent: "claude-code", providerId: "xd", efforts: gptEfforts })];
+    const otherHarnessSameFamily = solWith((sol) => {
+      sol.final_review_route = { agent: "claude-code", model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" };
+      delete sol.final_review_fallbacks;
+    });
+    const issues = issuesOf(otherHarnessSameFamily, models);
+    expect(issues.some((i) => i.path === "profiles/sol/final_review_route" && i.message.includes("同模型族"))).toBe(true);
+    expect(issues.some((i) => i.message.includes("不是同一家"))).toBe(false);
+  });
+
+  it("rejects Pi and Claude Code on Art Cindy GPT routes", () => {
+    const pi = solWith((sol) => {
+      sol.nodes = { default: { ...sol.nodes.default, worker: { primary: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" } } } };
+    });
+    expect(issuesOf(pi).some((i) => i.path === "profiles/sol/nodes/default/worker/primary" && i.message.includes("Pi"))).toBe(true);
+
+    const gptOnClaude = cloneManual(DEFAULT_MANUAL);
+    profileOf(gptOnClaude, "grok").nodes = {
+      default: { ...profileOf(gptOnClaude, "grok").nodes.default, worker: { primary: { agent: "claude-code", model: "gpt-6-astra", provider_id: "art-cindy", effort: "high" } } },
     };
-    (prefixed.profiles[0]! as { final_review_route: Route }).final_review_route = {
-      agent: "codex",
-      model: "openai/gpt-6-luna",
-      provider_id: "xd",
-      effort: "high",
-    };
-    expect(validateManual(prefixed, appendixCAgentModels(), { manual: prefixed }).some((i) => i.message.includes("同模型族"))).toBe(true);
+    const models = [...appendixCAgentModels(), model({ id: "gpt-6-astra", agent: "claude-code", providerId: "art-cindy", efforts: gptEfforts })];
+    expect(issuesOf(gptOnClaude, models).some((i) => i.path === "profiles/grok/nodes/default/worker/primary" && i.message.includes("403"))).toBe(true);
+  });
+
+  it("keeps 写代码 as a single writer", () => {
+    const manual = solWith((sol) => {
+      const worker = sol.nodes.default!.worker!;
+      sol.nodes = { default: { ...sol.nodes.default, worker: { ...worker, collaborators: [worker.primary] } } };
+    });
+    expect(issuesOf(manual).some((i) => i.path === "profiles/sol/nodes/default/worker" && i.message.includes("单一写手"))).toBe(true);
+  });
+
+  it("no longer validates the lead route, explorer / researcher / verifier slots, task-type columns, or collaborators", () => {
+    const unknown: Route = { agent: "codex", model: "no-such-model", provider_id: "nowhere", effort: "ultra" };
+    const manual = solWith((sol) => {
+      sol.lead = unknown;
+      sol.direction_collaborators = [unknown];
+      sol.final_review_collaborators = [unknown];
+      sol.nodes = {
+        default: { ...sol.nodes.default, explorer: { primary: unknown }, researcher: { primary: unknown }, verifier: { primary: unknown } },
+        "bug-fix": { worker: { primary: unknown }, architect: { primary: unknown } },
+        feature: { worker: { primary: unknown } },
+      };
+    });
+    expect(issuesOf(manual)).toEqual([]);
+  });
+
+  it("validates an inheriting profile by the routes it resolves to", () => {
+    const issues = issuesOf(legacyGrokInheritManual());
+    expect(issues.some((i) => i.path === "profiles/grok/nodes/default/architect/primary" && i.message.includes("想方案要换一家"))).toBe(true);
   });
 
   it("rejects inherit cycles, dangling refs, and harness-default mismatch", () => {
@@ -282,11 +399,12 @@ describe("validateManual", () => {
 
   it("parses and validates final_review_route; omitted field is not filled in", () => {
     const raw = cloneManual(DEFAULT_MANUAL);
+    const sonnetHigh: Route = { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" };
     const parsed = parseManual({
       ...raw,
-      profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_route: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" } } : p),
+      profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_route: sonnetHigh } : p),
     });
-    expect(parsed.profiles[0]!.final_review_route).toEqual({ agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
+    expect(parsed.profiles[0]!.final_review_route).toEqual(sonnetHigh);
     expect(importManual(exportManual(parsed))).toEqual(parsed);
     expect(validateManual(parsed, appendixCAgentModels(), { manual: parsed })).toEqual([]);
 
@@ -295,11 +413,11 @@ describe("validateManual", () => {
     expect("final_review_route" in omitted.profiles[1]!).toBe(false);
 
     const bad = cloneManual(parsed);
-    (bad.profiles[0] as { final_review_route: Route }).final_review_route = { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "ultra" };
+    (bad.profiles[0] as { final_review_route: Route }).final_review_route = { ...sonnetHigh, effort: "ultra" };
     expect(validateManual(bad, appendixCAgentModels(), { manual: bad }).some((i) => i.path.includes("final_review_route") && i.message.includes("ultra"))).toBe(true);
 
     const missing = cloneManual(parsed);
-    (missing.profiles[0] as { final_review_route: Route }).final_review_route = { agent: "codex", model: "no-such-model", provider_id: "art-cindy", effort: "xhigh" };
+    (missing.profiles[0] as { final_review_route: Route }).final_review_route = { ...sonnetHigh, model: "no-such-model" };
     expect(validateManual(missing, appendixCAgentModels(), { manual: missing }).some((i) => i.path.includes("final_review_route") && i.message.includes("不存在"))).toBe(true);
 
     expect(() => parseManual({
@@ -311,51 +429,73 @@ describe("validateManual", () => {
       profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_route: null } : p),
     })).toThrow(expect.objectContaining({ code: "MANUAL_INVALID", path: expect.stringContaining("final_review_route") }));
   });
+
+  it("parses final_review_fallbacks, keeps them through export/import, and requires an explicit final_review_route", () => {
+    const parsed = parseManual(JSON.parse(exportManual(DEFAULT_MANUAL)));
+    expect(parsed.profiles[0]!.final_review_fallbacks).toEqual([claudeSonnet]);
+    expect(importManual(exportManual(parsed)).profiles[0]!.final_review_fallbacks).toEqual([claudeSonnet]);
+
+    const raw = cloneManual(DEFAULT_MANUAL);
+    expect(() => parseManual({
+      ...raw,
+      profiles: raw.profiles.map((p) => {
+        const { final_review_route: _route, ...rest } = p;
+        return p.id === "sol" ? rest : p;
+      }),
+    })).toThrow(expect.objectContaining({ code: "MANUAL_INVALID", path: expect.stringContaining("final_review_fallbacks") }));
+    expect(() => parseManual({
+      ...raw,
+      profiles: raw.profiles.map((p) => p.id === "sol" ? { ...p, final_review_fallbacks: [claudeSonnet, claudeSonnet, claudeSonnet] } : p),
+    })).toThrow(/最多 2/);
+  });
 });
 
 describe("resolveDirection", () => {
   it("uses direction_route when present and otherwise the architect slot including inherit", () => {
-    expect(resolveDirection(DEFAULT_MANUAL, "sol", "default").primary).toMatchObject({ model: "gpt-6-astra", effort: "xhigh" });
-    expect(resolveDirection(DEFAULT_MANUAL, "grok", "default").primary).toEqual({
-      agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh",
-    });
-    expect(resolveDirection(DEFAULT_MANUAL, "grok", "default").fallbacks).toEqual([]);
+    expect(resolveDirection(DEFAULT_MANUAL, "sol", "default").primary).toEqual(claudeOpus);
+    expect(resolveDirection(DEFAULT_MANUAL, "grok", "default")).toEqual({ primary: codexAstra, fallbacks: [] });
+
+    const explicit = solWith((sol) => { sol.direction_route = claudeSonnet; });
+    expect(resolveDirection(explicit, "sol", "default")).toEqual({ primary: claudeSonnet, fallbacks: [] });
 
     const inherited = legacyGrokInheritManual();
-    expect(resolveDirection(inherited, "grok", "feature").primary).toMatchObject({ model: "gpt-6-astra" });
-    expect(resolveDirection(inherited, "grok", "bug-fix").fallbacks.length).toBeGreaterThan(0);
+    expect(resolveDirection(inherited, "grok", "feature").primary).toEqual(claudeOpus);
+    expect(resolveDirection(inherited, "grok", "bug-fix").fallbacks).toEqual([]);
+  });
 
-    const tasked = cloneManual(DEFAULT_MANUAL);
-    (tasked.profiles[0] as { nodes: Profile["nodes"] }).nodes = {
-      ...tasked.profiles[0]!.nodes,
-      feature: {
-        architect: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } },
-      },
-    };
-    expect(resolveDirection(tasked, "sol", "feature").primary.model).toBe("gpt-6-luna");
+  it("ignores per-task-type architect columns", () => {
+    const tasked = solWith((sol) => {
+      sol.nodes = { ...sol.nodes, feature: { architect: { primary: codexAstra } } };
+    });
+    expect(resolveDirection(tasked, "sol", "feature").primary).toEqual(claudeOpus);
   });
 });
 
 describe("resolveFinalReview", () => {
-  it("uses final_review_route when present and otherwise the architect slot including inherit", () => {
-    expect(resolveFinalReview(DEFAULT_MANUAL, "sol", "default")).toEqual(resolve(DEFAULT_MANUAL, "sol", "default", "architect"));
+  it("returns final_review_route with its fallbacks, otherwise the architect slot including inherit", () => {
+    expect(resolveFinalReview(DEFAULT_MANUAL, "sol", "default")).toEqual({ primary: claudeOpus, fallbacks: [claudeSonnet] });
     expect(resolveFinalReview(DEFAULT_MANUAL, "grok", "default")).toEqual({
-      primary: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" },
-      fallbacks: [],
+      primary: codexAstra,
+      fallbacks: [{ agent: "codex", model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" }],
     });
 
     const inherited = legacyGrokInheritManual();
-    expect(resolveFinalReview(inherited, "grok", "feature").primary).toMatchObject({ model: "gpt-6-astra" });
-    expect(resolveFinalReview(inherited, "grok", "bug-fix").fallbacks.length).toBeGreaterThan(0);
+    expect(resolveFinalReview(inherited, "grok", "feature")).toEqual(resolve(inherited, "sol", "default", "architect"));
 
-    const tasked = cloneManual(DEFAULT_MANUAL);
-    (tasked.profiles[0] as { nodes: Profile["nodes"] }).nodes = {
-      ...tasked.profiles[0]!.nodes,
-      feature: {
-        architect: { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } },
-      },
-    };
-    expect(resolveFinalReview(tasked, "sol", "feature").primary.model).toBe("gpt-6-luna");
+    const omitted = solWith((sol) => {
+      delete sol.final_review_route;
+      delete sol.final_review_fallbacks;
+    });
+    expect(resolveFinalReview(omitted, "sol", "default")).toEqual(resolve(omitted, "sol", "default", "architect"));
+  });
+
+  it("ignores per-task-type architect columns", () => {
+    const tasked = solWith((sol) => {
+      delete sol.final_review_route;
+      delete sol.final_review_fallbacks;
+      sol.nodes = { ...sol.nodes, feature: { architect: { primary: codexAstra } } };
+    });
+    expect(resolveFinalReview(tasked, "sol", "feature").primary).toEqual(claudeOpus);
   });
 
   it("does not inherit a parent final_review_route", () => {

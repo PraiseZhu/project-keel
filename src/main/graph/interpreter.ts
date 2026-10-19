@@ -6,7 +6,8 @@ import { resolve } from "../manual/resolve.ts";
 import { findProfile, resolveDirection, resolveFinalReview } from "../../shared/manual/resolve.ts";
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
-import { sameRoute } from './collaboration.ts';
+import { routeMatches, sameRoute } from './collaboration.ts';
+import { isStageHarness, LEAD_DEFAULT_PROVIDER, RESEARCH_PARALLEL, RESEARCH_SUB } from "../../shared/manual/stages.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief, reportPath } from "./brief.ts";
 import { scIdsFromMissing } from "./done.ts";
@@ -157,7 +158,32 @@ const AFTER_FINAL = "keel_report phase=final";
 const AFTER_SETUP = "keel_report phase=setup";
 const AFTER_RECONCILE = "keel_report phase=reconcile";
 const AFTER_RECOVER = "keel_report phase=recover";
-const SUBAGENT_NOTE = '一次性任务只用原生 sub。按 required_route 核对当前工具的 model、provider 与 effort 能力，能准确执行才派；不能表达任一字段就报 NATIVE_ROUTE_UNSUPPORTED，不用主控模型或 Worker 顶替。subagents 必须在同一批并行启动，收齐独立 native_agent_id、execution_route 与报告后回 keel_report phase=final。不要伪造模型实际身份；失败后也不自动转 Worker。';
+const SUBAGENT_NOTE = '查资料是一次性任务，只用主控自带的原生 sub，不开 Worker。模型按 subagent.model 填（不指定网关和推理强度）；subagents 必须在同一批并行启动，收齐每个成员的 native_agent_id、execution_route（实际 agent 与模型）和报告后，用 parallel_reports 回 keel_report phase=final。不要伪造模型实际身份；失败后也不自动转 Worker。';
+
+/** 查资料 (explorer / researcher) is a one-shot read: the lead's own sub. Every other dispatch runs in a Worker. */
+function isResearchNode(specNode: GraphNode): boolean {
+  return !specNode.writes && (specNode.role === "explorer" || specNode.role === "researcher");
+}
+
+/** The lead's own sub route. provider_id is a marker: the sub runs on whatever gateway the lead uses. */
+function researchRoute(state: GraphRunState): Route | undefined {
+  if (!isStageHarness(state.lead_harness)) return undefined;
+  return { agent: state.lead_harness, model: RESEARCH_SUB[state.lead_harness].model, provider_id: LEAD_DEFAULT_PROVIDER };
+}
+
+/** Parallel 查资料 members split the read by angle instead of repeating the same task. */
+const RESEARCH_ANGLES: Record<"explorer" | "researcher", readonly string[]> = {
+  explorer: [
+    "代码位置与调用链：找到相关文件、函数和调用关系",
+    "测试与配置：找到相关测试、配置项和构建脚本",
+    "历史与文档：看 git 历史、注释和仓内文档里的相关决定",
+  ],
+  researcher: [
+    "官方文档与接口：核对 API、参数和版本差异",
+    "仓内已有用法：找到项目里同类调用的写法",
+    "已知问题与限制：查 issue、变更记录和注意事项",
+  ],
+};
 
 export function classifyRetry(errorMode: ErrorMode | undefined, consecutiveFailures: number): { decision: RetryDecision; note: string } {
   if (consecutiveFailures >= 2) return { decision: "human", note: "连续 2 次失败，放弃该节点" };
@@ -231,7 +257,8 @@ function routesForNode(manual: ModelManual, state: GraphRunState, role: Role, no
       throw e;
     }
   }
-  if (nodeId === "astra-final-review") {
+  // 做检查: the manual has no verifier slot any more, so every verifier-role node uses the 做检查 route.
+  if (nodeId === "astra-final-review" || role === "verifier") {
     try {
       return resolveFinalReview(manual, state.profile_id, state.task_type);
     } catch (e) {
@@ -254,7 +281,10 @@ function pickRoute(
   if (models && models.length === 0) return { stop: "实时模型清单为空，不能把全部路线当可用" };
   const resolved = routesForNode(manual, state, role, nodeId);
   const chain = [resolved.primary, ...resolved.fallbacks];
-  const skipFam = !writes && role === "verifier" ? new Set(state.author_families) : null;
+  const review = !writes && role === "verifier";
+  const skipFam = review ? new Set(state.author_families) : null;
+  // 做检查 runs on another harness than 写代码 (Claude Code ↔ Codex), not only another model family.
+  const skipAgents = review ? new Set(state.author_agents ?? []) : null;
   const start = preferFallback ? 1 : 0;
   for (let i = start; i < chain.length; i++) {
     const route = chain[i]!;
@@ -263,28 +293,21 @@ function pickRoute(
       const fam = family(route.model);
       if (!fam || skipFam.has(fam)) continue;
     }
+    if (skipAgents?.has(route.agent)) continue;
     const note = i > 0 ? `主路线 ${chain[0]!.model} 不可用，改用 ${route.model}` : undefined;
     return { route, fallbacks: resolved.fallbacks, index: i, note };
   }
+  if (skipAgents?.size) return { stop: "没有与写代码不同执行框架、不同模型族的检查路线" };
   if (skipFam && skipFam.size) return { stop: "没有与作者不同族的验证路线" };
   return { stop: "全部路线不可用" };
 }
 
-function subagentModel(state: GraphRunState, specNode: GraphNode, route: Route, manual: ModelManual): { model: string } | undefined {
-  void manual;
-  if (specNode.writes || state.lead_harness === 'pi' || route.agent !== state.lead_harness) return undefined;
-  return { model: route.model };
-}
-
-function subagentEligible(state: GraphRunState, specNode: GraphNode, manual: ModelManual, models: readonly AgentModel[] | undefined, preferFallback: boolean): boolean {
-  if (!specNode.writes) return true;
-  try {
-    if ((state.nodes[specNode.id]?.attempts ?? 0) >= 1) return false;
-    const picked = pickRoute(manual, state, (specNode.role ?? "worker") as Role, specNode.writes, models, preferFallback, specNode.id);
-    return !("stop" in picked) && subagentModel(state, specNode, picked.route, manual) !== undefined;
-  } catch {
-    return false;
-  }
+/**
+ * Only 查资料 skips team setup: it runs in the lead's own subs. A lead without subs (pi) skips it too and
+ * gets the human gate from planResearch, instead of starting a team just to be told there is nothing to run.
+ */
+function subagentEligible(specNode: GraphNode): boolean {
+  return isResearchNode(specNode);
 }
 
 function isSubagentChannel(node: NodeRunState | undefined): boolean {
@@ -303,7 +326,8 @@ function subagentDispatch(state: GraphRunState, specNode: GraphNode, node: NodeR
     task: params.initial_task,
     route: { model: requested.model, provider_id: requested.provider_id },
     required_route: { ...picked.route },
-    require_exact_route: true,
+    // The lead's own sub: the harness is fixed, the gateway follows the lead, so only agent is checked.
+    require_exact_route: requested.provider_id !== LEAD_DEFAULT_PROVIDER,
     ...(params.effort ? { effort: params.effort } : {}),
     model: selected.model,
     ...(investigation ? {} : { report_path: reportPath({ id: specNode.id }, { run_id: state.run_id, goal: state.goal, worktree: state.worktree, taskType: state.task_type }, { attempt: node.attempts, dispatch_key: key }) }),
@@ -391,14 +415,98 @@ async function worktreeHead(host: Host, dir: string | undefined): Promise<string
   return typeof head === "string" && head ? head : undefined;
 }
 
-function recordWriterFamily(state: GraphRunState, specNode: GraphNode, model: string): void {
+function recordWriterFamily(state: GraphRunState, specNode: GraphNode, route: Route): void {
   if (!specNode.writes) return;
-  const fam = family(model);
+  if (!(state.author_agents ?? []).includes(route.agent)) state.author_agents = [...(state.author_agents ?? []), route.agent];
+  const fam = family(route.model);
   if (!fam) return;
   const node = ensureNode(state, specNode.id);
   const prior = node.attempt_families ?? [];
   if (!prior.includes(fam)) node.attempt_families = [...prior, fam];
   if (!state.author_families.includes(fam)) state.author_families.push(fam);
+}
+
+/**
+ * 查资料: the lead's own subs, RESEARCH_PARALLEL members started together, one angle each.
+ * Not configurable: the model follows the lead harness (RESEARCH_SUB), the gateway follows the lead.
+ */
+async function planResearch(
+  state: GraphRunState,
+  spec: GraphSpec,
+  specNode: GraphNode,
+  node: ReturnType<typeof ensureNode>,
+  now: number,
+  host: Host,
+): Promise<Next> {
+  const route = researchRoute(state);
+  if (!route) {
+    return nextDecide(state, `human:${specNode.id}`, `查资料只用主控自带子助手；${state.lead_harness} 主控没有可用的子助手。`, ["stop"], true);
+  }
+  if (node.attempts - (node.attempt_floor ?? 0) >= specNode.max_attempts) {
+    return nextDecide(state, `human:${specNode.id}`, `节点 ${specNode.id} 已达 max_attempts`, ["stop"], true);
+  }
+  const workingDir = state.worktree ?? state.invocation_dir;
+  let start_sha: string | undefined;
+  // Read-only nodes in a change worktree also record HEAD, so final can prove they changed nothing.
+  if (state.worktree) {
+    start_sha = await worktreeHead(host, workingDir);
+    if (!start_sha) return nextDecide(state, `human:${specNode.id}`, "规划时读不到 worktree HEAD，不能派工", ["retry", "stop"], true);
+  }
+  node.task = undefined;
+  node.collaborators = undefined;
+  node.started_at = undefined;
+  node.error_mode = undefined;
+  node.attempts += 1;
+  const key = dispatchKey(state.run_id, specNode.id, node.attempts);
+  const params: PlannedParams = {
+    label: await workerLabel(specNode.id, key),
+    role: keelRoleFor(specNode.role),
+    agent: route.agent,
+    model: route.model,
+    provider_id: route.provider_id,
+    fast: false,
+    agent_device_id: "local",
+    working_dir: workingDir,
+    initial_task: brief(state, spec, specNode, key, node.attempts),
+    writes: false,
+    fallbacks: [],
+    route_index: 0,
+    channel: "subagent",
+    ...(start_sha ? { start_sha } : {}),
+  };
+  node.status = "active";
+  node.dispatch_key = key;
+  node.dispatch_state = "planned";
+  node.dispatch_state_at = now;
+  node.planned_params = params;
+  if (start_sha) node.start_sha = start_sha;
+  node.expected_recover_action = undefined;
+  node.writer_stopped = false;
+  node.team_id = undefined;
+  node.worker_label = undefined;
+  node.worker_id = undefined;
+  const lead = route.agent as keyof typeof RESEARCH_SUB;
+  const single = subagentDispatch(state, specNode, node, { route, note: RESEARCH_SUB[lead].note }, { model: route.model }, now);
+  if (single.kind !== "dispatch" || !single.subagent) return single;
+  const template = single.subagent;
+  const angles = RESEARCH_ANGLES[specNode.role === "researcher" ? "researcher" : "explorer"].slice(0, RESEARCH_PARALLEL);
+  const subagents = angles.map((angle, index) => {
+    const armKey = `${key}/parallel/${index + 1}`;
+    const armPath = template.report_path?.replace(/\.md$/, `-parallel-${index + 1}.md`);
+    const taskBase = template.report_path && armPath ? template.task.replaceAll(template.report_path, armPath) : template.task;
+    const task = `${taskBase.replaceAll(key, armKey)}\n\n并行 ${index + 1}/${angles.length}：只负责「${angle}」这一块，独立只读完成，不等待其他成员。报告 dispatch_key=${armKey}。`;
+    return { ...template, dispatch_key: armKey, task, report_path: armPath };
+  });
+  node.collaborators = subagents.map((arm) => ({ dispatch_key: arm.dispatch_key, route, task: arm.task }));
+  const batch: Next = {
+    kind: "dispatch",
+    dispatch_key: key,
+    subagents,
+    after: AFTER_FINAL,
+    note: `${RESEARCH_SUB[lead].note} ${SUBAGENT_NOTE} 不要先启动一个等它完成再启动下一个；收齐后关闭这些子助手。`,
+  };
+  state.next = batch;
+  return batch;
 }
 
 async function planOrca(
@@ -412,6 +520,7 @@ async function planOrca(
   now: number,
   host: Host,
 ): Promise<Next> {
+  if (isResearchNode(specNode)) return planResearch(state, spec, specNode, node, now, host);
   const role = (specNode.role ?? "worker") as Role;
   let explicitFinal: Route | undefined;
   if (specNode.id === "astra-final-review") {
@@ -445,21 +554,13 @@ async function planOrca(
       return finalReviewHuman("显式终审路线不可用：档位或模型不可用，不能换模型");
     }
   }
-  const configured = routesForNode(manual, state, role, specNode.id);
-  const collaborationRoutes = [picked.route, ...(configured.collaborators ?? [])];
-  if (specNode.writes && collaborationRoutes.length > 1) return nextDecide(state, `human:${specNode.id}`, '写入节点不能并行多个写手，请拆分独立范围。', ['stop'], true);
-  if (!specNode.writes) {
-    const incompatible = collaborationRoutes.find((route) => !modelsAllow(models, route)
-      || !subagentModel(state, specNode, route, manual)
-      || (specNode.role === 'verifier' && state.author_families.includes(family(route.model))));
-    if (incompatible) return nextDecide(state, `human:${specNode.id}`, 'NATIVE_ROUTE_UNSUPPORTED：所选模型、来源或框架不能由当前原生 sub 准确执行；不换模型、不改开 Worker。', ['retry', 'stop'], true, { required_route: incompatible });
-  }
+  // 想方案 / 写代码 / 做检查 each run as exactly one Worker; parallel members only exist for 查资料.
   if (specNode.role === "architect") {
-    if ((state.budget.astra_left ?? 0) < collaborationRoutes.length) {
+    if ((state.budget.astra_left ?? 0) < 1) {
       return nextDecide(state, "human:astra-budget", "Astra 预算用完，改为人工裁决", ["retry", "stop"], true);
     }
-    state.budget.astra_left -= collaborationRoutes.length;
-    state.astra_calls += collaborationRoutes.length;
+    state.budget.astra_left -= 1;
+    state.astra_calls += 1;
   }
   if (hasLiveWriter(specNode, node) && node.dispatch_key) {
     return requestWriterStop(state, node, node.dispatch_key, "retry", now);
@@ -480,7 +581,6 @@ async function planOrca(
   node.collaborators = undefined;
   node.started_at = undefined;
   node.error_mode = undefined;
-  const sub = subagentModel(state, specNode, picked.route, manual);
   node.attempts += 1;
   const key = dispatchKey(state.run_id, specNode.id, node.attempts);
   const label = await workerLabel(specNode.id, key);
@@ -506,33 +606,10 @@ async function planOrca(
   node.dispatch_state = "planned";
   node.dispatch_state_at = now;
   node.planned_params = params;
-  recordWriterFamily(state, specNode, picked.route.model);
+  recordWriterFamily(state, specNode, picked.route);
   if (start_sha) node.start_sha = start_sha;
   node.expected_recover_action = undefined;
   node.writer_stopped = false;
-  if (sub) {
-    params.channel = "subagent";
-    node.planned_params = params;
-    node.team_id = undefined;
-    node.worker_label = undefined;
-    node.worker_id = undefined;
-    const next = subagentDispatch(state, specNode, node, picked, sub, now);
-    if (collaborationRoutes.length > 1 && next.kind === 'dispatch' && next.subagent) {
-      const template = next.subagent;
-      const subagents = collaborationRoutes.map((route, index) => {
-        const armKey = `${key}/parallel/${index + 1}`;
-        const armPath = template.report_path?.replace(/\.md$/, `-parallel-${index + 1}.md`);
-        const taskBase = template.report_path && armPath ? template.task.replaceAll(template.report_path, armPath) : template.task;
-        const task = `${taskBase.replaceAll(key, armKey)}\n\n协作 ${index + 1}/${collaborationRoutes.length}：独立只读完成本任务，不等待其他协作模型。实际路线必须为 ${JSON.stringify(route)}；不能准确运行则报告 blocked，禁止替换。报告 dispatch_key=${armKey}。`;
-        return { ...template, model: route.model, effort: route.effort, route: { model: route.model, provider_id: route.provider_id }, required_route: route, dispatch_key: armKey, task, report_path: armPath };
-      });
-      node.collaborators = subagents.map((arm) => ({ dispatch_key: arm.dispatch_key, route: arm.required_route!, task: arm.task }));
-      const batch: Next = { kind: 'dispatch', dispatch_key: key, subagents, after: AFTER_FINAL, note: `${SUBAGENT_NOTE} 使用 parallel_reports 汇收全部成员；不要先启动一个等它完成再启动下一个。` };
-      state.next = batch;
-      return batch;
-    }
-    return next;
-  }
   node.worker_label = label;
   node.team_id = state.team?.team_id;
   const create_worker: CreateWorkerParams = {
@@ -934,7 +1011,7 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     provider_id: node.planned_params.provider_id,
     effort: node.planned_params.effort,
   };
-  if (node.actual_route && specNode.writes) recordWriterFamily(state, specNode, node.actual_route.model);
+  if (node.actual_route && specNode.writes) recordWriterFamily(state, specNode, node.actual_route);
   node.worker_id = event.worker_id ?? node.worker_id;
   node.worker_session_id = event.worker_session_id ?? node.worker_session_id;
   node.queued_message_id = event.queued_message_id ?? node.queued_message_id;
@@ -1194,7 +1271,7 @@ function applyFinal(state: GraphRunState, spec: GraphSpec, event: Extract<Advanc
   node.dispatch_state = "reported";
   if (isSubagentChannel(node) && event.execution_route) {
     const expected = node.planned_params;
-    if (!expected || !sameRoute(event.execution_route, expected as Route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', '实际 sub 模型、来源或推理强度与选择不一致。');
+    if (!expected || !routeMatches(event.execution_route, expected as Route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', '实际 sub 模型、来源或推理强度与选择不一致。');
     node.actual_route = event.execution_route;
   }
   node.report_path = event.report_path;
@@ -1473,7 +1550,7 @@ async function enter(
   const id = state.cursor;
   if (id === ASTRA_CONSULT_ID) {
     state.consult_node = ASTRA_CONSULT_NODE;
-    if (!state.team?.ready && !subagentEligible(state, ASTRA_CONSULT_NODE, opts.manual, opts.models, opts.preferFallback === true)) return nextSetup(state);
+    if (!state.team?.ready && !subagentEligible(ASTRA_CONSULT_NODE)) return nextSetup(state);
     return planOrca(state, spec, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
   const specNode = nodeById(spec, id, state.consult_node);
@@ -1580,7 +1657,7 @@ async function enter(
   }
 
   if (specNode.kind === "dispatch") {
-    if (!state.team?.ready && !subagentEligible(state, specNode, opts.manual, opts.models, opts.preferFallback === true)) return nextSetup(state);
+    if (!state.team?.ready && !subagentEligible(specNode)) return nextSetup(state);
     return planOrca(state, spec, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
   }
 

@@ -10,28 +10,20 @@
 </div>
 
 <section class="models">
-  <div class="scope-banner" id="scope-banner" role="status">当前说明书：— · 不会改变当前主会话模型</div>
-  <div class="config-intro">
-    <h2>工作环节</h2>
-    <span class="muted">模型 · 网关 · 执行框架 · 推理强度</span>
+  <div class="head">
+    <h2>KEEL 设置</h2>
+    <div class="tabs" id="model-tabs" role="tablist">
+      <button type="button" class="on" data-harness="claude-code" role="tab" aria-selected="true">我用 Claude Code 时</button>
+      <button type="button" data-harness="codex" role="tab" aria-selected="false">我用 Codex 时</button>
+    </div>
   </div>
+  <p class="config-note">这里只决定 KEEL 怎么派活，不会改你当前会话的模型。</p>
   <div class="card" id="model-rows"></div>
+  <p id="stage-notice" role="status"></p>
   <div class="bar">
-    <p id="model-hint"></p>
     <p id="manual-status" role="status"></p>
     <button type="button" class="btn pri" data-act="save" disabled>保存</button>
   </div>
-  <p class="config-note">保存后下次派工读取新配置。正在运行的任务和当前主会话模型不变。</p>
-  <details class="config-help" id="config-help">
-    <summary>配置规则与生效范围 <span>查看说明</span></summary>
-    <div>
-      <p>先配四组，例外展开「角色细调」。单独设置的角色优先于分组设置。</p>
-      <p>查资料、想方案、做检查的同一节点可派最多 4 路只读协作模型。写代码只有单一写手。故障备选不是协作；改主模型、网关或推理强度会清空该角色旧备选，保存后生效，不会默默沿用旧模型。</p>
-      <p>打开选择器、返回页面、保存和前台每 5 秒会刷新已启用模型。停用或缺目录项保留并标错，不会自动换模型。</p>
-      <p>原生子代理无法表达指定模型或网关时会明确阻断，不会自动改用主控模型或 Worker。跨框架或无法锁定 provider 时标为不可执行并停止，没有 Worker 例外。</p>
-      <p>这里改的是 KEEL 说明书里的方案，不会切换当前主会话正在用的模型。显式方案的 harness 必须和派工 lead 一致，不能靠点选假装切主控。</p>
-    </div>
-  </details>
 </section>
 
 <div class="card">
@@ -46,25 +38,6 @@
 <p id="reply-status" role="status"></p>
 
 <div class="accs">
-<details id="accordion-scope">
-  <summary>高级范围<span id="scope-summary">主控方案 · 任务类型 ›</span></summary>
-  <div class="acc-body">
-    <div class="head">
-      <div class="tabs" id="model-tabs" role="tablist">
-        <button type="button" class="on" data-act="harness" data-harness="codex" role="tab" aria-selected="true">Codex 主控</button>
-        <button type="button" data-act="harness" data-harness="claude-code" role="tab" aria-selected="false">Claude Code 主控</button>
-      </div>
-      <div class="seg2" id="task-scope">
-        <button type="button" class="on" data-act="scope" data-scope="all">默认设置</button>
-        <button type="button" data-act="scope" data-scope="task">按任务类型</button>
-      </div>
-    </div>
-    <div id="taskbar" hidden></div>
-    <div id="lead-row"></div>
-    <p class="hint">这里改的是 KEEL 说明书的主控方案和任务范围，不会切换当前主会话模型。lead 路线只是方案参考。</p>
-  </div>
-</details>
-
 <details id="accordion-jev">
   <summary>Jev 凭证<span id="jev-summary">更换或清除 ›</span></summary>
   <div class="acc-body">
@@ -83,8 +56,15 @@
 </details>
 
 <details id="accordion-advanced">
-  <summary>高级<span>方案管理 · 导入导出 ›</span></summary>
-  <div class="acc-body" id="advanced-body"></div>
+  <summary>高级<span>导入导出 · 恢复默认 ›</span></summary>
+  <div class="acc-body" id="advanced-body">
+    <div class="adv-row">
+      <button type="button" data-act="export">导出 JSON</button>
+      <button type="button" data-act="import">导入 JSON</button>
+      <span class="sep"></span>
+      <button type="button" data-act="restore">恢复默认</button>
+    </div>
+  </div>
 </details>
 </div>
 </div>

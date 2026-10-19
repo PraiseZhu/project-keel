@@ -13,7 +13,7 @@ import {
   nativeFinalArgs,
   startRun,
 } from "../e2e/helpers.ts";
-import { usePluginResearch } from "./helpers.ts";
+import { pluginResearchManual, usePluginResearch } from "./helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
 afterEach(cleanupRepos);
@@ -68,6 +68,7 @@ describe("Greptile PR26 threads on 93d19dc", () => {
   it("3 非 PR 等待：调查图 report 经 keel_wait 能结束并 done", async () => {
     const world = makeWorld({ citation: "https://example.com/timeout" });
     const host = makeE2eHost(world);
+    host.kv.manual = pluginResearchManual();
     const started = await startRun(host, {
       goal: "调查登录超时的原理", repo_dir: world.repoDir, lead: "codex",
       playbook: "investigation", sc: [{ id: "SC-1", text: "给出根因引用" }],
@@ -79,6 +80,7 @@ describe("Greptile PR26 threads on 93d19dc", () => {
 
   it("4 插件 accepted：task_id/revision 能推进到 send，不对账", async () => {
     const h = fakeHost({
+      kv: { manual: pluginResearchManual() },
       node: (method: string) => {
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "a".repeat(40), gh_repo: "o/r" } };
         if (method === "git/content-fingerprint") return { ok: true, result: { head: "a".repeat(40), status_digest: "d", content_hash: "h" } };
@@ -92,8 +94,8 @@ describe("Greptile PR26 threads on 93d19dc", () => {
     expect(started.ok).toBe(true);
     let next = nextOf(started);
     expect(next.kind).toBe("dispatch");
-    // Explore runs on the lead's own subagent first, so it reports final without setup or accepted.
-    if (next.kind !== "dispatch" || !next.subagent) throw new Error("explore subagent");
+    // Explore runs on the lead's own subs (three in parallel) first, so it reports final without setup or accepted.
+    if (next.kind !== "dispatch" || next.subagents?.length !== 3) throw new Error("explore subagents");
     const exploreKey = next.dispatch_key;
     const finExplore: any = await runTool(makeContext(h, "c4", profile), "keel_report", nativeFinalArgs({
       run_id: started.result.run_id,

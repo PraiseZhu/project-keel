@@ -6,7 +6,7 @@ import type { GraphRunState } from "../../src/main/graph/state.ts";
 import type { CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { graphStatePath, withRun } from "../../src/main/store/runs.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
-import { usePluginResearch } from "./helpers.ts";
+import { pluginResearchManual, usePluginResearch } from "./helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
@@ -55,6 +55,7 @@ describe("plugin_task executes inside KEEL", () => {
   it("research goes create → send internally, then final reports", async () => {
     const { api, calls } = recordingTasks();
     const h = fakeHost({
+      kv: { manual: pluginResearchManual() },
       tasks: api,
       node: (method: string) => {
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "a".repeat(40) } };
@@ -95,6 +96,7 @@ describe("plugin_task executes inside KEEL", () => {
       },
     });
     const h = fakeHost({
+      kv: { manual: pluginResearchManual() },
       tasks: api,
       node: (method: string) => {
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "a".repeat(40) } };
@@ -132,6 +134,7 @@ describe("plugin_task executes inside KEEL", () => {
       },
     });
     h = fakeHost({
+      kv: { manual: pluginResearchManual() },
       tasks: api,
       node: (method: string) => {
         if (method === "git/state") return { ok: true, result: { root: "/repo", branch: "main", head: "a".repeat(40) } };

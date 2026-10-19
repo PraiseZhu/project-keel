@@ -44,6 +44,8 @@ export interface Profile {
   readonly direction_route?: Route;
   /** Optional astra-final-review route. Omitted means fall back to the architect slot. */
   readonly final_review_route?: Route;
+  /** Ordered stand-ins for final_review_route when its model is unavailable. Requires final_review_route. */
+  readonly final_review_fallbacks?: readonly Route[];
   readonly direction_collaborators?: readonly Route[];
   readonly final_review_collaborators?: readonly Route[];
   readonly inherit?: string;
@@ -80,52 +82,48 @@ export class ManualError extends Error {
   }
 }
 
-const luna = (effort: string): Slot => ({
-  primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort },
-  fallbacks: [{ agent: "codex", model: "openai/gpt-6-luna", provider_id: "xd", effort }],
-});
+const opus = (effort: string): Route => ({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort });
+const sonnet = (effort: string): Route => ({ agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort });
+const astra: Route = { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" };
+const astraXd: Route = { agent: "codex", model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" };
 
-/** Appendix C default profiles. Art Cindy is primary; XD is fallback. */
+/**
+ * Default profiles, one per lead harness. 查资料 is not configured (the lead's own sub);
+ * 想方案 uses the other harness than the lead; 做检查 the other harness than 写代码.
+ */
 export const DEFAULT_MANUAL: ModelManual = {
-  version: 1,
+  version: 2,
   profiles: [
     {
       id: "sol",
-      name: "Sol 主控",
+      name: "Codex 主控",
       harness: "codex",
       lead: { agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" },
       direction_gate: "lead",
+      final_review_route: opus("xhigh"),
+      final_review_fallbacks: [sonnet("xhigh")],
       nodes: {
         default: {
-          explorer: luna("medium"),
-          researcher: luna("high"),
+          architect: { primary: opus("xhigh") },
           worker: {
-            primary: { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" },
-            fallbacks: [{ agent: "pi", model: "x-ai-grok/grok-4.6", provider_id: "xd", effort: "high" }],
-          },
-          verifier: luna("high"),
-          architect: {
-            primary: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" },
-            fallbacks: [{ agent: "codex", model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" }],
+            primary: { agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "high" },
+            fallbacks: [{ agent: "codex", model: "openai/gpt-6.1-sol", provider_id: "xd", effort: "high" }],
           },
         },
       },
     },
     {
       id: "grok",
-      name: "grok 主控",
+      name: "Claude Code 主控",
       harness: "claude-code",
-      lead: { agent: "claude-code", model: "grok-4.6", provider_id: "art-cindy", effort: "high" },
+      lead: opus("high"),
       direction_gate: "astra",
-      direction_route: { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" },
-      final_review_route: { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" },
+      final_review_route: astra,
+      final_review_fallbacks: [astraXd],
       nodes: {
         default: {
-          explorer: { primary: { agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "medium" } },
-          researcher: { primary: { agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd", effort: "high" } },
-          worker: { primary: { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" } },
-          verifier: luna("high"),
-          architect: { primary: { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd", effort: "xhigh" } },
+          architect: { primary: astra },
+          worker: { primary: sonnet("high"), fallbacks: [opus("high")] },
         },
       },
     },
@@ -222,9 +220,16 @@ function parseProfile(raw: unknown, path: string): Profile {
     : withDirection;
   const directionCollaborators = parseRoutes(o.direction_collaborators, `${path}/direction_collaborators`, MAX_COLLABORATORS);
   const finalCollaborators = parseRoutes(o.final_review_collaborators, `${path}/final_review_collaborators`, MAX_COLLABORATORS);
+  const finalFallbacks = parseRoutes(o.final_review_fallbacks, `${path}/final_review_fallbacks`, MAX_FALLBACKS);
   if (directionCollaborators?.length && !finalRoute.direction_route) throw new ManualError('MANUAL_INVALID', '方向协作模型必须有明确主路线。', `${path}/direction_collaborators`);
   if (finalCollaborators?.length && !finalRoute.final_review_route) throw new ManualError('MANUAL_INVALID', '终审协作模型必须有明确主路线。', `${path}/final_review_collaborators`);
-  const withFinal = { ...finalRoute, ...(directionCollaborators ? { direction_collaborators: directionCollaborators } : {}), ...(finalCollaborators ? { final_review_collaborators: finalCollaborators } : {}) };
+  if (finalFallbacks?.length && !finalRoute.final_review_route) throw new ManualError('MANUAL_INVALID', '做检查的备用路线必须有明确主路线。', `${path}/final_review_fallbacks`);
+  const withFinal = {
+    ...finalRoute,
+    ...(directionCollaborators ? { direction_collaborators: directionCollaborators } : {}),
+    ...(finalCollaborators ? { final_review_collaborators: finalCollaborators } : {}),
+    ...(finalFallbacks?.length ? { final_review_fallbacks: finalFallbacks } : {}),
+  };
   if (o.inherit !== undefined) {
     if (typeof o.inherit !== "string" || !o.inherit.trim()) throw new ManualError("MANUAL_INVALID", "inherit 若填写必须是方案 id。", `${path}/inherit`);
     return { ...withFinal, inherit: o.inherit.trim() };

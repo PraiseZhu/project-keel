@@ -49,8 +49,10 @@ describe("R29-02 route materialize", () => {
     const next = (setup.result as { next: { kind: string; dispatch_key?: string; subagent?: { role?: string }; create_worker?: { role?: string } } }).next;
     expect(next.kind).toBe("dispatch");
     expect(next.dispatch_key).toContain(":architect-plan:");
-    expect(next.create_worker).toBeUndefined();
-    expect(next.subagent?.role ?? next.create_worker?.role).toBe("keel-architect");
+    // 想方案 is a Worker (never a native sub), so the lead sets up the team first.
+    expect(setup).not.toBe(gated);
+    expect(next.subagent).toBeUndefined();
+    expect(next.create_worker?.role).toBe("keel-architect");
     const s = JSON.parse(h.files.get(graphStatePath(started.run_id))!) as {
       g_route_choice?: string;
       consult_node?: unknown;

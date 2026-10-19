@@ -1,6 +1,7 @@
 import { family } from "../fanout.ts";
-import { resolve, resolveFinalReview } from "./resolve.ts";
-import { KV_MAX_BYTES, MAX_FALLBACKS, MAX_COLLABORATORS, ManualError, ROLES, TASK_TYPES, type AgentModel, type ModelManual, type Route, type Slot, type TaskType } from "./schema.ts";
+import { resolve, resolveFinalReview, type ResolvedRoutes } from "./resolve.ts";
+import { KV_MAX_BYTES, MAX_FALLBACKS, ManualError, type AgentModel, type ModelManual, type Profile, type Route } from "./schema.ts";
+import { blockedReason, isStageHarness, otherHarness, STAGE_HARNESS_LABELS } from "./stages.ts";
 
 export type { AgentModel };
 
@@ -23,6 +24,11 @@ function effortsOf(model: AgentModel): readonly string[] | null {
 }
 
 function checkRoute(models: readonly AgentModel[], route: Route, path: string, out: ManualIssue[]): void {
+  const blocked = blockedReason(route.agent, route.provider_id, route.model);
+  if (blocked) {
+    out.push({ path, message: blocked });
+    return;
+  }
   const hit = matchModel(models, route);
   if (!hit || hit.visible === false) {
     out.push({ path, message: `模型 ${route.model} 在 agent ${route.agent} / 来源 ${route.provider_id} 下不存在。` });
@@ -36,20 +42,6 @@ function checkRoute(models: readonly AgentModel[], route: Route, path: string, o
   if (route.effort !== undefined && !efforts.includes(route.effort)) {
     out.push({ path: `${path}/effort`, message: `档位 ${route.effort} 不在该项已声明的 efforts（${efforts.join("、")}）内。` });
   }
-}
-
-function checkSlot(models: readonly AgentModel[], slot: Slot, path: string, out: ManualIssue[]): void {
-  checkRoute(models, slot.primary, `${path}/primary`, out);
-  const fallbacks = slot.fallbacks ?? [];
-  if (fallbacks.length > MAX_FALLBACKS) out.push({ path: `${path}/fallbacks`, message: `备路线最多 ${MAX_FALLBACKS} 条。` });
-  fallbacks.forEach((f, i) => checkRoute(models, f, `${path}/fallbacks/${i}`, out));
-  checkCollaborators(models, slot.collaborators, `${path}/collaborators`, out);
-}
-
-function checkCollaborators(models: readonly AgentModel[], routes: readonly Route[] | undefined, path: string, out: ManualIssue[]): void {
-  if (!routes) return;
-  if (routes.length > MAX_COLLABORATORS) out.push({ path, message: `协作模型最多 ${MAX_COLLABORATORS} 项。` });
-  routes.forEach((route, index) => checkRoute(models, route, `${path}/${index}`, out));
 }
 
 function collectInheritIssues(manual: ModelManual, out: ManualIssue[]): void {
@@ -90,33 +82,72 @@ function collectHarnessDefaultIssues(manual: ModelManual, out: ManualIssue[]): v
   }
 }
 
-function collectFamilyIssues(manual: ModelManual, out: ManualIssue[]): void {
-  for (const profile of manual.profiles) {
-    for (const taskType of TASK_TYPES) {
-      let worker: ReturnType<typeof resolve> | undefined;
-      let verifier: ReturnType<typeof resolve> | undefined;
-      try {
-        worker = resolve(manual, profile.id, taskType, "worker");
-      } catch (e) {
-        if (e instanceof ManualError) out.push({ path: e.path, message: e.message });
-        else throw e;
-      }
-      try {
-        verifier = resolveFinalReview(manual, profile.id, taskType);
-      } catch (e) {
-        if (e instanceof ManualError) out.push({ path: e.path, message: e.message });
-        else throw e;
-      }
-      if (!worker || !verifier) continue;
-      const wf = family(worker.primary.model);
-      const reviewRoutes = [verifier.primary, ...(verifier.collaborators ?? [])];
-      if (reviewRoutes.some((route) => family(route.model) === wf)) {
-        out.push({
-          path: `profiles/${profile.id}/nodes/${taskType}`,
-          message: `同一方案、同一任务类型下终审与 Worker 不能同模型族（写手 ${worker.primary.model}；终审 ${reviewRoutes.map((route) => route.model).join('、')}）。`,
-        });
-      }
+function tryResolve(fn: () => ResolvedRoutes, out: ManualIssue[]): ResolvedRoutes | undefined {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof ManualError) {
+      out.push({ path: e.path, message: e.message });
+      return undefined;
     }
+    throw e;
+  }
+}
+
+function label(agent: string): string {
+  return isStageHarness(agent) ? STAGE_HARNESS_LABELS[agent] : agent;
+}
+
+/**
+ * 想方案 / 写代码 / 做检查 on the default column. 查资料 is the lead's own sub and has nothing to configure.
+ * Rules: every route runnable; 想方案 on the other harness than the lead; 写代码 backups on the writer's harness;
+ * 做检查 on the other harness and model family than 写代码.
+ */
+function collectStageIssues(manual: ModelManual, profile: Profile, models: readonly AgentModel[], out: ManualIssue[]): void {
+  if (!isStageHarness(profile.harness)) return;
+  const base = `profiles/${profile.id}`;
+  const planPath = `${base}/nodes/default/architect`;
+  const plan = tryResolve(() => resolve(manual, profile.id, "default", "architect"), out);
+  if (plan) {
+    const want = otherHarness(profile.harness);
+    [plan.primary, ...plan.fallbacks].forEach((route, i) => {
+      const path = i === 0 ? `${planPath}/primary` : `${planPath}/fallbacks/${i - 1}`;
+      checkRoute(models, route, path, out);
+      if (route.agent !== want) {
+        out.push({ path, message: `想方案要换一家：你用 ${label(profile.harness)} 时，这里只能选 ${label(want)} 的模型。` });
+      }
+    });
+  }
+  if (profile.direction_route) checkRoute(models, profile.direction_route, `${base}/direction_route`, out);
+
+  const codePath = `${base}/nodes/default/worker`;
+  const code = tryResolve(() => resolve(manual, profile.id, "default", "worker"), out);
+  if (code) {
+    checkRoute(models, code.primary, `${codePath}/primary`, out);
+    if (code.fallbacks.length > MAX_FALLBACKS) out.push({ path: `${codePath}/fallbacks`, message: `备路线最多 ${MAX_FALLBACKS} 条。` });
+    code.fallbacks.forEach((route, i) => {
+      const path = `${codePath}/fallbacks/${i}`;
+      checkRoute(models, route, path, out);
+      if (route.agent !== code.primary.agent) out.push({ path, message: `写代码的备用要和主选同一家（${label(code.primary.agent)}）。` });
+    });
+    if (code.collaborators?.length) out.push({ path: codePath, message: "写代码保持单一写手，协作模型只用于只读任务。" });
+  }
+
+  const reviewPath = profile.final_review_route ? `${base}/final_review_route` : planPath;
+  const review = tryResolve(() => resolveFinalReview(manual, profile.id, "default"), out);
+  if (review && code) {
+    const writer = code.primary;
+    const wf = family(writer.model);
+    [review.primary, ...review.fallbacks].forEach((route, i) => {
+      const path = i === 0 ? reviewPath : profile.final_review_route ? `${base}/final_review_fallbacks/${i - 1}` : `${planPath}/fallbacks/${i - 1}`;
+      if (profile.final_review_route) checkRoute(models, route, path, out);
+      if (route.agent === writer.agent) {
+        const want = isStageHarness(writer.agent) ? otherHarness(writer.agent) : undefined;
+        out.push({ path, message: `做检查要和写代码不是同一家：写代码用 ${label(writer.agent)}${want ? `，这里只能选 ${label(want)} 的模型` : ""}。` });
+      } else if (family(route.model) === wf) {
+        out.push({ path, message: `做检查与写代码不能同模型族（写代码 ${writer.model}；做检查 ${route.model}）。` });
+      }
+    });
   }
 }
 
@@ -133,26 +164,11 @@ export function validateManual(manual: ModelManual, agentModels: readonly AgentM
     if (bytes > KV_MAX_BYTES) out.push({ path: "/kv", message: `完整 /kv 对象 UTF-8 序列化为 ${bytes} 字节，超过 ${KV_MAX_BYTES} 字节上限。` });
   }
 
-  for (const profile of manual.profiles) {
-    checkRoute(agentModels, profile.lead, `profiles/${profile.id}/lead`, out);
-    if (profile.direction_route) checkRoute(agentModels, profile.direction_route, `profiles/${profile.id}/direction_route`, out);
-    if (profile.final_review_route) checkRoute(agentModels, profile.final_review_route, `profiles/${profile.id}/final_review_route`, out);
-    checkCollaborators(agentModels, profile.direction_collaborators, `profiles/${profile.id}/direction_collaborators`, out);
-    checkCollaborators(agentModels, profile.final_review_collaborators, `profiles/${profile.id}/final_review_collaborators`, out);
-    for (const taskType of Object.keys(profile.nodes) as TaskType[]) {
-      const col = profile.nodes[taskType];
-      if (!col) continue;
-      for (const role of ROLES) {
-        const slot = col[role];
-        if (role === 'worker' && slot?.collaborators?.length) out.push({ path: `profiles/${profile.id}/nodes/${taskType}/worker`, message: '写代码保持单一写手，协作模型只用于只读任务。' });
-        if (slot) checkSlot(agentModels, slot, `profiles/${profile.id}/nodes/${taskType}/${role}`, out);
-      }
-    }
-  }
-
   collectInheritIssues(manual, out);
   collectHarnessDefaultIssues(manual, out);
-  collectFamilyIssues(manual, out);
+  if (!out.some((i) => i.path.endsWith("/inherit"))) {
+    for (const profile of manual.profiles) collectStageIssues(manual, profile, agentModels, out);
+  }
 
   const seen = new Set<string>();
   return out.filter((issue) => {

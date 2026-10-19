@@ -1,35 +1,29 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { invalidateRuntimeConfig, loadRuntimeConfig } from "../../src/main/config.ts";
 import {
-  addProfile,
-  canDeleteProfile,
-  cellView,
   composeKv,
-  copyProfile,
-  deleteProfile,
   fetchCatalog,
   fingerprintManual,
   loadManualFromKv,
   parseImportedJson,
   prettyExport,
-  profileList,
   readCatalog,
   routeFromModel,
   saveManual,
-  setDirectionRoute,
-  setFinalReviewRoute,
-  setHarnessDefault,
-  setSlot,
   staleReason,
   type SettingsIO,
 } from "../../src/panel/manual-editor.ts";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { cloneManual, DEFAULT_MANUAL, type AgentModel, type ModelManual } from "../../src/shared/manual/schema.ts";
-import { appendixCAgentModels, legacyGrokInheritManual } from "../manual/model-manual.test.ts";
+import { setCodeRoutes } from "../../src/shared/manual/stages.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 import type { KeelProfile } from "../../src/shared/types.ts";
+import { stageCatalog } from "./stage-catalog.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const models = stageCatalog();
 
 function model(partial: AgentModel): AgentModel {
   return { name: partial.id, visible: true, ...partial };
@@ -74,30 +68,6 @@ describe("catalog 404 / 503", () => {
   });
 });
 
-describe("profile list mutations", () => {
-  it("refuses to delete a profile that others inherit", () => {
-    const inherited = legacyGrokInheritManual();
-    const gate = canDeleteProfile(inherited, "sol");
-    expect(gate.ok).toBe(false);
-    if (!gate.ok) expect(gate.reason).toMatch(/解除继承/);
-    const deleted = deleteProfile(inherited, "sol");
-    expect(deleted).toEqual({ error: expect.stringMatching(/解除继承/) });
-    const grok = deleteProfile(DEFAULT_MANUAL, "grok");
-    expect("manual" in grok).toBe(true);
-  });
-
-  it("add / copy / set default keeps one default per harness", () => {
-    const added = addProfile(DEFAULT_MANUAL);
-    expect(added.manual.profiles.some((p) => p.id === added.id && p.inherit === "sol")).toBe(true);
-    const copied = copyProfile(added.manual, "sol");
-    expect(copied.id).not.toBe("sol");
-    expect(copied.manual.defaults_by_harness.codex).toBe("sol");
-    const next = setHarnessDefault(copied.manual, copied.id, true);
-    expect(next.defaults_by_harness.codex).toBe(copied.id);
-    expect(profileList(next, copied.id).filter((p) => p.defaultOf === "codex")).toHaveLength(1);
-  });
-});
-
 describe("empty efforts omit effort", () => {
   it("routeFromModel does not write effort when efforts is empty", () => {
     const undeclared = model({ id: "plain", agent: "codex", providerId: "art-cindy", efforts: [] });
@@ -110,25 +80,23 @@ describe("empty efforts omit effort", () => {
   });
 });
 
-describe("stale cells", () => {
-  it("marks a saved route missing from the live catalog", () => {
-    const reason = staleReason(
-      { agent: "codex", model: "gone", provider_id: "art-cindy", effort: "high" },
-      appendixCAgentModels(),
-    );
-    expect(reason).toMatch(/不存在/);
-    const cell = cellView(DEFAULT_MANUAL, "sol", "default", "worker", appendixCAgentModels(), false);
-    expect(cell.inherit).toBe(false);
-    expect(cell.primary?.stale).toBeUndefined();
+describe("stale routes", () => {
+  it("marks a saved route missing from the live catalog, and an effort the model does not declare", () => {
+    expect(staleReason({ agent: "codex", model: "gone", provider_id: "art-cindy", effort: "high" }, models)).toMatch(/不存在/);
+    expect(staleReason(DEFAULT_MANUAL.profiles[0]!.nodes.default!.worker!.primary, models)).toBeUndefined();
+    expect(staleReason({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" }, models)).toMatch(/未声明档位/);
+    expect(staleReason({ agent: "codex", model: "gpt-6.1-sol", provider_id: "art-cindy", effort: "ultra" }, models)).toMatch(/不在该项已声明的 efforts/);
   });
 });
 
+
 describe("saveManual", () => {
+  const nope = { agent: "codex", model: "nope", provider_id: "art-cindy", effort: "high" } as const;
+
   it("does not PUT when validate fails", async () => {
-    const broken = cloneManual(DEFAULT_MANUAL);
-    (broken.profiles[0]!.nodes.default!.worker as { primary: { model: string } }).primary.model = "nope";
-    const io = fakeIo({ kv: { lanes: [{ repo: "acme/app" }], limits: { concurrentRuns: 2 } }, models: appendixCAgentModels() });
-    const result = await saveManual(io, broken, appendixCAgentModels());
+    const broken = setCodeRoutes(DEFAULT_MANUAL, "sol", nope);
+    const io = fakeIo({ kv: { lanes: [{ repo: "acme/app" }], limits: { concurrentRuns: 2 } }, models });
+    const result = await saveManual(io, broken, models);
     expect(result).toMatchObject({ ok: false, kind: "invalid" });
     expect(io.puts).toEqual([]);
     expect(io.broadcasts).toEqual([]);
@@ -136,19 +104,16 @@ describe("saveManual", () => {
   });
 
   it("PUT failure is not reported as saved and does not broadcast", async () => {
-    const io = fakeIo({ kv: { extra: 1 }, models: appendixCAgentModels(), putStatus: 500, putMessage: "quota" });
-    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), appendixCAgentModels());
+    const io = fakeIo({ kv: { extra: 1 }, models, putStatus: 500, putMessage: "quota" });
+    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), models);
     expect(result).toEqual({ ok: false, kind: "write", message: "quota" });
     expect(io.broadcasts).toEqual([]);
     expect(io.kv.extra).toBe(1);
   });
 
   it("replaces only the manual key and keeps the rest of /kv", async () => {
-    const io = fakeIo({
-      kv: { lanes: [{ repo: "keep/me" }], limits: { concurrentRuns: 9 }, note: "stay" },
-      models: appendixCAgentModels(),
-    });
-    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), appendixCAgentModels());
+    const io = fakeIo({ kv: { lanes: [{ repo: "keep/me" }], limits: { concurrentRuns: 9 }, note: "stay" }, models });
+    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), models);
     expect(result).toEqual({ ok: true });
     expect(io.broadcasts).toEqual([{ type: "manual-changed" }]);
     expect(io.kv).toMatchObject({ lanes: [{ repo: "keep/me" }], limits: { concurrentRuns: 9 }, note: "stay" });
@@ -157,62 +122,66 @@ describe("saveManual", () => {
   });
 
   it("restore-default path validates then writes DEFAULT_MANUAL", async () => {
-    const io = fakeIo({ kv: { manual: { version: 1, profiles: [], defaults_by_harness: {} }, keep: true }, models: appendixCAgentModels() });
-    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), appendixCAgentModels());
+    const io = fakeIo({ kv: { manual: { version: 1, profiles: [], defaults_by_harness: {} }, keep: true }, models });
+    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), models);
     expect(result.ok).toBe(true);
     expect(io.kv.keep).toBe(true);
     expect(io.kv.manual).toEqual({ ...DEFAULT_MANUAL, version: 2 });
   });
 
+  it("rejects what the stage rules forbid, with a reason per row", async () => {
+    const pi = setCodeRoutes(DEFAULT_MANUAL, "sol", { agent: "pi", model: "grok-4.6", provider_id: "art-cindy", effort: "high" });
+    const sameHarness = setCodeRoutes(DEFAULT_MANUAL, "sol", { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" });
+    const io = fakeIo({ kv: { keep: true }, models });
+    const a = await saveManual(io, pi, models);
+    expect(a).toMatchObject({ ok: false, kind: "invalid" });
+    if (!a.ok && a.kind === "invalid") expect(a.issues.some((i) => i.message.includes("Pi 不用于 KEEL 派工"))).toBe(true);
+    const b = await saveManual(io, sameHarness, models);
+    expect(b).toMatchObject({ ok: false, kind: "invalid" });
+    if (!b.ok && b.kind === "invalid") expect(b.issues.some((i) => i.message.includes("做检查要和写代码不是同一家"))).toBe(true);
+    expect(io.puts).toEqual([]);
+  });
+
   it("does not let an unused stale profile block saving a changed route", async () => {
-    const loadedBase = cloneManual(DEFAULT_MANUAL);
-    const loaded: ModelManual = {
-      ...loadedBase,
-      profiles: [...loadedBase.profiles, {
+    const base = cloneManual(DEFAULT_MANUAL);
+    const stale: ModelManual = {
+      ...base,
+      profiles: [...base.profiles, {
         id: "stale-old",
         name: "旧方案",
         harness: "codex",
-        lead: { agent: "codex", model: "gone-model", provider_id: "art-cindy", effort: "high" },
+        lead: base.profiles[0]!.lead,
         direction_gate: "lead",
-        nodes: { default: { ...loadedBase.profiles[0]!.nodes.default! } },
+        nodes: { default: { ...base.profiles[0]!.nodes.default!, worker: { primary: { agent: "codex", model: "gone-model", provider_id: "art-cindy", effort: "high" } } } },
       }],
     };
-    const edited = setSlot(loaded, "sol", "default", "worker", {
-      primary: { agent: "pi", model: "x-ai-grok/grok-4.6", provider_id: "xd", effort: "high" },
-      fallbacks: loaded.profiles[0]!.nodes.default!.worker!.fallbacks,
-    });
-    const io = fakeIo({ kv: { extra: 1, manual: loaded }, models: appendixCAgentModels() });
-    const result = await saveManual(io, edited, appendixCAgentModels(), {
-      expectedFingerprint: fingerprintManual(loaded),
-      baseline: loaded,
-    });
+    const edited = setCodeRoutes(stale, "sol", { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "high" }, { agent: "codex", model: "openai/gpt-6-astra", provider_id: "xd", effort: "high" });
+    const io = fakeIo({ kv: { extra: 1, manual: stale }, models });
+    const result = await saveManual(io, edited, models, { expectedFingerprint: fingerprintManual(stale), baseline: stale });
     expect(result).toEqual({ ok: true });
     expect(io.kv.extra).toBe(1);
     expect((io.kv.manual as ModelManual).version).toBe(2);
+    const withoutBaseline = await saveManual(fakeIo({ kv: { manual: stale }, models }), edited, models);
+    expect(withoutBaseline).toMatchObject({ ok: false, kind: "invalid" });
   });
 
   it("blocks a changed invalid effort even when the availability message is unchanged", async () => {
-    const models: AgentModel[] = [
-      ...appendixCAgentModels(),
-      { id: "plain", name: "plain", agent: "codex", providerId: "art-cindy", visible: true, efforts: [] },
-    ];
-    const loaded = setSlot(cloneManual(DEFAULT_MANUAL), "sol", "default", "explorer", {
-      primary: { agent: "codex", model: "plain", provider_id: "art-cindy", effort: "high" },
-    });
-    const edited = setSlot(loaded, "sol", "default", "explorer", {
-      primary: { agent: "codex", model: "plain", provider_id: "art-cindy", effort: "max" },
-    });
+    const luna = (effort: string) => ({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort }) as const;
+    const loaded = setCodeRoutes(cloneManual(DEFAULT_MANUAL), "sol", luna("high"));
+    const edited = setCodeRoutes(loaded, "sol", luna("max"));
     const io = fakeIo({ kv: { extra: 1, manual: loaded }, models });
-    const result = await saveManual(io, edited, models, {
-      expectedFingerprint: fingerprintManual(loaded),
-      baseline: loaded,
-    });
+    const result = await saveManual(io, edited, models, { expectedFingerprint: fingerprintManual(loaded), baseline: loaded });
     expect(result).toMatchObject({ ok: false, kind: "invalid" });
-    if (result.ok === false && result.kind === "invalid") {
-      expect(result.issues.some((i) => i.message.includes("未声明档位"))).toBe(true);
-    }
+    if (!result.ok && result.kind === "invalid") expect(result.issues.some((i) => i.message.includes("未声明档位"))).toBe(true);
     expect(io.kv.extra).toBe(1);
     expect(io.kv.manual).toEqual(loaded);
+  });
+
+  it("refuses to save over a manual that changed since it was loaded", async () => {
+    const io = fakeIo({ kv: { manual: DEFAULT_MANUAL }, models });
+    const result = await saveManual(io, cloneManual(DEFAULT_MANUAL), models, { expectedFingerprint: "stale", baseline: DEFAULT_MANUAL });
+    expect(result).toMatchObject({ ok: false, kind: "conflict" });
+    expect(io.puts).toEqual([]);
   });
 
   it("refuses to treat an invalid stored manual as loaded default", async () => {
@@ -236,14 +205,6 @@ describe("import / export", () => {
   });
 });
 
-describe("slot inherit", () => {
-  it("clearing a cell stores 沿用 (no own slot)", () => {
-    const next = setSlot(DEFAULT_MANUAL, "sol", "default", "explorer", undefined);
-    expect(next.profiles[0]!.nodes.default!.explorer).toBeUndefined();
-    expect(cellView(next, "sol", "default", "explorer", appendixCAgentModels(), false).inherit).toBe(true);
-  });
-});
-
 describe("RuntimeConfig cache hook", () => {
   const built: KeelProfile = { lanes: [{ repo: "acme/app", preset: "personal" }], routingPath: null, boardRepos: [], plansDir: null };
 
@@ -262,94 +223,65 @@ describe("RuntimeConfig cache hook", () => {
   });
 });
 
-describe("setDirectionRoute", () => {
-  it("stores astra + route, and 主控自己定 drops the field", () => {
-    const withRoute = setDirectionRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-astra", provider_id: "art-cindy", effort: "xhigh" });
-    expect(withRoute.profiles[0]).toMatchObject({ direction_gate: "astra", direction_route: { model: "gpt-6-astra", effort: "xhigh" } });
-    const self = setDirectionRoute(withRoute, "sol", undefined);
-    expect(self.profiles[0]!.direction_gate).toBe("lead");
-    expect(self.profiles[0]!.direction_route).toBeUndefined();
-    expect("direction_route" in self.profiles[0]!).toBe(false);
-  });
-});
 
-describe("setFinalReviewRoute", () => {
-  it("stores, clears, and copies the field without touching direction or nodes", async () => {
-    const withRoute = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
-    expect(withRoute.profiles[0]!.final_review_route).toEqual({ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" });
-    expect(withRoute.profiles[0]!.direction_gate).toBe(DEFAULT_MANUAL.profiles[0]!.direction_gate);
-    expect(withRoute.profiles[0]!.nodes).toEqual(DEFAULT_MANUAL.profiles[0]!.nodes);
-    const cleared = setFinalReviewRoute(withRoute, "sol", undefined);
-    expect(cleared.profiles[0]!.final_review_route).toBeUndefined();
-    expect("final_review_route" in cleared.profiles[0]!).toBe(false);
-    const copied = copyProfile(withRoute, "sol");
-    expect(copied.manual.profiles.find((p) => p.id === copied.id)?.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
-
-    const models = appendixCAgentModels();
-    const io = fakeIo({ kv: { keep: true }, models });
-    expect(await saveManual(io, withRoute, models)).toEqual({ ok: true });
-    expect(io.kv.keep).toBe(true);
-    expect((io.kv.manual as ModelManual).profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
-    const exported = prettyExport(withRoute);
-    const parsed = parseImportedJson(exported);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    expect(parsed.manual.profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
-    const io2 = fakeIo({ kv: { keep: true }, models });
-    expect(await saveManual(io2, parsed.manual, models)).toEqual({ ok: true });
-    expect((io2.kv.manual as ModelManual).profiles[0]!.final_review_route).toEqual(withRoute.profiles[0]!.final_review_route);
-
-    const broken = setFinalReviewRoute(DEFAULT_MANUAL, "sol", { agent: "codex", model: "nope", provider_id: "art-cindy", effort: "high" });
-    const io3 = fakeIo({ kv: { keep: true }, models });
-    expect(await saveManual(io3, broken, models)).toMatchObject({ ok: false, kind: "invalid" });
-    expect(io3.puts).toEqual([]);
-
-    const legacy = legacyGrokInheritManual();
-    const io4 = fakeIo({ kv: { manual: legacy, keep: true }, models });
-    expect(await saveManual(io4, legacy, models)).toEqual({ ok: true });
-    expect("final_review_route" in (io4.kv.manual as ModelManual).profiles[1]!).toBe(false);
-  });
-});
+function readPlugin(name: string): string {
+  return readFileSync(join(here, "../../plugin", name), "utf8");
+}
 
 describe("settings.html structure", () => {
-  it("has the mockup skeleton and no routing.json / 5×6 grid markers", () => {
-    const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../plugin/settings.html"), "utf8");
-    for (const id of ["status-bar", "model-tabs", "task-scope", "model-rows", "scope-banner", "accordion-scope", "accordion-jev", "accordion-lanes", "accordion-advanced", "reply-seg", "lead-row"]) {
+  const html = readPlugin("settings.html");
+
+  it("has two tabs, the four-row card, the status strip and the kept accordions", () => {
+    for (const id of ["status-bar", "model-tabs", "model-rows", "stage-notice", "manual-status", "reply-seg", "accordion-jev", "accordion-lanes", "accordion-advanced", "advanced-body"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(html).toContain('data-status="jev"');
-    expect(html).toContain('data-status="catalog"');
-    expect(html).toContain('data-status="hooks"');
-    expect(html).toContain('data-status="clock"');
-    expect(html).toContain("Codex 主控");
-    expect(html).toContain("Claude Code 主控");
-    expect(html).toContain("默认设置");
-    expect(html).toContain("按任务类型");
-    expect(html).toContain("评审回帖");
-    expect(html).toContain("当前说明书");
-    expect(html).toContain("不会改变当前主会话模型");
-    expect(html).toContain("最多 4 路只读协作模型");
-    expect(html).not.toContain("探索与研究两步骤并行");
-    expect(html).not.toContain("现读 routing.json");
-    expect(html).not.toContain("当前派工路由");
-    expect(html).not.toContain("roles-refresh");
-    expect(html).not.toContain("id=\"roles\"");
-    expect(html).not.toContain("5×6");
-    expect(html).toContain("方案管理 · 导入导出 ›");
-    expect(html).not.toContain("模型档次表");
     for (const id of ["jev", "catalog", "hooks", "clock"]) {
+      expect(html).toContain(`data-status="${id}"`);
       expect(html).toContain(`id="status-${id}-dot"`);
       expect(html).toContain(`id="status-${id}-value"`);
     }
+    expect(html).toContain("KEEL 设置");
+    expect(html).toContain("这里只决定 KEEL 怎么派活，不会改你当前会话的模型。");
+    expect(html.match(/data-harness="/g)).toHaveLength(2);
+    expect(html).toMatch(/class="on" data-harness="claude-code"[^>]*>我用 Claude Code 时</);
+    expect(html).toMatch(/data-harness="codex"[^>]*>我用 Codex 时</);
+    expect(html).toContain("评审回帖");
   });
 
-  it("drops the static explanations the page used to repeat", () => {
-    const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../plugin/settings.html"), "utf8");
-    for (const gone of ["每个下拉框打开时", "改完点保存", "读取中", 'id="reply-confirm"', "前往 Typesafe 控制台"]) {
+  it("no longer carries the removed controls or explanations", () => {
+    for (const gone of [
+      "筛选", "角色细调", "按任务类型", "协作模型", "高级范围", "主控方案", "方案管理", "配置规则", "只读协作", "当前说明书",
+      "task-scope", "scope-banner", "lead-row", "model-hint", "config-help", "taskbar", "accordion-scope",
+      "roles-refresh", "5×6", "模型档次表",
+      "每个下拉框打开时", "改完点保存", "读取中", 'id="reply-confirm"', "前往 Typesafe 控制台",
+    ]) {
       expect(html).not.toContain(gone);
     }
-    // Save starts disabled; the script enables it only while there are unsaved edits.
+  });
+
+  it("keeps only export, import and restore under 高级", () => {
+    const advanced = html.slice(html.indexOf('id="advanced-body"'), html.indexOf("</details>", html.indexOf('id="advanced-body"')));
+    expect(advanced.match(/data-act="/g)).toHaveLength(3);
+    for (const act of ["export", "import", "restore"]) expect(advanced).toContain(`data-act="${act}"`);
+    for (const gone of ["新增", "复制", "删除", "改名", "沿用", "主控环境"]) expect(advanced).not.toContain(gone);
+    expect(html.indexOf('data-act="restore"')).toBeGreaterThan(html.indexOf('id="accordion-advanced"'));
+  });
+
+  it("starts with Save disabled; the script enables it only while there are unsaved edits", () => {
     expect(html).toMatch(/data-act="save" disabled/);
-    expect(html).not.toMatch(/class="bar"[\s\S]*data-act="restore"[\s\S]*<\/section>/);
+  });
+});
+
+describe("settings.css", () => {
+  const css = readPlugin("settings.css");
+
+  it("has no red text left except the save-failure status, and no styles for the removed controls", () => {
+    expect(css.match(/--danger/g)).toHaveLength(1);
+    expect(css).toMatch(/#manual-status\.issues \{ color:var\(--danger/);
+    for (const gone of [".stale-reason", ".route-status", ".mixed", ".filter-model", ".model-group", ".role-editor", ".fb-chip", ".scope-banner", ".config-help"]) {
+      expect(css).not.toContain(gone);
+    }
+    expect(css).toContain(".stage-warn");
+    expect(css).toMatch(/\.stage-warn \{[^}]*--warning/);
   });
 });

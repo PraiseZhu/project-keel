@@ -264,6 +264,8 @@ export interface GraphRunState {
   team?: TeamState;
   prior_teams?: TeamState[];
   author_families: string[];
+  /** Harnesses (codex / claude-code / pi) that wrote code in this run; 做检查 must use another one. */
+  author_agents?: string[];
   start_state?: StartState;
   pr_binding?: PrBinding;
   sol_session_id?: string;

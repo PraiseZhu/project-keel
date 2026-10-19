@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { collectTaskMessages, type CindyTasksApi } from "../../src/main/host/tasks.ts";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
-import { usePluginResearch } from "./helpers.ts";
+import { pluginResearchManual, usePluginResearch } from "./helpers.ts";
 
 afterEach(cleanupRepos);
 
@@ -30,6 +30,7 @@ describe("R29-04 paged messages", () => {
   it("PAGED_FALSE_DONE: earlier partial must not make investigation done", async () => {
     const world = makeWorld({ citation: "notes:1" });
     const h = makeE2eHost(world);
+    h.kv.manual = pluginResearchManual();
     let pages = 0;
     const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     h.tasks!.readMessages = async (args: Record<string, unknown>) => {

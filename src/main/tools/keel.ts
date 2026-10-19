@@ -16,7 +16,7 @@ import { ensureNode, parseDispatchKey, type ErrorMode, type GateAnswer, type Gra
 import { confirmLedgerHead, recordVerifierVerdict } from "../graph/verdict-sink.ts";
 import { buildVerdict, type GraphVerdict, type NodeReport as VerdictReport } from "../graph/verdict.ts";
 import { KeelError, type Host } from "../host.ts";
-import { collectParallelReports, readExecutionRoute, sameRoute } from '../graph/collaboration.ts';
+import { collectParallelReports, readExecutionRoute, routeMatches } from '../graph/collaboration.ts';
 import { recordDashboardProgress } from "../dashboard/progress.ts";
 import { runGate, type GateDecision, type GateStore, type GraphKind } from "../jev/gates.ts";
 import { append, newRunId } from "../ledger.ts";
@@ -1135,7 +1135,7 @@ export async function keelReport(ctx: ToolContext, args: Record<string, unknown>
     if (nodeState?.planned_params?.channel === 'subagent' && nodeState.dispatch_key === key && nodeState.dispatch_state !== 'terminal') {
       const successful = parsed?.status === 'done' || parsed?.status === 'partial';
       const observed = parallel ? nodeState.collaborators![0]!.route : readExecutionRoute(args.execution_route);
-      if (successful && (!observed || !sameRoute(observed, { ...nodeState.planned_params, agent: nodeState.planned_params.agent as Harness }))) throw new KeelError('EXECUTION_ROUTE_MISMATCH', '原生 sub 回报必须提供与选择一致的 execution_route；不能把请求值冒充实际模型。');
+      if (successful && (!observed || !routeMatches(observed, { ...nodeState.planned_params, agent: nodeState.planned_params.agent as Harness }))) throw new KeelError('EXECUTION_ROUTE_MISMATCH', '原生 sub 回报必须提供与选择一致的 execution_route；不能把请求值冒充实际模型。');
       if (successful && !parallel && (typeof args.native_agent_id !== 'string' || !args.native_agent_id)) throw new KeelError('REPORT_INVALID', '原生 sub 回报缺少真实 native_agent_id。');
       if (successful && observed) base.execution_route = observed;
     }

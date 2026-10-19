@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
-import { usePluginResearch } from "./helpers.ts";
+import { pluginResearchManual, usePluginResearch } from "./helpers.ts";
 
 afterEach(cleanupRepos);
 
@@ -23,6 +23,7 @@ const body = (key: string, status: string, evidence = true) => ({
 async function investigation(messages: (key: string) => unknown[]) {
   const world = makeWorld({ citation: "explorer:1" });
   const h = makeE2eHost(world);
+    h.kv.manual = pluginResearchManual();
   const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
   h.tasks!.readMessages = async () => ({ items: messages(researchKey(h, start.run_id)), nextCursor: null });
   const run = await leadLoop(h, start, world);

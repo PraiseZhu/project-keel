@@ -67,7 +67,7 @@ describe("R30-01 reconcile-only write attempts still register author families", 
         ? { ok: true, result: { head: H, root: "/repo", branch: "feature", gh_repo: "o/r" } }
         : { ok: false, message: method },
     });
-    // bug-fix starts at the one writer session (implement); attempt 1 runs on grok, the retry on gpt.
+    // bug-fix starts at the one writer session (implement); attempt 1 runs on the Codex default (gpt), the retry on Claude Code.
     await createRun(h, {
       run_id: "run-author", spec_id: "bug-fix", profile_id: "sol", lead_harness: "codex",
       task_type: "bug-fix", entry: "implement", goal: "fix", worktree: "/repo/.worktrees/one",
@@ -89,10 +89,11 @@ describe("R30-01 reconcile-only write attempts still register author families", 
     if (out.next.kind !== "dispatch") throw new Error("implement:1 dispatch");
     const impl1 = out.next.dispatch_key;
     expect(impl1).toBe("run-author:implement:1");
-    expect(out.next.create_worker!.model).toBe("grok-4.6");
+    expect(out.next.create_worker).toMatchObject({ agent: "codex", model: "gpt-6.1-sol" });
     out = await accepted(impl1);
-    expect(out.state.author_families).toEqual(["grok"]);
-    (manual.profiles[0]!.nodes.default as { worker: unknown }).worker = { primary: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" } };
+    expect(out.state.author_families).toEqual(["gpt"]);
+    expect(out.state.author_agents).toEqual(["codex"]);
+    (manual.profiles[0]!.nodes.default as { worker: unknown }).worker = { primary: { agent: "claude-code", model: "anthropic/claude-sonnet-5-5", provider_id: "xd", effort: "high" } };
     out = await final(impl1, "failed");
     expect(out.state.cursor).toBe("implement");
     // The failed writer is archived and confirmed stopped before the retry is dispatched.
@@ -104,7 +105,7 @@ describe("R30-01 reconcile-only write attempts still register author families", 
     if (out.next.kind !== "dispatch") throw new Error("implement:2 dispatch");
     const impl = out.next.dispatch_key;
     expect(impl).toBe("run-author:implement:2");
-    expect(out.next.create_worker!.model).toBe("gpt-6-luna");
+    expect(out.next.create_worker).toMatchObject({ agent: "claude-code", model: "anthropic/claude-sonnet-5-5" });
     h.clock.t += PLANNED_TIMEOUT_MS;
     out = await tick(); expect(out.next.kind).toBe("reconcile");
     out = await advance(h, "run-author", {
@@ -114,14 +115,15 @@ describe("R30-01 reconcile-only write attempts still register author families", 
     expect(out.state.nodes.implement.dispatch_state).toBe(status === "running" ? "running" : "accepted");
     out = await final(impl);
     const families = authorFamiliesFromRoutes(out.state);
-    expect(families).toEqual(expect.arrayContaining(["grok", "gpt"]));
+    expect(families).toEqual(expect.arrayContaining(["gpt", "claude"]));
+    expect(out.state.author_agents).toEqual(expect.arrayContaining(["codex", "claude-code"]));
     const done = isChangeGraphDone({
       pr_status: "report_mergeable",
       author_families: families,
       verdict: {
         repo: "o/r", pr: 1, base_ref: "main", base_sha: B, head_sha: H, patch_id: "patch",
         level: "unit-test-verified", surface: "unit-test",
-        by_route: { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" }, by_family: "gpt",
+        by_route: { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd" }, by_family: "claude",
       },
       current: { head_sha: H, base_sha: B, patch_id: "patch", patch_ok: true },
       sc: [{ id: "SC-1", hasEvidence: true }],

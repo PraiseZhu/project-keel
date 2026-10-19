@@ -20,6 +20,7 @@ const DEFAULT_AGENT_MODELS: AgentModel[] = [
   { id: "gpt-6-luna", agent: "codex", providerId: "art-cindy" },
   { id: "gpt-6-astra", agent: "codex", providerId: "art-cindy" },
   { id: "gpt-6.1-sol", agent: "codex", providerId: "art-cindy" },
+  { id: "openai/gpt-6.1-sol", agent: "codex", providerId: "xd" },
   { id: "openai/gpt-6-luna", agent: "codex", providerId: "xd" },
   { id: "openai/gpt-6-astra", agent: "codex", providerId: "xd" },
   { id: "x-ai-grok/grok-4.6", agent: "pi", providerId: "xd" },

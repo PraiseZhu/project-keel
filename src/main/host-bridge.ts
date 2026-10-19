@@ -30,7 +30,8 @@ export function asNudgeRun(r: Record<string, any> | null | undefined): HostNudge
     run_id: r.run_id,
     status: (r.status as NudgeRun["status"]) ?? "running",
     version: Number(r.updated_at ?? 0),
-    ...(r.next?.kind ? { next: { kind: r.next.kind === "dispatch" && r.next.subagent ? "wait" : r.next.kind } } : {}),
+    // A native-sub dispatch (one sub, or the three parallel 查资料 subs) is not a lead action while the subs run.
+    ...(r.next?.kind ? { next: { kind: r.next.kind === "dispatch" && (r.next.subagent || r.next.subagents?.length) ? "wait" : r.next.kind } } : {}),
     ...(typeof r.updated_at === "number" ? { last_keel_call_at: r.updated_at } : {}),
     associated: false,
     nodes,

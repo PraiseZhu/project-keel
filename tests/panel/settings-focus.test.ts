@@ -4,7 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { appendixCAgentModels } from "../manual/model-manual.test.ts";
+import { DEFAULT_MANUAL, type ModelManual } from "../../src/shared/manual/schema.ts";
+import { stageCatalog, valueOf } from "./stage-catalog.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
@@ -320,12 +321,12 @@ async function flush(times = 12) {
   for (let i = 0; i < times; i++) await new Promise((r) => setImmediate(r));
 }
 
-async function boot(opts: { holdAfter?: number } = {}) {
+async function boot(opts: { holdAfter?: number; kv?: Record<string, unknown> } = {}) {
   const doc = loadDocument();
-  const models = appendixCAgentModels();
+  const models = stageCatalog();
   const held: Array<(v: ReturnType<typeof jsonResponse>) => void> = [];
   let catalogCalls = 0;
-  const kv: Record<string, unknown> = {};
+  const kv: Record<string, unknown> = structuredClone(opts.kv ?? {});
   const fetchFn = async (url: string, init?: { method?: string; body?: string }) => {
     const method = init?.method ?? "GET";
     if (url === "/secrets") return jsonResponse(200, []);
@@ -377,12 +378,30 @@ async function boot(opts: { holdAfter?: number } = {}) {
       const payload = jsonResponse(200, { ok: true, models });
       for (const r of held.splice(0)) r(payload);
     },
-    select(row: string, act: string, i?: number) {
-      const iSel = i === undefined ? "" : `[data-i="${i}"]`;
-      return doc.querySelector(`[data-row="${row}"][data-act="${act}"]${iSel}`);
+    select(stage: string, slot: string, act: string) {
+      return doc.querySelector(`[data-act="${act}"][data-stage="${stage}"][data-slot="${slot}"]`);
+    },
+    async change(el: El, value: string) {
+      el.value = value;
+      el.dispatchEvent(new FakeEvent("change", { bubbles: true }));
+      await flush();
+    },
+    async save() {
+      doc.querySelector('[data-act="save"]')!.click();
+      for (let i = 0; i < 40 && kv.manual === undefined; i++) await flush();
+      await flush();
     },
   };
 }
+
+type Page = Awaited<ReturnType<typeof boot>>;
+const text = (page: Page, id: string) => page.doc.getElementById(id)!.textContent;
+
+
+const sonnet = valueOf("claude-code", "anthropic/claude-sonnet-5-5", "xd");
+const opus = valueOf("claude-code", "anthropic/claude-opus-5-5", "xd");
+const solArt = valueOf("codex", "gpt-6.1-sol", "art-cindy");
+const astraArt = valueOf("codex", "gpt-6-astra", "art-cindy");
 
 describe("html entity decode", () => {
   it("does not double-unescape amp-prefixed entities", () => {
@@ -392,30 +411,26 @@ describe("html entity decode", () => {
 
 describe("settings catalog focus restore", () => {
   it("keeps focus on the same control when a late catalog response redraws after change", async () => {
-    for (const act of ["model", "effort"] as const) {
+    for (const [act, nextValue] of [["model", opus], ["effort", "low"]] as const) {
       const page = await boot({ holdAfter: 1 });
       const rows = page.doc.getElementById("model-rows")!;
-      const before = page.select("explorer", act)!;
+      const before = page.select("code", "primary", act)!;
       expect(before).toBeTruthy();
       before.focus();
       expect(page.doc.activeElement).toBe(before);
-      const nextValue = act === "model"
-        ? JSON.stringify(["codex", "gpt-6-astra", "art-cindy"])
-        : "low";
-      before.value = nextValue;
-      before.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-      await flush();
-      const restored = page.select("explorer", act)!;
+      await page.change(before, nextValue);
+      const restored = page.select("code", "primary", act)!;
       expect(page.doc.activeElement).toBe(restored);
       expect(restored.value).toBe(nextValue);
       const callsAfterChange = page.catalogCalls();
       page.release();
       await flush();
       expect(before.isConnected).toBe(false);
-      const after = page.select("explorer", act)!;
+      const after = page.select("code", "primary", act)!;
       expect(after.isConnected).toBe(true);
       expect(page.doc.activeElement).toBe(after);
-      expect(after.getAttribute("data-row")).toBe("explorer");
+      expect(after.getAttribute("data-stage")).toBe("code");
+      expect(after.getAttribute("data-slot")).toBe("primary");
       expect(after.getAttribute("data-act")).toBe(act);
       expect(after.value).toBe(nextValue);
       expect(page.catalogCalls()).toBe(callsAfterChange);
@@ -423,9 +438,22 @@ describe("settings catalog focus restore", () => {
     }
   });
 
+  it("keeps focus on a backup control the same way", async () => {
+    const page = await boot({ holdAfter: 1 });
+    const before = page.select("review", "fallback", "effort")!;
+    before.focus();
+    await page.change(before, "low");
+    page.release();
+    await flush();
+    const after = page.select("review", "fallback", "effort")!;
+    expect(before.isConnected).toBe(false);
+    expect(page.doc.activeElement).toBe(after);
+    expect(after.value).toBe("low");
+  });
+
   it("does not destroy a select that is being operated when the catalog arrives first", async () => {
     const page = await boot({ holdAfter: 1 });
-    const live = page.select("researcher", "effort")!;
+    const live = page.select("plan", "primary", "effort")!;
     live.focus();
     page.release();
     await flush();
@@ -435,11 +463,9 @@ describe("settings catalog focus restore", () => {
 
   it("does not steal focus that has already left the rows", async () => {
     const page = await boot({ holdAfter: 1 });
-    const model = page.select("explorer", "model")!;
+    const model = page.select("code", "primary", "model")!;
     model.focus();
-    model.value = JSON.stringify(["codex", "openai/gpt-6-luna", "xd"]);
-    model.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-    await flush();
+    await page.change(model, opus);
     const save = page.doc.querySelector("[data-act=\"save\"]")!;
     save.focus();
     expect(page.doc.activeElement).toBe(save);
@@ -451,196 +477,150 @@ describe("settings catalog focus restore", () => {
 
   it("ignores a stale overlapping catalog sequence and skips redraw when render is false", async () => {
     const page = await boot({ holdAfter: 1 });
-    const first = page.select("worker", "model")!;
+    const first = page.select("code", "primary", "model")!;
     first.focus();
-    page.select("worker", "effort")!.dispatchEvent(new FakeEvent("mousedown", { bubbles: true }));
+    page.select("code", "primary", "effort")!.dispatchEvent(new FakeEvent("mousedown", { bubbles: true }));
     const connected = first.isConnected;
     page.release();
     await flush();
     expect(first.isConnected).toBe(connected);
-    expect(page.select("worker", "model")!.isConnected).toBe(true);
+    expect(page.select("code", "primary", "model")!.isConnected).toBe(true);
 
     const savePage = await boot({ holdAfter: 1 });
-    const keep = savePage.select("lead", "model")!;
+    const keep = savePage.select("plan", "primary", "model")!;
     savePage.doc.querySelector("[data-act=\"save\"]")!.click();
     await flush();
     expect(keep.isConnected).toBe(true);
     savePage.release();
     await flush();
-    expect(savePage.select("lead", "model")!.isConnected).toBe(true);
+    expect(savePage.select("plan", "primary", "model")!.isConnected).toBe(true);
   });
 });
 
-describe("inline fallback panel", () => {
-  it("toggles the worker row and hides chips on lead/final-review", async () => {
+describe("tabs", () => {
+  it("opens on Claude Code and switches to the Codex default profile", async () => {
     const page = await boot();
-    const chip = page.select("worker", "toggle-fb")!;
-    expect(chip).toBeTruthy();
-    chip.click();
-    const row = chip.closest(".role-editor")!;
-    expect(row.classList.contains("open")).toBe(true);
-    expect(chip.getAttribute("aria-expanded")).toBe("true");
-    chip.click();
-    expect(row.classList.contains("open")).toBe(false);
-    expect(chip.getAttribute("aria-expanded")).toBe("false");
-    expect(page.select("lead", "model")).toBeTruthy();
-    expect(page.select("lead", "toggle-fb")).toBeNull();
-    expect(page.select("final-review", "model")).toBeTruthy();
-    expect(page.select("final-review", "toggle-fb")).toBeNull();
-    const rowsEl = page.doc.getElementById("model-rows")!;
-    expect(rowsEl.querySelector('[data-row="direction"]')).toBeTruthy();
-    expect(rowsEl.querySelector('[data-row="verifier"]')).toBeTruthy();
-  });
-
-  it("keeps an expanded worker panel open after another row redraws", async () => {
-    const page = await boot();
-    page.select("worker", "toggle-fb")!.click();
-    expect(page.select("worker", "toggle-fb")!.closest(".role-editor")!.classList.contains("open")).toBe(true);
-    const explorer = page.select("explorer", "model")!;
-    explorer.value = "codex\topenaai/gpt-6-luna\txd";
-    explorer.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-    await flush();
-    expect(page.select("worker", "toggle-fb")!.closest(".role-editor")!.classList.contains("open")).toBe(true);
-  });
-
-  it("does not destroy an open fallback select when a late catalog arrives", async () => {
-    const page = await boot({ holdAfter: 1 });
-    page.select("worker", "toggle-fb")!.click();
-    const live = page.select("worker", "fb-model", 0)!;
-    live.focus();
-    expect(page.doc.activeElement).toBe(live);
-    page.release();
-    await flush();
-    expect(live.isConnected).toBe(true);
-    expect(page.doc.activeElement).toBe(live);
-    expect(page.select("worker", "toggle-fb")!.closest(".role-editor")!.classList.contains("open")).toBe(true);
-  });
-
-  it("keeps focus on the same fallback control when a late catalog response redraws after change", async () => {
-    for (const act of ["fb-model", "fb-effort"] as const) {
-      const page = await boot({ holdAfter: 1 });
-      page.select("worker", "toggle-fb")!.click();
-      const before = page.select("worker", act, 0)!;
-      expect(before).toBeTruthy();
-      before.focus();
-      expect(page.doc.activeElement).toBe(before);
-      const nextValue = act === "fb-model"
-        ? JSON.stringify(["pi", "grok-4.6", "art-cindy"])
-        : "medium";
-      before.value = nextValue;
-      before.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-      await flush();
-      const restored = page.select("worker", act, 0)!;
-      expect(page.doc.activeElement).toBe(restored);
-      expect(restored.value).toBe(nextValue);
-      const callsAfterChange = page.catalogCalls();
-      page.release();
-      await flush();
-      expect(before.isConnected).toBe(false);
-      const after = page.select("worker", act, 0)!;
-      expect(after.isConnected).toBe(true);
-      expect(page.doc.activeElement).toBe(after);
-      expect(after.getAttribute("data-row")).toBe("worker");
-      expect(after.getAttribute("data-act")).toBe(act);
-      expect(after.getAttribute("data-i")).toBe("0");
-      expect(after.value).toBe(nextValue);
-      expect(page.catalogCalls()).toBe(callsAfterChange);
-    }
-  });
-
-  it("adds a second fallback then deletes it", async () => {
-    const page = await boot();
-    page.select("architect", "toggle-fb")!.click();
-    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="architect"]')).toHaveLength(1);
-    const add = page.select("architect", "add-fb")!;
-    expect(add.disabled).toBe(false);
-    add.click();
-    await flush();
-    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="architect"]')).toHaveLength(2);
-    expect(page.select("architect", "add-fb")!.disabled).toBe(true);
-    page.select("architect", "del-fb", 1)!.click();
-    await flush();
-    expect(page.doc.querySelectorAll('[data-act="fb-model"][data-row="architect"]')).toHaveLength(1);
-    expect(page.select("architect", "add-fb")!.disabled).toBe(false);
-  });
-
-  it("saves an edited worker fallback into the default slot", async () => {
-    const page = await boot();
-    page.select("worker", "toggle-fb")!.click();
-    const model = page.select("worker", "fb-model", 0)!;
-    model.value = JSON.stringify(["pi", "grok-4.6", "art-cindy"]);
-    model.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-    await flush();
-    page.doc.querySelector('[data-act="save"]')!.click();
-    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
-    expect(page.doc.getElementById("manual-status")?.textContent).toBe("已保存");
-    const manual = page.kv.manual as { profiles: Array<{ id: string; nodes: { default?: { worker?: { fallbacks?: Array<{ model: string; provider_id: string }> } } } }> };
-    const sol = manual.profiles.find((p) => p.id === "sol")!;
-    expect(sol.nodes.default?.worker?.fallbacks?.[0]).toMatchObject({ model: "grok-4.6", provider_id: "art-cindy" });
-  });
-
-  it("writes task-type fallbacks without changing the default slot", async () => {
-    const page = await boot();
-    page.doc.querySelector('[data-scope="task"]')!.click();
-    await flush();
-    page.select("worker", "own")!.click();
-    await flush();
-    page.select("worker", "add-fb")!.click();
-    await flush();
-    const added = page.select("worker", "fb-model", 1)!;
-    added.value = JSON.stringify(["pi", "grok-4.6", "art-cindy"]);
-    added.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-    await flush();
-    page.doc.querySelector('[data-act="save"]')!.click();
-    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
-    expect(page.doc.getElementById("manual-status")?.textContent).toBe("已保存");
-    const manual = page.kv.manual as {
-      profiles: Array<{
-        id: string;
-        nodes: {
-          default?: { worker?: { fallbacks?: unknown[] } };
-          "bug-fix"?: { worker?: { fallbacks?: unknown[] } };
-        };
-      }>;
-    };
-    const sol = manual.profiles.find((p) => p.id === "sol")!;
-    expect(sol.nodes["bug-fix"]?.worker?.fallbacks).toHaveLength(2);
-    expect(sol.nodes.default?.worker?.fallbacks).toHaveLength(1);
-  });
-
-  it("keeps advanced limited to profiles, import/export and restore-defaults", async () => {
-    const page = await boot();
-    const adv = page.doc.getElementById("advanced-body")!;
-    expect(adv.querySelector("[data-act=\"fb-agent\"]")).toBeNull();
-    expect(adv.querySelector("[data-act=\"fb-model\"]")).toBeNull();
-    expect(adv.querySelector("[data-act=\"fb-effort\"]")).toBeNull();
-    expect(adv.querySelector("[data-act=\"add-fb\"]")).toBeNull();
-    expect(adv.querySelector("[data-act=\"del-fb\"]")).toBeNull();
-    expect(adv.textContent).not.toContain("档次表");
-    expect(adv.textContent).toContain("主控环境");
-    expect(adv.querySelector("[data-act=\"export\"]")).toBeTruthy();
-    expect(adv.querySelector("[data-act=\"import\"]")).toBeTruthy();
-    expect(adv.querySelector("[data-act=\"add\"]")).toBeTruthy();
-    expect(adv.querySelector("[data-act=\"copy\"]")).toBeTruthy();
-    expect(adv.querySelector("[data-act=\"delete\"]")).toBeTruthy();
-    // Restore-defaults overwrites every profile, so it lives here instead of next to Save.
-    expect(adv.querySelector("[data-act=\"restore\"]")).toBeTruthy();
-    expect(page.doc.querySelector(".bar")!.querySelector("[data-act=\"restore\"]")).toBeNull();
+    const cc = page.doc.querySelector('[data-harness="claude-code"]')!;
+    const cx = page.doc.querySelector('[data-harness="codex"]')!;
+    expect(cc.classList.contains("on")).toBe(true);
+    expect(cc.getAttribute("aria-selected")).toBe("true");
+    expect(page.select("code", "primary", "model")!.value).toBe(sonnet);
+    expect(page.select("plan", "primary", "model")!.value).toBe(astraArt);
+    cx.click();
+    expect(cx.classList.contains("on")).toBe(true);
+    expect(cc.classList.contains("on")).toBe(false);
+    expect(cx.getAttribute("aria-selected")).toBe("true");
+    expect(cc.getAttribute("aria-selected")).toBe("false");
+    expect(page.select("code", "primary", "model")!.value).toBe(solArt);
+    expect(page.select("plan", "primary", "model")!.value).toBe(opus);
+    expect(page.doc.getElementById("model-rows")!.textContent).toContain("gpt-6-luna");
   });
 });
 
-describe("save bar", () => {
-  it("shows the unsaved state only while the draft differs from what was loaded or saved", async () => {
+
+describe("changing the writer's framework", () => {
+  it("switches 做检查 to the default pairing, clears the backup and shows one sentence", async () => {
     const page = await boot();
-    const status = page.doc.getElementById("manual-status")!;
-    expect(status.textContent).toBe("");
-    const effort = page.select("worker", "effort")!;
-    effort.value = "low";
-    effort.dispatchEvent(new FakeEvent("change", { bubbles: true }));
-    await flush();
-    expect(page.doc.getElementById("manual-status")!.textContent).toBe("有改动未保存");
+    expect(page.select("review", "primary", "model")!.value).toBe(astraArt);
+    await page.change(page.select("code", "primary", "model")!, solArt);
+    expect(page.select("code", "primary", "model")!.value).toBe(solArt);
+    expect(page.select("code", "fallback", "model")!.value).toBe("");
+    expect(page.select("review", "primary", "model")!.value).toBe(opus);
+    expect(page.select("review", "fallback", "model")!.value).toBe(sonnet);
+    const notice = text(page, "stage-notice");
+    expect(notice).toContain("写代码换成了 GPT-6.1 Sol · Art Cindy");
+    expect(notice).toContain("做检查已自动改成 Opus 5.5 · XD Gateway");
+    expect(text(page, "manual-status")).toBe("有改动未保存");
+    expect(page.doc.querySelectorAll(".stage-warn")).toHaveLength(0);
+  });
+
+  it("drops the sentence when the tab changes", async () => {
+    const page = await boot();
+    await page.change(page.select("code", "primary", "model")!, solArt);
+    expect(text(page, "stage-notice")).not.toBe("");
+    page.doc.querySelector('[data-harness="codex"]')!.click();
+    expect(text(page, "stage-notice")).toBe("");
+  });
+});
+
+describe("save", () => {
+  it("writes the edits into the /kv manual and keeps the other keys", async () => {
+    const page = await boot({ kv: { keep: "me" } });
+    expect(page.doc.querySelector("[data-act=\"save\"]")!.disabled).toBe(true);
+    await page.change(page.select("plan", "primary", "model")!, valueOf("codex", "openai/gpt-6-astra", "xd"));
+    expect(page.doc.querySelector("[data-act=\"save\"]")!.disabled).toBe(false);
+    await page.save();
+    expect(text(page, "manual-status")).toBe("已保存");
+    expect(page.kv.keep).toBe("me");
+    const manual = page.kv.manual as ModelManual;
+    const grok = manual.profiles.find((p) => p.id === "grok")!;
+    expect(manual.version).toBe(2);
+    expect(grok.nodes.default?.architect?.primary).toMatchObject({ model: "openai/gpt-6-astra", provider_id: "xd", effort: "xhigh" });
+    expect(page.doc.querySelector("[data-act=\"save\"]")!.disabled).toBe(true);
+  });
+
+  it("strips per-task columns and collaborators that no stage uses", async () => {
+    const old = structuredClone(DEFAULT_MANUAL) as unknown as { profiles: Array<Record<string, unknown>> };
+    const grok = old.profiles[1]!;
+    (grok.nodes as Record<string, unknown>)["bug-fix"] = { worker: { primary: { agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd" } } };
+    ((grok.nodes as { default: { worker: Record<string, unknown> } }).default.worker).collaborators = [{ agent: "claude-code", model: "anthropic/claude-haiku-5-5", provider_id: "xd" }];
+    grok.final_review_collaborators = [{ agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy" }];
+    const page = await boot({ kv: { manual: old } });
+    await page.change(page.select("code", "primary", "effort")!, "low");
+    await page.save();
+    expect(text(page, "manual-status")).toBe("已保存");
+    const saved = (page.kv.manual as ModelManual).profiles.find((p) => p.id === "grok")!;
+    expect(Object.keys(saved.nodes)).toEqual(["default"]);
+    expect(saved.nodes.default?.worker).not.toHaveProperty("collaborators");
+    expect(saved).not.toHaveProperty("final_review_collaborators");
+    expect(saved.nodes.default?.worker?.primary.effort).toBe("low");
+  });
+
+  it("lists the validation issues as they are and writes nothing", async () => {
+    const broken = structuredClone(DEFAULT_MANUAL) as unknown as { profiles: Array<{ nodes: { default: { architect: { primary: Record<string, string> } } } }> };
+    broken.profiles[1]!.nodes.default.architect.primary = { agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd" };
+    const page = await boot({ kv: { manual: broken } });
+    await page.change(page.select("code", "primary", "effort")!, "low");
+    expect(page.doc.querySelectorAll(".stage-warn")).toHaveLength(1);
     page.doc.querySelector("[data-act=\"save\"]")!.click();
-    for (let i = 0; i < 40 && page.kv.manual === undefined; i++) await flush();
-    expect(page.doc.getElementById("manual-status")!.textContent).toBe("已保存");
+    await flush();
+    await flush();
+    const status = text(page, "manual-status");
+    expect(status).toContain("校验未通过，未写入。");
+    expect(status).toContain("想方案要换一家");
+    expect(JSON.stringify(page.kv.manual)).not.toContain('"effort":"low"');
+  });
+});
+
+describe("saved routes that cannot run", () => {
+  it("shows the orange sentence, keeps Save locked until the row is fixed", async () => {
+    const old = structuredClone(DEFAULT_MANUAL) as unknown as { profiles: Array<{ nodes: { default: { architect: { primary: Record<string, string> } } } }> };
+    old.profiles[1]!.nodes.default.architect.primary = { agent: "pi", model: "grok-4.6", provider_id: "art-cindy" };
+    const page = await boot({ kv: { manual: old } });
+    const warns = () => page.doc.querySelectorAll(".stage-warn");
+    expect(warns()).toHaveLength(1);
+    expect(warns()[0]!.textContent).toContain("Pi 不用于 KEEL 派工");
+    const plan = page.select("plan", "primary", "model")!;
+    expect(plan.querySelectorAll("option").some((o) => o.disabled && o.textContent.startsWith("当前："))).toBe(true);
+    await page.change(page.select("code", "primary", "effort")!, "low");
+    expect(page.doc.querySelector("[data-act=\"save\"]")!.disabled).toBe(true);
+    await page.change(page.select("plan", "primary", "model")!, astraArt);
+    expect(warns()).toHaveLength(0);
+    expect(page.doc.querySelector("[data-act=\"save\"]")!.disabled).toBe(false);
+  });
+});
+
+describe("a harness without a default profile", () => {
+  it("offers 用默认值, which adds the profile to the draft and saves it as the default", async () => {
+    const onlyClaude = { version: 2, profiles: [structuredClone(DEFAULT_MANUAL.profiles[1]!)], defaults_by_harness: { "claude-code": "grok" } };
+    const page = await boot({ kv: { manual: onlyClaude } });
+    page.doc.querySelector('[data-harness="codex"]')!.click();
+    expect(page.doc.getElementById("model-rows")!.textContent).toContain("还没有这个主控的方案");
+    page.doc.querySelector('[data-act="use-default"]')!.click();
+    expect(page.select("code", "primary", "model")!.value).toBe(solArt);
+    expect(page.doc.querySelector("[data-act=\"save\"]")!.disabled).toBe(false);
+    await page.save();
+    expect(text(page, "manual-status")).toBe("已保存");
+    expect((page.kv.manual as ModelManual).defaults_by_harness).toEqual({ "claude-code": "grok", codex: "sol" });
   });
 });

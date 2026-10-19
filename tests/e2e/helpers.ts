@@ -465,6 +465,23 @@ export function nativeFinalArgs(opts: {
   };
 }
 
+/** keel_report phase=final args for a Worker dispatch (想方案 / 写代码 / 做检查): the report is inline, no native sub fields. */
+export function workerFinalArgs(opts: {
+  run_id: string;
+  dispatch: Extract<Next, { kind: "dispatch" }>;
+  world?: World;
+  report?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const d = opts.dispatch;
+  if (!d.create_worker) throw new Error("workerFinalArgs 需要 create_worker dispatch");
+  return {
+    run_id: opts.run_id,
+    phase: "final",
+    dispatch_key: d.dispatch_key,
+    inline_report: opts.report ?? (opts.world ? inlineReport(d, opts.world) : { status: "done", summary: "ok" }),
+  };
+}
+
 async function call(ctx: ToolContext, tool: string, args: Record<string, unknown>): Promise<ToolResult> {
   return runTool(ctx, tool, args);
 }

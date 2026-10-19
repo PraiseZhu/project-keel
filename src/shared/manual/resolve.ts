@@ -10,12 +10,13 @@ function profileById(manual: ModelManual, id: string): Profile | undefined {
   return manual.profiles.find((p) => p.id === id);
 }
 
-function lookupSlot(profile: Profile, taskType: TaskType, role: Role): Slot | undefined {
-  return profile.nodes[taskType]?.[role] ?? (taskType === "default" ? undefined : profile.nodes.default?.[role]);
+/** Per-task-type columns are retired: every task type reads the default column. */
+function lookupSlot(profile: Profile, _taskType: TaskType, role: Role): Slot | undefined {
+  return profile.nodes.default?.[role];
 }
 
 /**
- * Resolve a slot: nodes[taskType][role] → nodes.default[role] → inherit (same lookup).
+ * Resolve a slot: nodes.default[role] → inherit (same lookup). Older per-task-type columns are ignored.
  * Throws ManualError on cycles, missing refs, or an unresolvable node.
  */
 export function resolve(manual: ModelManual, profileId: string, taskType: TaskType, role: Role): ResolvedRoutes {
@@ -71,6 +72,6 @@ export function resolveDirection(manual: ModelManual, profileId: string, taskTyp
  */
 export function resolveFinalReview(manual: ModelManual, profileId: string, taskType: TaskType): ResolvedRoutes {
   const profile = findProfile(manual, profileId);
-  if (profile.final_review_route) return { primary: profile.final_review_route, fallbacks: [], ...(profile.final_review_collaborators ? { collaborators: profile.final_review_collaborators } : {}) };
+  if (profile.final_review_route) return { primary: profile.final_review_route, fallbacks: profile.final_review_fallbacks ?? [], ...(profile.final_review_collaborators ? { collaborators: profile.final_review_collaborators } : {}) };
   return resolve(manual, profileId, taskType, "architect");
 }

@@ -13,7 +13,7 @@ import * as env from "../../src/node/env.ts";
 import { prOpen as nodePrOpen } from "../../src/node/pr/actions.ts";
 import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import { EMPTY_PROFILE, LANE_PRESETS } from "../../src/shared/types.ts";
-import { addWorktree, cleanupRepos, git, makeRepo, nativeFinalArgs } from "../e2e/helpers.ts";
+import { addWorktree, cleanupRepos, git, makeRepo, workerFinalArgs } from "../e2e/helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
 const profile = { lanes: [], routingPath: null, boardRepos: [], plansDir: null };
@@ -321,14 +321,15 @@ describe("R26-R06 late final cannot overwrite hard gate after concurrent retry",
     const retry = await advance(host, "race-verifier", { type: "report", phase: "recover", dispatch_key: "race-verifier:astra-final-review:1", action: "verify_stopped", action_result: { ok: true, complete: true, team_id: "t1", workers: [] } }, opts);
     expect(retry.next).toMatchObject({ kind: "dispatch", dispatch_key: "race-verifier:astra-final-review:2" });
     if (retry.next.kind !== "dispatch") throw new Error("dispatch");
-    expect(retry.next.subagent).toBeTruthy();
+    // 做检查 retries in a fresh Worker, on the other harness than the Codex-family author route.
+    expect(retry.next.subagent).toBeUndefined();
+    expect(retry.next.create_worker).toMatchObject({ role: "keel-verifier", agent: "claude-code" });
     const accepted: any = await runTool(makeContext(host, "new-accepted"), "keel_report", {
       run_id: "race-verifier", phase: "accepted", dispatch_key: "race-verifier:astra-final-review:2",
       worker_id: "w2", worker_session_id: "ws2", dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
     });
-    expect(accepted.ok).toBe(false);
-    expect(accepted.errorCode).toBe("REPORT_INVALID");
-    await runTool(makeContext(host, "new-final", ctx), "keel_report", nativeFinalArgs({
+    expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+    await runTool(makeContext(host, "new-final", ctx), "keel_report", workerFinalArgs({
       run_id: "race-verifier",
       dispatch: retry.next as Extract<Next, { kind: "dispatch" }>,
       report: { status: "failed", summary: "new attempt failed", verdict: "FAIL", head_sha: HEAD, ran: [{ cmd: "npx vitest run", exit_code: 1, tests_passed: 0 }] },

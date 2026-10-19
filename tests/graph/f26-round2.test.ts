@@ -138,16 +138,22 @@ describe("F26-02 investigation create_worker.working_dir", () => {
     const started: any = await runTool(makeContext(h, "c1", profile), "keel_run", {
       goal: "调查超时原理", repo_dir: "/invoked/path", lead: "codex", playbook: "investigation",
     });
-    expect(started.result.next.subagent.working_dir).toBe("/invoked/path");
+    // 查资料 starts three parallel subs; every one works in the invocation dir when there is no worktree.
+    expect(started.result.next.subagents).toHaveLength(3);
+    expect(started.result.next.subagents.map((a: { working_dir: string }) => a.working_dir)).toEqual(Array(3).fill("/invoked/path"));
     const failed: any = await runTool(makeContext(h, "c2", profile), "keel_report", {
       run_id: started.result.run_id,
       phase: "final",
       dispatch_key: started.result.next.dispatch_key,
-      inline_report: { status: "failed", summary: "subagent 不可用" },
+      parallel_reports: started.result.next.subagents.map((arm: { dispatch_key: string }) => ({
+        dispatch_key: arm.dispatch_key,
+        report: { dispatch_key: arm.dispatch_key, status: "failed", summary: "subagent 不可用", files_changed: [], ran: [] },
+      })),
     });
     expect(failed.result.next.kind).toBe("dispatch");
     expect(failed.result.next.create_worker).toBeUndefined();
-    expect(failed.result.next.subagent.working_dir).toBe("/invoked/path");
+    expect(failed.result.next.subagents).toHaveLength(3);
+    expect(failed.result.next.subagents.map((a: { working_dir: string }) => a.working_dir)).toEqual(Array(3).fill("/invoked/path"));
   });
 });
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { graphStatePath } from "../../src/main/store/runs.ts";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
-import { usePluginResearch } from "./helpers.ts";
+import { pluginResearchManual, usePluginResearch } from "./helpers.ts";
 
 afterEach(cleanupRepos);
 
@@ -15,6 +15,7 @@ describe("R29-R02 report identity", () => {
   it("A: trailing progress JSON after a failed final must not done", async () => {
     const world = makeWorld({ citation: "explorer-source:1" });
     const h = makeE2eHost(world);
+    h.kv.manual = pluginResearchManual();
     const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     h.tasks!.readMessages = async () => {
       const key = researchKey(h, start.run_id);
@@ -33,6 +34,7 @@ describe("R29-R02 report identity", () => {
   it("B: unparseable final after partial must not done", async () => {
     const world = makeWorld({ citation: "notes:1" });
     const h = makeE2eHost(world);
+    h.kv.manual = pluginResearchManual();
     const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     h.tasks!.readMessages = async () => {
       const key = researchKey(h, start.run_id);
@@ -52,6 +54,7 @@ describe("R29-R02 report identity", () => {
   it("single valid final can done", async () => {
     const world = makeWorld({ citation: "notes:1" });
     const h = makeE2eHost(world);
+    h.kv.manual = pluginResearchManual();
     const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     const run = await leadLoop(h, start, world);
     expect(run.next.kind).toBe("done");
@@ -60,6 +63,7 @@ describe("R29-R02 report identity", () => {
   it("progress then a valid final can done", async () => {
     const world = makeWorld({ citation: "notes:1" });
     const h = makeE2eHost(world);
+    h.kv.manual = pluginResearchManual();
     const start = await startRun(h, { goal: "调查登录原理", repo_dir: world.repoDir, lead: "codex", playbook: "investigation", sc: [...SC] });
     h.tasks!.readMessages = async () => {
       const key = researchKey(h, start.run_id);

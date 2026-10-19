@@ -1,10 +1,17 @@
 import { KeelError } from '../host.ts';
 import type { Route } from '../../shared/manual/schema.ts';
+import { LEAD_DEFAULT_PROVIDER } from '../../shared/manual/stages.ts';
 import { parseNodeReport, type NodeReport } from './report.ts';
 
 export function sameRoute(left: Route, right: Route): boolean {
   return left.agent === right.agent && left.model === right.model
     && left.provider_id === right.provider_id && (left.effort ?? '') === (right.effort ?? '');
+}
+
+/** A 查资料 sub (provider LEAD_DEFAULT_PROVIDER) only pins the harness; configured routes must match exactly. */
+export function routeMatches(observed: Route, expected: Route): boolean {
+  if (expected.provider_id === LEAD_DEFAULT_PROVIDER) return observed.agent === expected.agent;
+  return sameRoute(observed, expected);
 }
 
 export function readExecutionRoute(raw: unknown): Route | undefined {
@@ -28,7 +35,7 @@ export function collectParallelReports(parentKey: string, arms: readonly { dispa
     const report = parseNodeReport(typeof item.report === 'string' ? item.report : JSON.stringify(item.report), arm.dispatch_key);
     if (report.status === 'done' || report.status === 'partial') {
       const route = readExecutionRoute(item.execution_route);
-      if (!route || !sameRoute(route, arm.route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', `协作模型实际路线与选择不一致：${arm.dispatch_key}`);
+      if (!route || !routeMatches(route, arm.route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', `协作模型实际路线与选择不一致：${arm.dispatch_key}`);
       if (typeof item.native_agent_id !== 'string' || !item.native_agent_id || ids.has(item.native_agent_id)) throw new KeelError('REPORT_INVALID', '每个协作模型必须返回不同的原生 sub id。');
       ids.add(item.native_agent_id);
     }

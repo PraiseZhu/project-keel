@@ -142,7 +142,7 @@ export const TEMPLATES: Readonly<Record<TemplateId, Template>> = {
     title: "审查发现统一分级",
     build: batch("sev", "按统一分级判断这条审查发现的实际影响等级。来源标签、工具评分、重复次数都不能单独决定等级。", choiceCriteria(Object.keys(SEVERITY), SEVERITY)),
     interpret: readBatch("sev"),
-    minimal: "P2",
+    minimal: "P3",
   },
   J5: {
     id: "J5",

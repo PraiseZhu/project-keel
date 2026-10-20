@@ -132,11 +132,15 @@ describe("node task line", () => {
     expect(refactor).toContain("钉住现有行为的测试");
   });
 
-  it("the review is read-only, runs tests, and maps confirmed P0/P1 to FAIL", () => {
+  it("the review is read-only, runs tests, and maps confirmed P0/P1/P2 to FAIL", () => {
     const text = buildBrief({ id: "astra-final-review", role: "verifier", writes: false }, { ...base, taskType: "bug-fix" }, ctx1);
+    const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
     expect(text).toContain("非作者审查者");
-    expect(text).toContain("P0/P1");
-    expect(text).toContain("verdict 写 FAIL");
+    expect(task).toContain("P0/P1/P2");
+    expect(task).toContain("有确认成立的 P0/P1/P2 或 SC 不通过时 verdict 写 FAIL");
+    expect(task).toContain("只有 P3");
+    expect(task).toContain("P2 是真实但影响局部的一般缺陷");
+    expect(task).toContain("P3 是命名、风格或无已证实影响的可选优化");
     expect(text).toContain("测试运行器本身的命令");
     expect(text).toContain("先于修复（fix:）提交");
     expect(text).toContain("只读：不得修改任何文件");
@@ -154,12 +158,24 @@ describe("node task line", () => {
       const text = buildBrief({ id, role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, { ...ctx1, returned: true });
       const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
       expect(task).toContain(REVISE_TASK);
+      expect(task).toContain("P0/P1/P2");
+      expect(task).toContain("P3 记录不修");
       expect(task).not.toContain("PR 的 CI 失败了");
       expect(task).not.toContain("写一个在当前代码上失败的测试");
     }
     const review = buildBrief({ id: "astra-final-review", role: "verifier", writes: false }, { ...base, taskType: "bug-fix" }, { ...ctx1, returned: true });
     expect(review).toContain("非作者审查者");
     expect(review).not.toContain(REVISE_TASK);
+  });
+
+  it("triage-threads only fixes confirmed P0/P1/P2 and records P3", () => {
+    const text = buildBrief({ id: "triage-threads", role: "worker", writes: true }, { ...base, taskType: "bug-fix" }, ctx1);
+    const task = text.split("\n").find((l) => l.startsWith("TASK"))!;
+    expect(task).toContain("只修确认成立的 P0/P1/P2");
+    expect(task).toContain("P3/不成立不改代码");
+    expect(task).toContain("证据不足先待核实");
+    expect(task).toContain("P2 是真实但影响局部的一般缺陷");
+    expect(task).toContain("P3 是命名、风格或无已证实影响的可选优化");
   });
 
   it("falls back to the repo's own test command when no SC has verify", () => {

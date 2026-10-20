@@ -24,7 +24,7 @@ export interface PromptContext {
 const CONTRACT: Record<LanePlan["lane"], string> = {
   candidate: "回报：`git diff --stat`、设计取舍、运行过的验证命令与输出摘要、未解决项、本分支提交的 SHA。不推送、不开 PR、不合并。",
   "cross-judge": '只读。输出 ```json {"base":"<label>","graft":[...],"reasons":[...]} ```。',
-  reviewer: '只读。所有发现放进一个 ```json 数组：[{"file","line","title","trigger","impact","evidence","severity_guess"}]；没有发现也要输出 ```json [] ```。没有可信触发路径的不报 P0/P1。',
+  reviewer: '只读。所有发现放进一个 ```json 数组：[{"file","line","title","trigger","impact","evidence","severity_guess"}]；没有发现也要输出 ```json [] ```。没有可信触发路径的不报 P0/P1/P2。',
   slice: "回报：改动摘要、commit SHA、验证命令与输出；末行写 `VERDICT: PASS|ISSUES|BLOCKED`。",
   verifier: "真实运行目标路径，记录命令、输出摘要与 commit SHA；末行写 `VERDICT: PASS|ISSUES|BLOCKED`。",
 };

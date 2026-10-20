@@ -39,6 +39,7 @@ describe("lane prompts", () => {
     const text = promptFor("interrogate", r!, { task: "review x", rubric: "rubric", baseSha: "b0", sceneHead: "h1" });
     expect(text).toContain("git diff b0...h1");
     expect(text).toContain("只读");
+    expect(text).toContain("没有可信触发路径的不报 P0/P1/P2");
     expect(text).not.toMatch(/只修/);
   });
   it("write candidates do the task instead of a review-fix rule", () => {

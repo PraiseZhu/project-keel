@@ -72,7 +72,7 @@ describe("arena and swarm ingest", () => {
 });
 
 describe("fanout_ingest tool", () => {
-  it("interrogate: batches J4 once and marks only P0/P1 as fix candidates", async () => {
+  it("interrogate: batches J4 once and marks confirmed findings as fix candidates", async () => {
     const h = fakeHost({ fetch: typesafeAnswering(0.9, (_id, q) => (q.criteria.P1 !== undefined ? "P1" : Object.keys(q.criteria)[0]!)) });
     await h.fs({ op: "write", root: "data", path: "fanout/fo-x.json", content: JSON.stringify({ fanout_id: "fo-x", kind: "interrogate", base_ref: null, repo_root: null, routing: {}, lanes: [], task: "t" }) });
     const r: any = await runTool(makeContext(h, "c"), "fanout", { op: "ingest", fanout_id: "fo-x", kind: "interrogate", lane_results: [{ label: "r1", text: r1 }, { label: "r2", text: r2 }] });
@@ -81,6 +81,32 @@ describe("fanout_ingest tool", () => {
     expect(r.result.findings.every((f: any) => f.fix_candidate)).toBe(true);
     expect(r.result.consensus).toBe(1);
   });
+  it.each([
+    ["P0", true],
+    ["P1", true],
+    ["P2", true],
+    ["P3", false],
+    ["not_real", false],
+  ] as const)("interrogate: %s fix_candidate is %s", async (sev, candidate) => {
+    const finding = "```json\n" + JSON.stringify([{ file: "src/a.ts", line: 10, title: "local defect", severity_guess: sev }]) + "\n```";
+    const h = fakeHost({ fetch: typesafeAnswering(0.9, () => sev) });
+    await h.fs({ op: "write", root: "data", path: "fanout/fo-sev.json", content: JSON.stringify({ fanout_id: "fo-sev", kind: "interrogate", base_ref: null, repo_root: null, routing: {}, lanes: [], task: "t" }) });
+    const r: any = await runTool(makeContext(h, "c"), "fanout", { op: "ingest", fanout_id: "fo-sev", kind: "interrogate", lane_results: [{ label: "r1", text: finding }] });
+    expect(r.ok).toBe(true);
+    expect(r.result.findings[0].severity).toBe(sev);
+    expect(r.result.findings[0].fix_candidate).toBe(candidate);
+    expect(r.result.next).toContain("P3 记录不修");
+    expect(r.result.next).not.toContain("P2/P3");
+  });
+  it("interrogate: low-confidence P2 is not a fix candidate", async () => {
+    const finding = "```json\n" + JSON.stringify([{ file: "src/a.ts", line: 10, title: "local defect", severity_guess: "P2" }]) + "\n```";
+    const h = fakeHost({ fetch: typesafeAnswering(0.6, () => "P2") });
+    await h.fs({ op: "write", root: "data", path: "fanout/fo-low.json", content: JSON.stringify({ fanout_id: "fo-low", kind: "interrogate", base_ref: null, repo_root: null, routing: {}, lanes: [], task: "t" }) });
+    const r: any = await runTool(makeContext(h, "c"), "fanout", { op: "ingest", fanout_id: "fo-low", kind: "interrogate", lane_results: [{ label: "r1", text: finding }] });
+    expect(r.ok).toBe(true);
+    expect(r.result.findings[0]).toMatchObject({ severity: null, fix_candidate: false });
+  });
+
   it("swarm: reports missing lanes and gaps", async () => {
     const h = fakeHost();
     await h.fs({ op: "write", root: "data", path: "fanout/fo-y.json", content: JSON.stringify({ fanout_id: "fo-y", kind: "swarm", base_ref: null, repo_root: null, routing: {}, lanes: [{ label: "s1" }, { label: "verify" }], task: "t" }) });

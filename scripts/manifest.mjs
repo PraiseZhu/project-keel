@@ -75,7 +75,7 @@ const tools = [
   },
   {
     name: "pr_threads",
-    description: "列出 PR 未解决的评审线程（只读，本机 gh），并用 Jev 批量做统一分级（J4：P0/P1/P2/P3/不成立）与机器人评论处理建议（J5：fix/dismiss/ask）。只有确认成立的 P0/P1 进入修复清单。",
+    description: "列出 PR 未解决的评审线程（只读，本机 gh），并用 Jev 批量做统一分级（J4：P0/P1/P2/P3/不成立）与机器人评论处理建议（J5：fix/dismiss/ask）。只有确认成立的 P0/P1/P2 进入修复清单，P3 记录不修。",
     parameters: obj(prRef),
   },
   {

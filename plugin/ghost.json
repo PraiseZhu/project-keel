@@ -5,7 +5,7 @@
   "name": "KEEL",
   "description": "日常随时可问的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）。",
   "whenToUse": "用户要问 Jev 做选择、评分或是非判断；或要推进 PR、盯 CI 与评审、修 bug、按 pstack 方法做调查/重构/功能，以及清理 worktree、查派工角色时使用。",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -737,7 +737,7 @@
     },
     {
       "name": "pr_threads",
-      "description": "列出 PR 未解决的评审线程（只读，本机 gh），并用 Jev 批量做统一分级（J4：P0/P1/P2/P3/不成立）与机器人评论处理建议（J5：fix/dismiss/ask）。只有确认成立的 P0/P1 进入修复清单。",
+      "description": "列出 PR 未解决的评审线程（只读，本机 gh），并用 Jev 批量做统一分级（J4：P0/P1/P2/P3/不成立）与机器人评论处理建议（J5：fix/dismiss/ask）。只有确认成立的 P0/P1/P2 进入修复清单，P3 记录不修。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,

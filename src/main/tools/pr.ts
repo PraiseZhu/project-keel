@@ -200,11 +200,11 @@ export async function prThreads(ctx: ToolContext, args: Record<string, unknown>)
     const severity = s && s.confidence >= ctx.thresholds.act ? s.value : null;
     return {
       id: it.id, severity, severity_confidence: s?.confidence ?? null, bot_action: b?.value ?? null,
-      fix: severity === "P0" || severity === "P1" ? "候选修复：补齐触发条件、错误行为、影响与证据后才进入修复清单" : severity ? "记录不修（P2/P3/不成立）" : "待核实（Jev 低于阈值或不可用）",
+      fix: severity === "P0" || severity === "P1" || severity === "P2" ? "候选修复：补齐触发条件、错误行为、影响与证据后才进入修复清单" : severity ? "记录不修（P3/不成立）" : "待核实（Jev 低于阈值或不可用）",
     };
   });
   const counts = triage.reduce<Record<string, number>>((acc, x) => ((acc[x.severity ?? "待核实"] = (acc[x.severity ?? "待核实"] ?? 0) + 1), acc), {});
-  return { ...t, triage, summary: `共 ${items.length} 条：${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join("，")}。只修确认成立的 P0/P1。`, ...(o.fallback_reason ? { fallback_reason: o.fallback_reason } : {}) };
+  return { ...t, triage, summary: `共 ${items.length} 条：${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join("，")}。只修确认成立的 P0/P1/P2（P3 不修）。`, ...(o.fallback_reason ? { fallback_reason: o.fallback_reason } : {}) };
 }
 
 export async function prReply(ctx: ToolContext, args: Record<string, unknown>) {

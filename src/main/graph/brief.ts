@@ -38,7 +38,7 @@ export interface BriefCtx {
 }
 
 /** Writer TASK after a FAIL review or a done-gate revise, whichever writer node the graph returns to. */
-export const REVISE_TASK = "这是退回修改：先读 CONTEXT 里的报告（审查报告排在最前），只修其中确认成立的 P0/P1 和缺证据的 SC，已通过的部分不重做；要补测试就先补测试再改实现；改完跑相关测试和全量测试，然后提交。";
+export const REVISE_TASK = "这是退回修改：先读 CONTEXT 里的报告（审查报告排在最前），只修其中确认成立的 P0/P1/P2 和缺证据的 SC，P3 记录不修；已通过的部分不重做；要补测试就先补测试再改实现；改完跑相关测试和全量测试，然后提交。";
 
 function isInvestigation(node: BriefNode, run: BriefRun): boolean {
   return node.inline_report === true || run.taskType === "investigation";
@@ -67,13 +67,13 @@ export function nodeTask(node: BriefNode, run: BriefRun): string {
     case "fix-ci":
       return "PR 的 CI 失败了：先看失败的检查和日志（gh pr checks、gh run view --log-failed），找到根因，只修让 CI 失败的问题并提交。";
     case "triage-threads":
-      return "处理 PR 上未解决的评审线程：逐条核实；只修确认成立的 P0/P1 并提交；其余不改代码，在 findings 里写明分级和理由。";
+      return "处理 PR 上未解决的评审线程：逐条核实；只修确认成立的 P0/P1/P2 并提交；P3/不成立不改代码，在 findings 里写明分级和理由；证据不足先待核实。P2 是真实但影响局部的一般缺陷（包括有可信触发路径和实际影响证据的规范违反或测试缺口）；P3 是命名、风格或无已证实影响的可选优化。单纯缺测试或通用规范违反不单独升级。";
     case "architect-plan":
       return "只读。先读相关代码，再写实现方案：改哪些文件和函数、数据结构、要加哪些测试、风险、明确不做的事。方案要具体到写手可以直接照做。";
     case "astra-final-review":
       return [
         "你是非作者审查者，只读，不改任何文件。",
-        "1) 审 PR 的全部改动（gh pr diff，或 git diff <base>...HEAD），找确认成立的 P0/P1，每条写触发条件、错误行为、影响和证据（文件:行）；",
+        "1) 审 PR 的全部改动（gh pr diff，或 git diff <base>...HEAD），找确认成立的 P0/P1/P2，每条写触发条件、错误行为、影响和证据（文件:行）；P2 是真实但影响局部的一般缺陷（包括有可信触发路径和实际影响证据的规范违反或测试缺口）；P3 是命名、风格或无已证实影响的可选优化。单纯缺测试或通用规范违反不单独升级。",
         "2) 对 ACCEPTANCE 每条亲自验证，sc_evidence 只给本次验证通过的；",
         "3) 跑测试，ran 里要有测试运行器本身的命令；",
         type === "bug-fix"
@@ -81,7 +81,7 @@ export function nodeTask(node: BriefNode, run: BriefRun): string {
           : type === "refactoring"
             ? "4) 判断改动是否降低了阅读负担，没有就判 FAIL；"
             : "4) 设计有明显更简单的做法时写进 findings；",
-        "有确认成立的 P0/P1 或 SC 不通过时 verdict 写 FAIL，否则写 PASS（只有 P2/P3 时写 PASS+NOTES）。head_sha 写你审查的提交。",
+        "有确认成立的 P0/P1/P2 或 SC 不通过时 verdict 写 FAIL，否则写 PASS（只有 P3 时写 PASS+NOTES）。head_sha 写你审查的提交。",
       ].join("");
     case "astra-unstick":
       return "只读。同一失败已经重复出现：读 CONTEXT 里的报告，找出前几次为什么失败，给出根因和写手下一步的具体做法，写进 next_suggestions。";

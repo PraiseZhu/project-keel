@@ -109,9 +109,9 @@ export async function fanoutIngest(ctx: ToolContext, args: Record<string, unknow
     const rows = merged.map((m, i) => {
       const s = items[i];
       const sev = s && s.confidence >= ctx.thresholds.act ? s.value : null;
-      return { id: m.id, file: m.finding.file, line: m.finding.line, title: m.finding.title, lanes: m.lanes, agreement: classifyAgreement(m), guesses: m.guesses, severity: sev, severity_confidence: s?.confidence ?? null, fix_candidate: sev === "P0" || sev === "P1" };
+      return { id: m.id, file: m.finding.file, line: m.finding.line, title: m.finding.title, lanes: m.lanes, agreement: classifyAgreement(m), guesses: m.guesses, severity: sev, severity_confidence: s?.confidence ?? null, fix_candidate: sev === "P0" || sev === "P1" || sev === "P2" };
     });
-    out = { parsed: perLane.map((p) => ({ label: p.label, findings: p.findings.length })), gaps, complete: gaps.length === 0, findings: rows, consensus: rows.filter((r) => r.agreement === "consensus").length, single: rows.filter((r) => r.agreement === "single").length, disputed: rows.filter((r) => r.agreement === "disputed").length, next: "只有 fix_candidate 且主 Agent 补齐触发条件、影响与证据的条目进入修复清单；P2/P3 记录不修。", ...(o?.fallback_reason ? { fallback_reason: o.fallback_reason } : {}) };
+    out = { parsed: perLane.map((p) => ({ label: p.label, findings: p.findings.length })), gaps, complete: gaps.length === 0, findings: rows, consensus: rows.filter((r) => r.agreement === "consensus").length, single: rows.filter((r) => r.agreement === "single").length, disputed: rows.filter((r) => r.agreement === "disputed").length, next: "只有 fix_candidate 且主 Agent 补齐触发条件、影响与证据的条目进入修复清单；P3 记录不修。", ...(o?.fallback_reason ? { fallback_reason: o.fallback_reason } : {}) };
   } else {
     const rows = results.map((r) => swarmRow(r.label, r.text ?? ""));
     const expected = prep.lanes.map((l) => l.label);

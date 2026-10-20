@@ -32,6 +32,7 @@ describe("J1–J12 templates", () => {
     const qs = TEMPLATES.J4.build(state).questions;
     expect(Object.keys(qs)).toHaveLength(MAX_BATCH);
     expect(Object.keys(qs.sev_0!.criteria as object)).toEqual(["P0", "P1", "P2", "P3", "not_real"]);
+    expect(TEMPLATES.J4.minimal).toBe("P3");
   });
   it("J8 only offers the actions the policy allowed", () => {
     expect(Object.keys(TEMPLATES.J8.build(state).questions.next!.criteria as object)).toEqual(["wait_for_ci", "triage_review_threads"]);
@@ -56,6 +57,13 @@ describe("threshold policy", () => {
     expect(decide({ template: TEMPLATES.J7, interpretation: null, alreadyReasked: false }).action).toBe("stop");
     expect(decide({ template: TEMPLATES.J5, interpretation: null, alreadyReasked: false })).toMatchObject({ action: "minimal", value: "ask" });
   });
+  it("J4 falls back to P3 when unavailable or still below threshold", () => {
+    expect(decide({ template: TEMPLATES.J4, interpretation: null, alreadyReasked: false })).toMatchObject({ action: "minimal", value: "P3" });
+    expect(decide({ template: TEMPLATES.J4, interpretation: { value: "P2", confidence: 0.6 }, alreadyReasked: false }).action).toBe("reask");
+    expect(decide({ template: TEMPLATES.J4, interpretation: { value: "P2", confidence: 0.6 }, alreadyReasked: true })).toMatchObject({ action: "minimal", value: "P3" });
+    expect(decide({ template: TEMPLATES.J4, interpretation: { value: "P2", confidence: 0.75 }, alreadyReasked: false })).toMatchObject({ action: "act", value: "P2" });
+  });
+
 });
 
 describe("jev shorthand", () => {

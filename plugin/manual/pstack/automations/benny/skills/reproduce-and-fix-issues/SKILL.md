@@ -1,4 +1,4 @@
-> 移植自 pstack automations/benny/skills/reproduce-and-fix-issues/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack automations/benny/skills/reproduce-and-fix-issues/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（reproduce-and-fix-issues）：Reproduce triaged Slack bugs through a configured app-control adapter, verify existing fixes, and open a bounded draft pull request only after before-and-after proof. Use only from the configured Benny repro automation.
 

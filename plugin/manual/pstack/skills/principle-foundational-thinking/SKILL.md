@@ -1,4 +1,4 @@
-> 移植自 pstack skills/principle-foundational-thinking/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-foundational-thinking/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（principle-foundational-thinking）：Apply before writing logic: choosing core types and data structures, sequencing scaffold-vs-feature work, asking what concurrent actors share. Get the data structures right so downstream code becomes obvious.
 

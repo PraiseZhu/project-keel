@@ -1,4 +1,4 @@
-// Coverage check against docs/coverage-map.md (129 upstream items).
+// Coverage check against docs/coverage-map.md (139 upstream items).
 //   --phase P1|P2|P3|all                 check every item of that phase has an existing target
 //   --init <source coverage-map.md>      (re)write docs/coverage-map.md with concrete Keel paths
 //   --upstream <dir> [--sha <sha>]       report upstream files added/removed vs the map
@@ -11,6 +11,7 @@ const MAP = "docs/coverage-map.md";
 
 const SCRIPT_TARGETS = {
   "skills/poteto-mode/scripts/check-plan.mjs": ["src/node/plan/check-plan.ts"],
+  "skills/poteto-mode/scripts/check-plan.test.ts": ["tests/check-plan.test.ts"],
   "skills/poteto-mode/scripts/orch/orch.test.ts": ["tests/orch.test.ts"],
   "skills/poteto-mode/scripts/orch/orch.ts": ["src/node/orch/cli.ts", "src/node/orch/rpc.ts"],
   "skills/poteto-mode/scripts/orch/store.ts": ["src/node/orch/store.ts"],

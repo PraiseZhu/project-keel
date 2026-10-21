@@ -1,4 +1,4 @@
-> 移植自 pstack automations/benny/skills/reproduce-and-fix-issues/references/feature-map.example.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack automations/benny/skills/reproduce-and-fix-issues/references/feature-map.example.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 # Feature-map example
 

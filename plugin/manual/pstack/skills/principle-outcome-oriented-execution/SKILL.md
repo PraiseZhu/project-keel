@@ -1,4 +1,4 @@
-> 移植自 pstack skills/principle-outcome-oriented-execution/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-outcome-oriented-execution/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（principle-outcome-oriented-execution）：Apply during planned rewrites and migrations with explicit phase boundaries. Converge on the target architecture; don't preserve smooth intermediate states with throwaway compatibility code.
 

@@ -9,7 +9,7 @@ const manifest = JSON.parse(readFileSync("plugin/ghost.json", "utf8"));
 const errors = [];
 const walk = (d) => readdirSync(d).flatMap((f) => { const p = join(d, f); const s = lstatSync(p); if (s.isSymbolicLink()) { errors.push(`symlink: ${p}`); return []; } return s.isDirectory() ? walk(p) : [p]; });
 const files = walk(dir);
-const SHA = "e43c7ee";
+const SHA = JSON.parse(readFileSync("tools/upstream.json", "utf8")).sha.slice(0, 7);
 
 for (const f of files) {
   const rel = relative(dir, f);

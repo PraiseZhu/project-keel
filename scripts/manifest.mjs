@@ -86,7 +86,7 @@ const tools = [
   {
     name: "worktree",
     description: "管理 <仓>/.worktrees/ 下的 git worktree（本机 git）。create 新建；audit 只读分类（hold-wip/hold-open-pr/review/safe）；prune 只删审计为 safe（干净且已合并）的行，删除前弹确认列出路径，不用 --force。",
-    parameters: obj({ op: { type: "string", enum: ["create", "audit", "prune"] }, repo_dir: str("仓库目录。"), name: str("create：worktree 名。"), base_ref: str("create：起点，缺省 origin/默认分支。"), paths: { type: "array", items: { type: "string" }, description: "prune：要删的路径；缺省为全部 safe 行。" } }, ["op", "repo_dir"]),
+    parameters: obj({ op: { type: "string", enum: ["create", "audit", "prune"] }, repo_dir: str("仓库目录。"), name: str("create：worktree 名。"), base_ref: str("create：起点；audit / prune：判断「已合并」用的基线。缺省 origin/默认分支；PR 合进别的分支时传它。"), paths: { type: "array", items: { type: "string" }, description: "prune：要删的路径；缺省为全部 safe 行。" } }, ["op", "repo_dir"]),
   },
   {
     name: "fanout",

@@ -1,4 +1,4 @@
-> 移植自 pstack skills/teach/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/teach/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（teach）：Explain a body of work plainly so a person actually understands it. Runs the `how` and `why` skills and weaves what they find into one clear explanation. Use for 'teach me this', 'help me really understand X', 'explain this change or subsystem to me'.
 

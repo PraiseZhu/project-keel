@@ -1,4 +1,4 @@
-> 移植自 pstack skills/why/references/sources/notion.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/why/references/sources/notion.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 # Notion Docs
 

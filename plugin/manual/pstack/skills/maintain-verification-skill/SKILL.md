@@ -1,4 +1,4 @@
-> 移植自 pstack skills/maintain-verification-skill/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/maintain-verification-skill/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（maintain-verification-skill）：Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. Use for /maintain-verification-skill or \"audit the verify skill\".
 

@@ -1,4 +1,4 @@
-> 移植自 pstack skills/principle-experience-first/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-experience-first/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（principle-experience-first）：Apply when product, UX, or feature-scope tradeoffs come up. Choose user delight over implementation convenience; ship fewer polished features over more rough ones.
 

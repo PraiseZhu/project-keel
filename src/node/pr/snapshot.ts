@@ -5,7 +5,7 @@ import { evaluateGate, resolveLane, verificationOf } from "../../shared/lanes.ts
 import type { DecisionKind, KeelProfile, PrStatus, PrSummary, RequiredGate, Verification } from "../../shared/types.ts";
 import { ToolError, ghJson, ghRaw, git } from "../env.ts";
 import { withCwd } from "../context.ts";
-import { ChecksUnavailable, GhGitHubReader, resolveContext } from "./upstream/github.ts";
+import { ChecksUnavailable, GhGitHubReader, resolveContext, resolveReviewThreads } from "./upstream/github.ts";
 import { classifyPr, readSnapshot } from "./upstream/policy.ts";
 import type * as T from "./upstream/types.ts";
 import { parsePrNumber } from "./upstream/types.ts";
@@ -187,7 +187,7 @@ async function noChecksRow(reader: GhGitHubReader, context: T.PrContext): Promis
   const facts = await reader.pullRequest(context);
   if (facts.state === "MERGED" || facts.mergedAt !== null) return { kind: "merged", context, facts };
   if (facts.state === "CLOSED") return { kind: "closed", context, facts };
-  return { kind: "open", noChecks: true, context, facts, threads: await reader.reviewThreads(context) };
+  return { kind: "open", noChecks: true, context, facts, threads: await resolveReviewThreads(reader, context) };
 }
 
 function decodeApi(res: GhApiResult): { ok: true; value: unknown } | { notFound: true } | { failed: true } {

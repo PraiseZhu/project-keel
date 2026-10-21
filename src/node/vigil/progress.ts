@@ -63,7 +63,7 @@ async function validationFor(root: string, task: RecordValue, sessionId: string)
   for (const file of files) {
     const pointer = (await read(root, join(dir, file)))!.value;
     if (!sha(pointer.head) || pointer.head !== file.slice(0, -5) || typeof pointer.receiptPath !== "string"
-      || !isAbsolute(pointer.receiptPath) || !within(dir, pointer.receiptPath)) throw new Error("验证指针不属于当前任务");
+      || !isAbsolute(pointer.receiptPath) || !within(dir, await realpath(pointer.receiptPath))) throw new Error("验证指针不属于当前任务");
     const receipt = (await read(root, pointer.receiptPath))!;
     const row = receipt.value;
     if (createHash("sha256").update(receipt.bytes).digest("hex") !== pointer.receiptSha256

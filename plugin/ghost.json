@@ -5,7 +5,7 @@
   "name": "KEEL",
   "description": "日常随时可问的 Jev 快速判断，加上完整复刻 pstack 的 PR 推进与修 bug 工作流（内嵌 Jev）。",
   "whenToUse": "用户要问 Jev 做选择、评分或是非判断；或要推进 PR、盯 CI 与评审、修 bug、按 pstack 方法做调查/重构/功能，以及清理 worktree、查派工角色时使用。",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -828,7 +828,7 @@
           },
           "base_ref": {
             "type": "string",
-            "description": "create：起点，缺省 origin/默认分支。"
+            "description": "create：起点；audit / prune：判断「已合并」用的基线。缺省 origin/默认分支；PR 合进别的分支时传它。"
           },
           "paths": {
             "type": "array",

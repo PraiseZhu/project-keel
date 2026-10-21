@@ -90,6 +90,32 @@ describe("Vigil read-only progress", () => {
     } finally { await rm(alias, { force: true }); }
   });
 
+  it.each(["mivo-repair-validation", "cindy-repair-validation"])("accepts a %s receipt with matching identity and hash", async (kind) => {
+    const root = await fixture();
+    const receipt = { ...identity, schemaVersion: 2, kind, head: sha, status: "pass", exitCode: 0, finishedAt: new Date(now).toISOString() };
+    const receiptPath = await json(root, `state/validations/${id}/${sha}-receipt.json`, receipt);
+    await json(root, `state/validations/${id}/${sha}.json`, { head: sha, status: "pass", receiptPath, receiptSha256: createHash("sha256").update(JSON.stringify(receipt)).digest("hex") });
+    const response = await dispatch("vigil/progress", { profile: { vigilHomes: [root] } as never });
+    expect(response.result).toMatchObject({ rows: [{ validation: { status: "pass", head: sha, exitCode: 0 }, paths: { validation: receiptPath } }], warnings: [] });
+  });
+
+  it.each(["mivo-repair-result", "cindy-repair-result"])("accepts a %s terminal result with matching identity", async (kind) => {
+    const root = await fixture();
+    await json(root, `state/results/${id}.json`, { ...identity, schemaVersion: 2, kind, status: "complete",
+      head: sha, sourceHead: sha, observedAt: new Date(now).toISOString() });
+    const response = await dispatch("vigil/progress", { profile: { vigilHomes: [root] } as never });
+    expect(response.result).toMatchObject({ rows: [{ result: { status: "complete", head: sha } }], warnings: [] });
+  });
+
+  it("rejects an unknown validation kind even when the hash and identity match", async () => {
+    const root = await fixture();
+    const receipt = { ...identity, schemaVersion: 2, kind: "other-repair-validation", head: sha, status: "pass", exitCode: 0, finishedAt: new Date(now).toISOString() };
+    const receiptPath = await json(root, `state/validations/${id}/${sha}-receipt.json`, receipt);
+    await json(root, `state/validations/${id}/${sha}.json`, { head: sha, status: "pass", receiptPath, receiptSha256: createHash("sha256").update(JSON.stringify(receipt)).digest("hex") });
+    const response = await dispatch("vigil/progress", { profile: { vigilHomes: [root] } as never });
+    expect(response.result).toMatchObject({ rows: [], warnings: [expect.any(String)] });
+  });
+
   it("verifies the actual validation receipt hash and identity", async () => {
     const root = await fixture();
     const receipt = { ...identity, schemaVersion: 2, kind: "mivo-repair-validation", head: sha, status: "pass", exitCode: 0, finishedAt: new Date(now).toISOString() };

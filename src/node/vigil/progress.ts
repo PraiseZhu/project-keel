@@ -44,11 +44,14 @@ function sameIdentity(value: RecordValue, task: RecordValue, sessionId: string):
   return ["dispatchId", "nodeId", "number", "repo"].every((key) => value[key] === task[key]) && value.sessionId === sessionId;
 }
 
+const RESULT_KINDS = new Set(["mivo-repair-result", "cindy-repair-result"]);
+const VALIDATION_KINDS = new Set(["mivo-repair-validation", "cindy-repair-validation"]);
+
 async function resultFor(root: string, task: RecordValue, sessionId: string): Promise<VigilProgress["result"]> {
   const file = await read(root, join(root, "state/results", `${task.dispatchId}.json`), true);
   if (!file) return undefined;
   const row = file.value;
-  if (row.schemaVersion !== 2 || row.kind !== "mivo-repair-result" || !sameIdentity(row, task, sessionId)
+  if (row.schemaVersion !== 2 || !RESULT_KINDS.has(text(row.kind, 40)) || !sameIdentity(row, task, sessionId)
     || row.sourceHead !== task.headRefOid || !sha(row.head) || !stamp(row.observedAt)) throw new Error("修复结果与当前任务不匹配");
   return { status: text(row.status), head: row.head, at: stamp(row.observedAt), ...(row.reason ? { reason: text(row.reason) } : {}) };
 }
@@ -67,7 +70,7 @@ async function validationFor(root: string, task: RecordValue, sessionId: string)
     const receipt = (await read(root, pointer.receiptPath))!;
     const row = receipt.value;
     if (createHash("sha256").update(receipt.bytes).digest("hex") !== pointer.receiptSha256
-      || !sameIdentity(row, task, sessionId) || row.schemaVersion !== 2 || row.kind !== "mivo-repair-validation"
+      || !sameIdentity(row, task, sessionId) || row.schemaVersion !== 2 || !VALIDATION_KINDS.has(text(row.kind, 40))
       || row.head !== pointer.head || row.status !== pointer.status || !stamp(row.finishedAt)) throw new Error("验证回执身份或摘要校验失败");
     if (row.status === "pass" && row.exitCode !== 0) throw new Error("验证通过记录缺少成功退出码");
     const value = { status: text(row.status), head: pointer.head, at: stamp(row.finishedAt), exitCode: typeof row.exitCode === "number" ? row.exitCode : null };

@@ -17,6 +17,7 @@
     }
   ],
   "routingPath": "/path/to/orca-fanout/routing.json",
+  "vigilHomes": [],
   "boardRepos": [
     "your-name/your-repo"
   ],

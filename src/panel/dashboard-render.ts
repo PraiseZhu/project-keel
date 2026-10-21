@@ -11,6 +11,14 @@ export function icon(name: string, className = ""): string {
   return `<svg class="icon ki ${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="ic-m" d="${shape.path}"${shape.dashed ? ' stroke-dasharray="2.2 3.2"' : ""}/>${shape.accent ? `<path class="ic-a" pathLength="1" d="${shape.accent}"/>` : ""}${(shape.dots ?? []).map(([horizontal, vertical, radius]) => `<circle class="ic-dot" cx="${horizontal}" cy="${vertical}" r="${radius}"/>`).join("")}</svg>`;
 }
 
+export function vigilDetails(row: BoardCard): string {
+  if (!row.vigil) return "";
+  const progress = row.vigil;
+  const paths = [["任务记录", progress.paths.task], ["活动记录", progress.paths.activity], ["处理结果", progress.paths.result], ["验证回执", progress.paths.validation]];
+  const notes = progress.notes?.length ? `<h3>最近处理记录</h3><ul>${progress.notes.map((note) => `<li><time>${escapeHtml(note.at)}</time> ${escapeHtml(note.summary)}</li>`).join("")}</ul>` : "";
+  return `<section aria-label="Vigil 任务记录"><h3>Vigil 修复任务</h3><dl><dt>任务编号</dt><dd><code>${escapeHtml(progress.dispatchId)}</code></dd><dt>任务起始提交</dt><dd><code>${escapeHtml(progress.sourceHead)}</code></dd>${paths.filter((entry) => entry[1]).map(([label, path]) => `<dt>${label}</dt><dd><code>${escapeHtml(path)}</code></dd>`).join("")}</dl>${notes}<p>记录位置可复制后打开；原修复对话包含实时命令输出和完整审查报告。</p></section>`;
+}
+
 const activityNames: Record<BoardActivity, string> = {
   running: "任务在途", waiting: "等待继续推进", "needs-human": "需要你介入", stale: "活动待确认", unknown: "流程待确认",
   ready: "已就绪", "handed-off": "已交接", paused: "工作流已暂停", done: "本轮已结束", closed: "PR 已结束",
@@ -36,7 +44,7 @@ export function cardBody(row: BoardCard, now: number): string {
   const lifecycle = row.state === "MERGED" ? "已合并" : row.state === "CLOSED" ? "已关闭" : row.state === "UNKNOWN" ? "待确认" : row.isDraft ? "草案" : "正式";
   const at = row.activityAt ?? (Date.parse(row.updatedAt) || undefined);
   const kind = row.activityAt ? "活动" : "GitHub";
-  return `<i class="card-sheen" aria-hidden="true"></i><div class="card-top"><span class="pr-lifecycle ${row.isDraft ? "is-draft" : "is-open"}">${lifecycle}</span><a class="repo" href="${pullUrl(row.repo, row.number)}" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 ${escapeHtml(row.repo)} #${row.number}"><span class="repo-name" title="${escapeHtml(row.repo)}">${escapeHtml(row.repo)}</span><b>#${row.number}</b></a><span class="card-state-cluster"><span class="status-text" title="${escapeHtml(status)}">${escapeHtml(status)}</span>${marker(activity)}</span></div><h3 class="card-title"><button type="button" data-action="detail" title="${escapeHtml(row.sessionLabel)}">${escapeHtml(row.sessionLabel)}</button></h3><div class="card-support ${activity === "needs-human" ? "attention" : "muted"}" tabindex="0" title="${escapeHtml(detail)}"><span class="support-label">${row.error ? "读取状态" : row.stage === "handoff" ? "责任归属" : row.runId ? "工作流记录" : "GitHub 事实"}${ciMeter(row)}</span><span class="support-text">${escapeHtml(detail)}</span></div><div class="card-footer">${steps(row, activity)}<time class="last-activity" data-time="${at ?? ""}" data-kind="${kind}" title="${at ? new Date(at).toLocaleString() : "尚无活动时间"}">${kind} · ${ageLabel(at, now)}</time></div>`;
+  return `<i class="card-sheen" aria-hidden="true"></i><div class="card-top"><span class="pr-lifecycle ${row.isDraft ? "is-draft" : "is-open"}">${lifecycle}</span><a class="repo" href="${pullUrl(row.repo, row.number)}" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 ${escapeHtml(row.repo)} #${row.number}"><span class="repo-name" title="${escapeHtml(row.repo)}">${escapeHtml(row.repo)}</span><b>#${row.number}</b></a><span class="card-state-cluster"><span class="status-text" title="${escapeHtml(status)}">${escapeHtml(status)}</span>${marker(activity)}</span></div><h3 class="card-title"><button type="button" data-action="detail" title="${escapeHtml(row.sessionLabel)}">${escapeHtml(row.sessionLabel)}</button></h3><div class="card-support ${activity === "needs-human" ? "attention" : "muted"}" tabindex="0" title="${escapeHtml(detail)}"><span class="support-label">${row.error ? "读取状态" : row.vigil ? "Vigil 任务记录" : row.stage === "handoff" ? "责任归属" : row.runId ? "工作流记录" : "GitHub 事实"}${ciMeter(row)}</span><span class="support-text">${escapeHtml(detail)}</span></div><div class="card-footer">${steps(row, activity)}<time class="last-activity" data-time="${at ?? ""}" data-kind="${kind}" title="${at ? new Date(at).toLocaleString() : "尚无活动时间"}">${kind} · ${ageLabel(at, now)}</time></div>`;
 }
 
 function ciMeter(row: BoardCard): string {

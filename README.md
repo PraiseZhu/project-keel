@@ -31,6 +31,14 @@ KEEL 没有合并能力。PR 可合并时，它只报告状态和链接，由你
 
 本地结构化步骤协议见 `plugin/manual/keel/MANUAL.md`；设计来源见 `docs/dashboard-source.md`，各类加载、筛选、PR和流程状态的预期见 `docs/dashboard-states.md`。开发预览用 `node scripts/dashboard-preview.mjs`；它使用明确标注的测试数据，不执行真实模型或 GitHub 写入。
 
+### 接入现有 Vigil 修复任务
+
+在未跟踪的 `config/profile.local.json` 中配置 `vigilHomes`（Vigil 运行目录的绝对路径数组），重新构建并安装插件。缺省为空，不扫描个人目录。配置示例：`"vigilHomes": ["/path/to/vigil/runtime"]`。
+
+看板只读已有的 `state/prs`、`tasks`、`activity`、`results`、`validations` 记录，并关联 Keel 中同一运行的判断台账。卡片显示本地预检、阻塞、推送后等待检查等实际状态；详情提供“打开关联会话”、记录位置和最近处理记录。活动过期显示待确认，PR 提交变化时不把旧任务当作当前进度。验证回执核对任务身份、提交与摘要，只证明该提交的当次验证。
+
+此接入不创建 Keel 图运行，不重新派单，不改写 Vigil 文件，也不接管它的修复或推送。Vigil 会话没有上报的具体代码编辑和审查子步骤仍不推测；原修复对话保留完整日志。读取失败会保留已有入口并明确标记，面板隐藏时仍沿用原来的停止轮询行为。
+
 查询直接使用运行插件那台电脑上的 GitHub CLI 有效授权（`gh api graphql --hostname github.com`），不是插件单独持有的 GitHub App 安装令牌。个人授权通常按账号共用每小时5000个 GraphQL 点数，而不是每小时5000个PR或每台电脑各5000次；实际额度及每个查询的cost以GitHub返回为准。REST和GraphQL分别计量，另有短时限流。面板隐藏停止后续轮询，配额不足时等待reset，手动刷新不会绕过退避。[GitHub官方限额说明](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)。
 
 ## 模型配置与执行

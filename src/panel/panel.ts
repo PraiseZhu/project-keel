@@ -1,6 +1,6 @@
 import { BOARD_COLUMNS, BOARD_REFRESH_MS, pullUrl, type BoardCard, type BoardStage } from "../shared/dashboard.ts";
 import { activityOf, ageLabel, applyDashboardMessage, cardState, emptyDashboard, filteredCards, type DashboardFilters } from "./dashboard-model.ts";
-import { cardBody, dashboardMarkup, escapeHtml, heading, icon } from "./dashboard-render.ts";
+import { cardBody, dashboardMarkup, escapeHtml, heading, icon, vigilDetails } from "./dashboard-render.ts";
 
 const root = document.querySelector<HTMLElement>("#dashboard-root")!;
 root.innerHTML = dashboardMarkup();
@@ -301,7 +301,7 @@ function updateDetail(): void {
   select("#detail-title").textContent = `${row.repo} #${row.number}`;
   const session = typeof row.sessionId === "string" && /^[A-Za-z0-9:_-]{8,160}$/.test(row.sessionId) ? `<a class="detail-link" href="cindy://sessions/${encodeURIComponent(row.sessionId)}">打开关联会话</a>` : "";
   const freshness = transportError || store.connection === "offline" ? "以下为已读取的数据，尚未重新确认 GitHub 当前状态。" : store.connection === "partial" || !store.complete ? "部分状态尚未完成核对；请结合读取提示判断。" : "";
-  select("#detail-summary").innerHTML = `${freshness ? `<p role="status">${freshness}</p>` : ""}<p>${escapeHtml(row.title)}</p><dl><dt>当前状态</dt><dd>${escapeHtml(status)}</dd><dt>来源</dt><dd>${row.linked ? "GitHub + 本机 Keel 关联记录" : "GitHub（本机尚无 Keel 流程记录）"}</dd><dt>当前提交</dt><dd><code>${escapeHtml(row.headSha || "待确认")}</code></dd><dt>流程说明</dt><dd>${escapeHtml(detail)}</dd></dl><a class="detail-link" href="${pullUrl(row.repo, row.number)}" target="_blank" rel="noopener noreferrer">在 GitHub 查看 PR ${icon("arrow")}</a>${session}`;
+  select("#detail-summary").innerHTML = `${freshness ? `<p role="status">${freshness}</p>` : ""}<p>${escapeHtml(row.title)}</p><dl><dt>当前状态</dt><dd>${escapeHtml(status)}</dd><dt>来源</dt><dd>${row.vigil ? "GitHub + Vigil 修复任务记录" : row.linked ? "GitHub + 本机 Keel 关联记录" : "GitHub（本机尚无 Keel 流程记录）"}</dd><dt>当前提交</dt><dd><code>${escapeHtml(row.headSha || "待确认")}</code></dd><dt>流程说明</dt><dd>${escapeHtml(detail)}</dd></dl><a class="detail-link" href="${pullUrl(row.repo, row.number)}" target="_blank" rel="noopener noreferrer">在 GitHub 查看 PR ${icon("arrow")}</a>${session}${vigilDetails(row)}`;
   const nextContext = JSON.stringify([store.owner, store.scope, row.key, row.headSha, row.state]);
   if (detailContext !== nextContext) {
     detailContext = nextContext;

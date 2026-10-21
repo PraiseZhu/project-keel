@@ -1,4 +1,5 @@
 import { ACTIVITY_FRESH_MS, pullKey, validPullRef, withNewestActivity, type BoardActivity, type BoardCard, type BoardScope, type BoardStage } from "../shared/dashboard.ts";
+import { isVigilProgress } from "../shared/vigil.ts";
 
 export interface DashboardStore {
   scope: BoardScope;
@@ -31,6 +32,7 @@ export function validCard(value: unknown): value is BoardCard {
   return validPullRef(row.repo, row.number) && row.key === pullKey(row.repo, row.number)
     && typeof row.title === "string" && typeof row.sessionLabel === "string" && typeof row.detail === "string" && typeof row.status === "string"
     && typeof row.headSha === "string" && typeof row.updatedAt === "string" && ciValid
+    && (row.vigil === undefined || isVigilProgress(row.vigil))
     && (row.workflowAt === undefined || typeof row.workflowAt === "number" && Number.isFinite(row.workflowAt))
     && ["local", "cloud", "handoff"].includes(row.stage)
     && ["running", "waiting", "needs-human", "ready", "handed-off", "paused", "done", "unknown", "stale", "closed"].includes(row.activity)

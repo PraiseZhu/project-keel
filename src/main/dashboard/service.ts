@@ -4,6 +4,16 @@ import { KeelError, type Host } from "../host.ts";
 import { currentDashboardHandoff, prepareDashboardHandoffContext } from "./handoff.ts";
 import { boardEvidence } from "./registry.ts";
 import { projectPull } from "./project.ts";
+import { loadVigilProgress, projectVigil, retainVigilOnError, vigilByPull } from "./vigil.ts";
+
+async function dashboardEvidence(ctx: ToolContext) {
+  const evidence = await boardEvidence(ctx.host);
+  const snapshot = await loadVigilProgress(ctx);
+  const vigil = vigilByPull(snapshot);
+  for (const [key, row] of vigil) if (!evidence.refs.has(key))
+    evidence.refs.set(key, { repo: row.repo, number: row.number, sessionId: row.sessionId, at: row.taskAt });
+  return { ...evidence, vigil, warnings: snapshot.warnings };
+}
 
 interface Scan {
   generation: number;
@@ -139,7 +149,8 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
   }
   const work = async (): Promise<BoardSnapshot> => {
     try {
-      const evidence = await boardEvidence(ctx.host);
+      const evidence = await dashboardEvidence(ctx);
+      for (const warning of evidence.warnings) scan.warnings.add(warning);
       const handoffContext = await prepareDashboardHandoffContext(ctx);
       const add = async (pull: RemotePull, error?: string): Promise<void> => {
         let handoff = null;
@@ -149,7 +160,8 @@ export async function refreshDashboard(ctx: ToolContext, options: { scope?: Boar
           scan.warnings.add("部分交接状态无法核实，未推断 mini 的进展。");
         }
         const prior = scan.rows.get(pull.key) ?? (scan.snapshot?.owner === scan.owner ? scan.snapshot.rows.find((row) => row.key === pull.key) : undefined);
-        const card = withNewestActivity(prior, projectPull(pull, { now: ctx.host.now(), ref: evidence.refs.get(pull.key), run: evidence.runs.get(pull.key), handoff }));
+        const projected = retainVigilOnError(projectVigil(projectPull(pull, { now: ctx.host.now(), ref: evidence.refs.get(pull.key), run: evidence.runs.get(pull.key), handoff }), evidence.vigil.get(pull.key), ctx.host.now()), prior, evidence.warnings);
+        const card = withNewestActivity(prior, projected);
         if (error) { card.error = error; card.activity = "stale"; card.status = "状态暂不可读"; card.detail = error; card.step.index = null; }
         else if (handoffError) { card.error = handoffError; card.activity = "unknown"; card.status = "交接状态待确认"; card.detail = handoffError; card.step.index = null; }
         scan.rows.set(pull.key, card);
@@ -256,13 +268,13 @@ export async function updateDashboardLocal(ctx: ToolContext, scope: BoardScope, 
   const owner = scan.owner;
   const version = (scan.localVersions.get(key) ?? 0) + 1;
   scan.localVersions.set(key, version);
-  const evidence = await boardEvidence(ctx.host);
+  const evidence = await dashboardEvidence(ctx);
   const handoffContext = await prepareDashboardHandoffContext(ctx);
   const handoff = await currentDashboardHandoff(handoffContext, row);
   if (scan.cycle !== cycle || scan.owner !== owner || scan.localVersions.get(key) !== version) return;
   const current = scan.rows.get(key) ?? scan.snapshot?.rows.find((card) => card.key === key);
   if (current !== row || !scan.snapshot) return;
-  const projected = projectPull(row, { now: ctx.host.now(), ref: evidence.refs.get(key), run: evidence.runs.get(key), handoff });
+  const projected = retainVigilOnError(projectVigil(projectPull(row, { now: ctx.host.now(), ref: evidence.refs.get(key), run: evidence.runs.get(key), handoff }), evidence.vigil.get(key), ctx.host.now()), row, evidence.warnings);
   if (row.error) Object.assign(projected, { error: row.error, activity: "stale", detail: row.error, status: "状态暂不可读" });
   if (!scan.collecting || scan.rows.has(key)) scan.rows.set(key, projected);
   scan.snapshot.rows = scan.snapshot.rows.map((card) => card.key === key ? projected : card);

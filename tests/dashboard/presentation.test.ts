@@ -4,13 +4,30 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { ACTIVITY_FRESH_MS, BOARD_COLUMNS, BOARD_REFRESH_MS, pullUrl, type BoardActivity, type BoardCard } from "../../src/shared/dashboard.ts";
 import { activityOf, ageLabel, applyDashboardMessage, cardState, emptyDashboard, filteredCards, validCard } from "../../src/panel/dashboard-model.ts";
-import { cardBody, dashboardMarkup, escapeHtml, icon } from "../../src/panel/dashboard-render.ts";
+import { cardBody, dashboardMarkup, escapeHtml, icon, vigilDetails } from "../../src/panel/dashboard-render.ts";
 import { makePull } from "./fixtures.ts";
 
 const now = 1_800_000_000_000;
 const card = (number = 1, overrides: Partial<BoardCard> = {}): BoardCard => ({
   ...makePull(number, { updatedAt: new Date(now - 1000).toISOString() }), stage: "cloud", activity: "unknown", status: "流程待确认",
   detail: "GitHub 已读取，本机尚无流程记录。", linked: false, sessionLabel: `任务 ${number}`, step: { index: null, labels: ["检查", "确认", "交接"], linear: false }, ...overrides,
+});
+
+describe("Vigil task detail", () => {
+  it("renders the existing Cindy session link, evidence locations and escaped ledger notes", () => {
+    const row = card(42, { linked: true, sessionId: "sample-session-42", vigil: { repo: "sample/keel", number: 42, nodeId: "PR_sample",
+      sessionId: "sample-session-42", dispatchId: "repair-42", sourceHead: "a".repeat(40), taskStatus: "running", taskAt: now,
+      paths: { task: "/runtime/state/tasks/repair-42.json", activity: "/runtime/state/activity/repair-42.json" },
+      notes: [{ at: new Date(now).toISOString(), summary: "<script>not executable</script>" }] } });
+    const view = panel(900, [row]);
+    view.openDetail(row.key);
+    const html = view.select("#detail-summary").innerHTML;
+    expect(html).toContain("GitHub + Vigil 修复任务记录");
+    expect(html).toContain("cindy://sessions/sample-session-42");
+    expect(html).toContain("/runtime/state/tasks/repair-42.json");
+    expect(html).toContain("&lt;script&gt;not executable&lt;/script&gt;");
+    expect(html).not.toContain("<script>");
+  });
 });
 
 class ElementHarness {
@@ -129,7 +146,7 @@ function panel(width = 334, rows: BoardCard[] = []) {
     focusedStage: null, maximumPerColumn: 40, refreshing: false, refreshTimer: undefined, renderFrame: undefined, transportError: "", trackingWarning: "",
     selectedKey: null, detailContext: "", detailRequestId: undefined, returnFocus: null, disposed: false, panelId: "panel",
     bodies: new Map(), movement: new Map(), pending: new Map(), numbers: new Map(),
-    BOARD_COLUMNS, BOARD_REFRESH_MS, pullUrl, activityOf, ageLabel, applyDashboardMessage, cardState, emptyDashboard, filteredCards, cardBody, escapeHtml, icon,
+    BOARD_COLUMNS, BOARD_REFRESH_MS, pullUrl, activityOf, ageLabel, applyDashboardMessage, cardState, emptyDashboard, filteredCards, cardBody, escapeHtml, icon, vigilDetails,
     document: {
       visibilityState: "visible", activeElement: null,
       createElement: () => { const element = new ElementHarness(); element.nodes.set("time[data-time]", new ElementHarness()); return element; },

@@ -96,6 +96,8 @@ export interface Verification {
 
 export interface KeelProfile {
   readonly lanes: readonly LaneMatch[];
+  /** Optional Vigil runtime homes; read-only dashboard observations, not graph ownership. */
+  readonly vigilHomes?: readonly string[];
   /** Absolute path of the Orca routing.json. Null = fanout/roles fail closed. */
   readonly routingPath: string | null;
   /** Repos scanned by the pr_status board view when no `repos` argument is given (`owner/repo`). */

@@ -17,6 +17,7 @@ import { bothStopHookStatuses } from "./hooks-status.ts";
 import { defaultHookPaths, ensureHooks } from "./hooks-install.ts";
 import { roles } from "./routes/routing.ts";
 import { CLOCK_PING_METHOD } from "../shared/clock.ts";
+import { vigilProgress } from "./vigil/progress.ts";
 
 declare const __KEEL_PROFILE__: KeelProfile | undefined;
 const BUILT_PROFILE: KeelProfile = typeof __KEEL_PROFILE__ !== "undefined" ? __KEEL_PROFILE__ : EMPTY_PROFILE;
@@ -25,6 +26,7 @@ export type Params = Record<string, any> & { profile?: KeelProfile };
 export type Method = (p: Params, profile: KeelProfile) => Promise<unknown>;
 
 const methods: Record<string, Method> = {
+  "vigil/progress": (_p, profile) => vigilProgress(profile.vigilHomes),
   "env/diagnose": async () => {
     const out: Record<string, unknown> = {};
     for (const t of ["gh", "git"] as const) {

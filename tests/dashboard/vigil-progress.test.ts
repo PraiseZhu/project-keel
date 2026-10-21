@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +45,7 @@ describe("Vigil read-only progress", () => {
     const before = await readFile(path, "utf8");
     const result = await dispatch("vigil/progress", { profile: { lanes: [], routingPath: null, boardRepos: [], plansDir: null, vigilHomes: [root] } });
     expect(result.error).toBeUndefined();
-    expect(result.result).toMatchObject({ warnings: [], rows: [{ ...identity, sourceHead: sha, activity: { op: "validate" }, paths: { task: join(root, `state/tasks/${id}.json`) } }] });
+    expect(result.result).toMatchObject({ warnings: [], rows: [{ ...identity, sourceHead: sha, activity: { op: "validate" }, paths: { task: join(await realpath(root), `state/tasks/${id}.json`) } }] });
     expect(await readFile(path, "utf8")).toBe(before);
   });
 
@@ -75,6 +75,19 @@ describe("Vigil read-only progress", () => {
     await json(root, "state/prs/PR_sample.json", { nodeId: identity.nodeId, number: 42, sessionId: identity.sessionId, activeTask: { dispatchId } });
     const response = await dispatch("vigil/progress", { profile: { vigilHomes: [root] } as never });
     expect(response.result).toMatchObject({ rows: [], warnings: [expect.any(String)] });
+  });
+
+  it("accepts a validation receipt whose stored path is a symlink alias of the home", async () => {
+    const root = await fixture();
+    const alias = `${root}-alias`;
+    await symlink(root, alias);
+    try {
+      const receipt = { ...identity, schemaVersion: 2, kind: "mivo-repair-validation", head: sha, status: "pass", exitCode: 0, finishedAt: new Date(now).toISOString() };
+      const receiptPath = await json(alias, `state/validations/${id}/${sha}-receipt.json`, receipt);
+      await json(root, `state/validations/${id}/${sha}.json`, { head: sha, status: "pass", receiptPath, receiptSha256: createHash("sha256").update(JSON.stringify(receipt)).digest("hex") });
+      const response = await dispatch("vigil/progress", { profile: { vigilHomes: [root] } as never });
+      expect(response.result).toMatchObject({ rows: [{ validation: { status: "pass", head: sha, exitCode: 0 }, paths: { validation: receiptPath } }], warnings: [] });
+    } finally { await rm(alias, { force: true }); }
   });
 
   it("verifies the actual validation receipt hash and identity", async () => {

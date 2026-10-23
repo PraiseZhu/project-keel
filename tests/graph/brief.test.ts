@@ -20,6 +20,17 @@ const ctx = {
   extraForbidden: ["禁止改配置"],
 };
 
+function expectUnifiedP2P3(task: string): void {
+  expect(task).toContain("本 PR 引入或改动范围内已证实的真实问题");
+  expect(task).toContain("误导性测试");
+  expect(task).toContain("PR 自己写明的验收没达成");
+  expect(task).toContain("声称做过的验证实际没做");
+  expect(task).toContain("单纯缺测试或违反通用规范不单独构成 P2");
+  expect(task).toContain("生产行为已正确且 PR 未声称覆盖的补测试或覆盖率建议");
+  expect(task).toContain("不影响结论的措辞");
+  expect(task).not.toContain("规范违反或测试缺口");
+}
+
 describe("buildBrief", () => {
   it("tells non-writing nodes they are read-only instead of listing writable files (real run ⑫)", () => {
     const text = buildBrief({ ...node, id: "explore", writes: false }, run, ctx);
@@ -139,8 +150,7 @@ describe("node task line", () => {
     expect(task).toContain("P0/P1/P2");
     expect(task).toContain("有确认成立的 P0/P1/P2 或 SC 不通过时 verdict 写 FAIL");
     expect(task).toContain("只有 P3");
-    expect(task).toContain("P2 是真实但影响局部的一般缺陷");
-    expect(task).toContain("P3 是命名、风格或无已证实影响的可选优化");
+    expectUnifiedP2P3(task);
     expect(text).toContain("测试运行器本身的命令");
     expect(text).toContain("先于修复（fix:）提交");
     expect(text).toContain("只读：不得修改任何文件");
@@ -174,8 +184,7 @@ describe("node task line", () => {
     expect(task).toContain("只修确认成立的 P0/P1/P2");
     expect(task).toContain("P3/不成立不改代码");
     expect(task).toContain("证据不足先待核实");
-    expect(task).toContain("P2 是真实但影响局部的一般缺陷");
-    expect(task).toContain("P3 是命名、风格或无已证实影响的可选优化");
+    expectUnifiedP2P3(task);
   });
 
   it("falls back to the repo's own test command when no SC has verify", () => {

@@ -2,6 +2,11 @@
 
 export const BRIEF_FORBIDDEN = ["禁止合并", "禁止 force-push", "禁止 rebase", "禁止写域外文件", "禁止调用 KEEL 的 keel_* 工具（由主控调用）"] as const;
 
+/** P2/P3 wording aligned with the review machine's unified grading (Review-PR mivo/config/severity.md). */
+const P2_P3_NOTE =
+  "P2 是本 PR 引入或改动范围内已证实的真实问题，影响局部、未达 P1，另含三类必报：误导性测试、PR 自己写明的验收没达成、声称做过的验证实际没做；单纯缺测试或违反通用规范不单独构成 P2。" +
+  "P3 是无已证实功能或安全影响的命名、风格、整理、视觉润色，生产行为已正确且 PR 未声称覆盖的补测试或覆盖率建议，不影响结论的措辞，以及尚无实际收益证据的优化，不报、不修。";
+
 export interface BriefNode {
   readonly id: string;
   readonly role?: "explorer" | "researcher" | "worker" | "verifier" | "architect";
@@ -67,13 +72,13 @@ export function nodeTask(node: BriefNode, run: BriefRun): string {
     case "fix-ci":
       return "PR 的 CI 失败了：先看失败的检查和日志（gh pr checks、gh run view --log-failed），找到根因，只修让 CI 失败的问题并提交。";
     case "triage-threads":
-      return "处理 PR 上未解决的评审线程：逐条核实；只修确认成立的 P0/P1/P2 并提交；P3/不成立不改代码，在 findings 里写明分级和理由；证据不足先待核实。P2 是真实但影响局部的一般缺陷（包括有可信触发路径和实际影响证据的规范违反或测试缺口）；P3 是命名、风格或无已证实影响的可选优化。单纯缺测试或通用规范违反不单独升级。";
+      return "处理 PR 上未解决的评审线程：逐条核实；只修确认成立的 P0/P1/P2 并提交；P3/不成立不改代码，在 findings 里写明分级和理由；证据不足先待核实。" + P2_P3_NOTE;
     case "architect-plan":
       return "只读。先读相关代码，再写实现方案：改哪些文件和函数、数据结构、要加哪些测试、风险、明确不做的事。方案要具体到写手可以直接照做。";
     case "astra-final-review":
       return [
         "你是非作者审查者，只读，不改任何文件。",
-        "1) 审 PR 的全部改动（gh pr diff，或 git diff <base>...HEAD），找确认成立的 P0/P1/P2，每条写触发条件、错误行为、影响和证据（文件:行）；P2 是真实但影响局部的一般缺陷（包括有可信触发路径和实际影响证据的规范违反或测试缺口）；P3 是命名、风格或无已证实影响的可选优化。单纯缺测试或通用规范违反不单独升级。",
+        "1) 审 PR 的全部改动（gh pr diff，或 git diff <base>...HEAD），找确认成立的 P0/P1/P2，每条写触发条件、错误行为、影响和证据（文件:行）；" + P2_P3_NOTE,
         "2) 对 ACCEPTANCE 每条亲自验证，sc_evidence 只给本次验证通过的；",
         "3) 跑测试，ran 里要有测试运行器本身的命令；",
         type === "bug-fix"

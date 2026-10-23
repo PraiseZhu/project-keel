@@ -1,4 +1,4 @@
-> 移植自 pstack automations/benny/skills/setup-benny/SKILL.md @ e43c7ee（MIT）。改写：port-feature：Benny's two automations become Cindy scheduled tasks; Slack goes through Cindy's Slack tools; the pack lives under .cindy/automations/benny/.
+> 移植自 pstack automations/benny/skills/setup-benny/SKILL.md @ 190d287（MIT）。改写：port-feature：Benny's two automations become Cindy scheduled tasks; Slack goes through Cindy's Slack tools; the pack lives under .cindy/automations/benny/.
 
 > 上游说明（setup-benny）：Configure Benny and prepare its triage and repro automations. Use when installing Benny or changing its Slack, tracker, repository, routing, control, model, or budget settings.
 

@@ -63,3 +63,89 @@ describe("orch RPC", () => {
     }
   });
 });
+
+// Ported from upstream check-plan.test.ts (pstack 0.15.29): fence handling, run in-process.
+const rule =
+	"Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.";
+
+const validPlan = `# Demo
+
+## How to read this
+One box is one unit of work and names the evidence. Check a box only when its evidence exists. See playbooks/.
+${rule}
+
+## Program checklist
+### Arm the program
+### Spawn owners
+### PR mechanics
+### Verdict and merge
+### Boot recipe
+\`git show origin/main:\` /loop 1h status message
+
+## PR 1
+**Depends on.** None.
+**Files.**
+- [ ] Do the thing.
+**Build.**
+- [ ] Do the thing.
+**You see.**
+- [ ] Do the thing.
+**Verify, unit.** ${rule}
+- [ ] Check the thing.
+**Verify, live.** ${rule} Ten lanes on \`example-model\` at the PR head
+${Array.from({ length: 10 }, (_, i) => `- [ ] Lane ${i + 1}. Save \`lane-${i + 1}.png\`. Pass when evidence exists.`).join("\n")}
+**Verify, perf.** ${rule}
+- [ ] Metric. Recorded.
+- [ ] Probe. Recorded.
+- [ ] Baseline. Recorded.
+- [ ] Rule. Recorded.
+**Review gate.** None.
+**Merge.**
+- [ ] Merge when approved.
+
+## Close the program
+Close.
+
+## Appendix Prototype evidence
+Recorded.
+`;
+
+const runPlan = (example: string, expectedExit: number) => {
+	const result = checkPlan(validPlan + example, "plan.md");
+	expect(result.ok ? 0 : 1).toBe(expectedExit);
+	return { stderr: result.problems.join("\n") };
+};
+
+describe("check-plan fences (upstream 0.15.29)", () => {
+	it("accepts ordinary, indented, and longer closing fences", () => {
+		for (const indent of ["", " ", "  ", "   "])
+			runPlan(`${indent}\`\`\`markdown\n## Example only\n${indent}\`\`\`\n`, 0);
+		runPlan("```markdown\n## Example only\n````\n", 0);
+	});
+
+	it("accepts nested backticks and tilde info strings", () => {
+		runPlan("````markdown\n```markdown\n## Example only\n```\n````\n", 0);
+		runPlan("~~~markdown `info`\n## Example only\n ~~~\n", 0);
+	});
+
+	it("keeps mismatched, shorter, and suffixed closers inside the fence", () => {
+		runPlan("````markdown\n~~~\n## Example only\n````\n", 0);
+		runPlan("````markdown\n```\n## Example only\n````\n", 0);
+		runPlan("````markdown\n``` info\n## Example only\n````\n", 0);
+	});
+
+	it("rejects headings and prose outside a proper close", () => {
+		for (const suffix of ["  ", "\t"]) {
+			const heading = runPlan(`\`\`\`markdown\n## Example only\n\`\`\`${suffix}\n## Example only\n`, 1);
+			expect(heading.stderr).toContain('"## Example only" after Close the program is not an appendix');
+		}
+
+		const prose = runPlan("```markdown\nThis prose has a mid-sentence colon: inside code\n```\nThis prose has a mid-sentence colon: bad.\n", 1);
+		expect(prose.stderr).toContain("mid-sentence colon");
+	});
+
+	it("rejects backtick info strings containing a backtick", () => {
+		const result = runPlan("```markdown `invalid`\n## Example only\n```\n", 1);
+		expect(result.stderr).toContain('"## Example only" after Close the program is not an appendix');
+	});
+});

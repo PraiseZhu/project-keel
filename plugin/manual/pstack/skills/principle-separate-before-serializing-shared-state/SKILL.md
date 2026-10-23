@@ -1,4 +1,4 @@
-> 移植自 pstack skills/principle-separate-before-serializing-shared-state/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-separate-before-serializing-shared-state/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（principle-separate-before-serializing-shared-state）：Apply when concurrent actors might write to the same file, branch, key, or state object. Eliminate the sharing first; serialize structurally only when one shared writer is a real invariant.
 

@@ -1,6 +1,6 @@
 {
   "upstream": "cursor/plugins pstack/skills/poteto-mode/scripts/watch-pr",
-  "sha": "e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a",
+  "sha": "190d28736eff128ec94f502a22c7fe0c4b56cd37",
   "files": {
     "cli.test.ts": [
       "parseArgs > uses the specified defaults",
@@ -20,12 +20,20 @@
       "checks fallback chain > fails closed when both paths are empty",
       "rollup node mapping > maps terminal and non-terminal CheckRun states fail closed",
       "rollup node mapping > classifies an in-progress Code Review Gate from the rollup as the gate",
+      "rollup node mapping > classifies a Code Review Gate waiting on an owner approval as the gate",
+      "rollup node mapping > classifies a fast-path Code Review Gate waiting on an owner approval as the gate",
       "rollup node mapping > maps StatusContext states and drops unknown typenames",
       "closed enum parsing > accepts mergeStateStatus CONFLICTING",
       "closed enum parsing > reads gh's empty reviewDecision as no decision rather than a parse failure",
       "closed enum parsing > still rejects an unknown reviewDecision",
       "closed enum parsing > rejects unknown enum values as retryable errors carrying the raw value",
       "annotates Bugbot threads with distinct review-pass counts",
+      "review thread pagination > keeps walking pages until the cursor is exhausted",
+      "review thread pagination > sees an unresolved thread that sits past the first page",
+      "review thread pagination > stops after a single page when the cursor is exhausted",
+      "review thread pagination > counts Bugbot review passes across every page",
+      "review thread pagination > drops resolved threads from later pages too",
+      "review thread pagination > rejects a page that omits pageInfo instead of assuming one page",
       "context and stack discovery > returns a fully explicit context without any reader call",
       "context and stack discovery > uses the local origin before currentPr for an explicit number",
       "context and stack discovery > orders the connected stack bottom-to-top"

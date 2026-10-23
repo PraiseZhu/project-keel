@@ -1,10 +1,10 @@
-> 移植自 pstack skills/principle-redesign-from-first-principles/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-redesign-from-first-principles/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
-> 上游说明（principle-redesign-from-first-principles）：Apply when integrating a new requirement into an existing design. Redesign as if the requirement had been a foundational assumption from day one, instead of bolting it on.
+> 上游说明（principle-redesign-from-first-principles）：Apply when integrating a new requirement into an existing design.
 
 # Redesign From First Principles
 
-When integrating a change, don't bolt it onto the existing design. Redesign as if the requirement had been there from the start.
+When integrating a change, don't bolt it onto the existing design. Redesign as if the requirement had been a foundational assumption from the start.
 
 - Read all affected files and understand the current design
 - Ask: "if we were writing this from scratch with this new requirement, what would we build?"

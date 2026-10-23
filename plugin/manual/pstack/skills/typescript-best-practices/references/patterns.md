@@ -1,4 +1,4 @@
-> 移植自 pstack skills/typescript-best-practices/references/patterns.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/typescript-best-practices/references/patterns.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 # TypeScript patterns
 
@@ -11,9 +11,13 @@ Brand primitives so they can't be mixed up. Validate once at the boundary. Downs
 ```ts
 type AgentId = string & { readonly __brand: "AgentId" };
 
+function isAgentId(input: string): input is AgentId {
+  return isUUID(input);
+}
+
 function parseAgentId(input: string): AgentId {
-  if (!isUUID(input)) throw new Error(`Invalid agent id: ${input}`);
-  return input as AgentId;
+  if (!isAgentId(input)) throw new Error(`Invalid agent id: ${input}`);
+  return input;
 }
 
 function focusAgent(id: AgentId): void {

@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Ported from pstack skills/poteto-mode/scripts/check-plan.mjs @ e43c7ee (MIT, (c) 2026 Lauren Tan).
+// Ported from pstack skills/poteto-mode/scripts/check-plan.mjs @ 190d287 (MIT, (c) 2026 Lauren Tan).
 // Keel change: the CLI wrapper (argv, fs read, console, process.exit) becomes a pure
 // function `checkPlan(text, file)`, run by agents as `node <keel>/node/check-plan.mjs <plan.md>`.
 // One host substitution: the heartbeat marker accepts Cindy's scheduler (`schedule_create`)
@@ -43,13 +43,29 @@ export function checkPlan(text: string, file = "plan.md"): { report: string[]; p
 	}
 
 	const lines = [];
-	let fence = false;
+	let fence: { char: string; length: number } | null = null;
+	const openingFence = (text: string) => {
+		const match = text.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+		if (!match || (match[1][0] === "`" && match[2].includes("`"))) return null;
+		return { char: match[1][0], length: match[1].length };
+	};
+	const closingFence = (text: string, opening: { char: string; length: number }) => {
+		const match = text.match(/^ {0,3}(`+|~+)[ \t]*$/);
+		return Boolean(match && match[1][0] === opening.char && match[1].length >= opening.length);
+	};
 	for (let i = start; i < raw.length; i++) {
 		const text = raw[i];
 		const n = i + 1;
-		if (/^```/.test(text)) fence = !fence;
-		lines.push({ n, text, code: fence });
-		if (fence) continue;
+		let code = Boolean(fence);
+		if (fence && closingFence(text, fence)) {
+			code = false;
+			fence = null;
+		} else if (!fence) {
+			fence = openingFence(text);
+			code = Boolean(fence);
+		}
+		lines.push({ n, text, code });
+		if (code) continue;
 		const prose = text
 			.replace(/`[^`]*`/g, "`")
 			.replace(/!\[[^\]]*\]\([^)]*\)/g, "")

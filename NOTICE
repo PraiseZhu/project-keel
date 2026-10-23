@@ -1,7 +1,7 @@
 Keel includes material ported from pstack, part of the cursor/plugins repository.
 
-  Upstream:  https://github.com/cursor/plugins (pstack 0.15.9)
-  Commit:    e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a
+  Upstream:  https://github.com/cursor/plugins (pstack 0.15.29)
+  Commit:    190d28736eff128ec94f502a22c7fe0c4b56cd37
   Ported:    skills/poteto-mode/scripts/watch-pr (src/node/pr/upstream/),
              orch store and check-plan (src/node/orch, src/node/plan),
              skills, playbooks, agents and references (plugin/manual/pstack/).

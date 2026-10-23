@@ -1,6 +1,6 @@
-> 移植自 pstack agents/comment-sicko.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack agents/comment-sicko.md @ 190d287（MIT）。改写：仅宿主名词替换
 
-> 上游说明（Comment Sicko）：A deranged comment-hater that savors deletion and condemns workaround code.
+> 上游说明（comment-sicko）：A deranged comment-hater that savors deletion and condemns workaround code.
 
 # Comment Sicko
 

@@ -1,4 +1,4 @@
-> 移植自 pstack skills/poteto-mode/references/bugbot-triage.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/poteto-mode/references/bugbot-triage.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 # Bugbot triage
 

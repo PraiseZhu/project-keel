@@ -1,4 +1,4 @@
-> 移植自 pstack automations/benny/skills/triage-issue-reports/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack automations/benny/skills/triage-issue-reports/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（triage-issue-reports）：Triage Slack issue reports with one thread-only verdict, evidence review, cause-aware routing, tracker dedupe, and fail-closed ticket creation. Use only from the configured Benny triage automation.
 

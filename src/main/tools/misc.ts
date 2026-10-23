@@ -4,10 +4,11 @@ import { node, requireString, type ToolContext } from "../context.ts";
 export async function worktreeTool(ctx: ToolContext, args: Record<string, unknown>) {
   const op = requireString(args, "op");
   const repoDir = requireString(args, "repo_dir");
-  if (op === "create") return node(ctx, "worktree/create", { repo_dir: repoDir, name: requireString(args, "name"), ...(typeof args.base_ref === "string" ? { base_ref: args.base_ref } : {}) });
-  if (op === "audit") return { rows: await node(ctx, "worktree/audit", { repo_dir: repoDir }) };
+  const baseRef = typeof args.base_ref === "string" ? { base_ref: args.base_ref } : {};
+  if (op === "create") return node(ctx, "worktree/create", { repo_dir: repoDir, name: requireString(args, "name"), ...baseRef });
+  if (op === "audit") return { rows: await node(ctx, "worktree/audit", { repo_dir: repoDir, ...baseRef }) };
   if (op !== "prune") throw new KeelError("INVALID_INPUT", "op 只能是 create、audit、prune。");
-  const rows = await node<{ path: string; bucket: string; branch: string | null }[]>(ctx, "worktree/audit", { repo_dir: repoDir });
+  const rows = await node<{ path: string; bucket: string; branch: string | null }[]>(ctx, "worktree/audit", { repo_dir: repoDir, ...baseRef });
   const wanted = Array.isArray(args.paths) ? (args.paths as string[]) : rows.filter((r) => r.bucket === "safe").map((r) => r.path);
   const safe = rows.filter((r) => r.bucket === "safe" && wanted.includes(r.path));
   const refused = wanted.filter((p) => !safe.some((s) => s.path === p));
@@ -15,7 +16,7 @@ export async function worktreeTool(ctx: ToolContext, args: Record<string, unknow
   const c = await ctx.host.confirm({ body: `删除 ${safe.length} 个已合并且干净的 worktree 及其本地分支：\n${safe.map((s) => s.path).join("\n")}`.slice(0, 300), confirmText: "删除", cancelText: "保留", danger: true });
   if (!c.ok) throw new KeelError("CONFIRM_UNAVAILABLE", `没能弹出确认框（${c.errorCode ?? "未知"}），未删除。`);
   if (!c.confirmed) throw new KeelError("USER_DECLINED", "用户选择保留，未删除任何 worktree。");
-  const r = await node<{ removed: string[]; refused: { path: string; reason: string }[] }>(ctx, "worktree/prune", { repo_dir: repoDir, paths: safe.map((s) => s.path) });
+  const r = await node<{ removed: string[]; refused: { path: string; reason: string }[] }>(ctx, "worktree/prune", { repo_dir: repoDir, paths: safe.map((s) => s.path), ...baseRef });
   return { removed: r.removed, refused: [...refused.map((p) => ({ path: p, reason: "审计不是 safe" })), ...r.refused] };
 }
 

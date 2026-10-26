@@ -61,6 +61,8 @@ export interface LaneMatch {
   readonly verifyCheck?: string;
   /** Optional Vigil CLI producer/inspector for this automation lane. Never a shell command. */
   readonly handoffHelperPath?: string;
+  /** Automation-owned lanes only. Default false; true requires a valid review_entry on the current HEAD. */
+  readonly requireReviewEntry?: boolean;
   /** Optional per-repo rule-file overrides. */
   readonly baseRuleFiles?: LaneRule["baseRuleFiles"];
 }

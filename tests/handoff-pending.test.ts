@@ -22,7 +22,6 @@ function snapshot(gateOk: boolean, extra: Record<string, unknown> = {}) {
   };
 }
 
-const entry = { head_sha: "abc", checked_at: new Date(Date.UTC(2026, 9, 4, 11, 50)).toISOString(), result: "pass", source: "code-review.yml 窗口检查" };
 
 describe("pending-first handoff", () => {
   it("writes pending before Ready and marks the record complete after success", async () => {
@@ -41,7 +40,7 @@ describe("pending-first handoff", () => {
       },
     });
     const r = await runTool(makeContext(h, "c1", profile), "pr_ready", {
-      repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready", review_entry: entry,
+      repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready",
     });
     expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true } });
     expect(order).toEqual(["pr/snapshot", "pr/ready"]);
@@ -58,7 +57,7 @@ describe("pending-first handoff", () => {
       },
     });
     const r = await runTool(makeContext(h, "c1", profile), "pr_ready", {
-      repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready", review_entry: entry,
+      repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready",
     });
     expect(r).toMatchObject({ ok: false, errorCode: "GATE_NOT_MET" });
     const rec = await readHandoff(h, "acme/gated-app", 7);
@@ -96,7 +95,7 @@ describe("pending-first handoff", () => {
       repo: "acme/gated-app", number: 7, at: "t", head_sha: "abc", gate: {}, evidence: {}, status: "pending", was_draft: true,
     });
     const r = await runTool(makeContext(h, "c1", profile), "pr_ready", {
-      repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready", review_entry: entry,
+      repo: "acme/gated-app", pr: 7, authorization_source: "用户 2026-10-04：转 ready",
     });
     expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true } });
     expect((await readHandoff(h, "acme/gated-app", 7))?.status).toBe("complete");

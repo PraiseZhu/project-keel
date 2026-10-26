@@ -60,8 +60,7 @@ else if(mode==='handoff'){
   const read = () => JSON.parse(readFileSync(file, "utf8")) as typeof state;
   const update = (fn: (s: typeof state) => void) => { const value = read(); fn(value); writeFileSync(file, JSON.stringify(value)); };
   const ready = (dry = false) => runTool(ctx, "pr_ready", { repo, pr: 7, dry_run: dry,
-    authorization_source: "User authorized handoff of this fixture PR",
-    review_entry: { head_sha: head, checked_at: new Date(host.now()).toISOString(), result: "pass", source: "isolated review-entry fixture" } });
+    authorization_source: "User authorized handoff of this fixture PR" });
   return { host, ctx, ready, read, update,
     calls: () => readFileSync(calls, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)),
     localRecords: () => [...host.files.keys()].filter(k => k.startsWith("handoff/")),
@@ -98,7 +97,7 @@ describe("configured Vigil author handoff through the real Keel tool/RPC path", 
   it("marks Ready, automatically obtains the external receipt, then stops author writes", async () => {
     const f = fixture();
     const r = await f.ready();
-    expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true, handoff: { watcher_receipt: { head } } } });
+    expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true, handoff: { status: "complete", watcher_receipt: { head } } } });
     expect(f.read().pr.isDraft).toBe(false); expect(f.read().comments).toHaveLength(1);
     expect(f.localRecords()).toHaveLength(1);
     expect(f.calls().some(a => a[0] === "external-node" && a.includes("inspect"))).toBe(true);
@@ -184,7 +183,6 @@ describe("configured Vigil author handoff through the real Keel tool/RPC path", 
     const ready = () => runTool(ctx, "pr_ready", {
       repo, pr: 7,
       authorization_source: "User authorized handoff of this fixture PR",
-      review_entry: { head_sha: head, checked_at: new Date(f.host.now()).toISOString(), result: "pass", source: "isolated review-entry fixture" },
     });
     expect(await ready()).toMatchObject({ ok: true, result: { handed_off: true, handoff: { watcher_receipt: { head } } } });
     expect(await runTool(ctx, "pr_status", { repo, pr: 7 })).toMatchObject({

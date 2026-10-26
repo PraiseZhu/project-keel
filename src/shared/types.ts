@@ -61,6 +61,8 @@ export interface LaneMatch {
   readonly verifyCheck?: string;
   /** Optional Vigil CLI producer/inspector for this automation lane. Never a shell command. */
   readonly handoffHelperPath?: string;
+  /** Automation-owned lanes only. Default false; true requires a valid review_entry on the current HEAD. */
+  readonly requireReviewEntry?: boolean;
   /** Optional per-repo rule-file overrides. */
   readonly baseRuleFiles?: LaneRule["baseRuleFiles"];
 }
@@ -96,6 +98,8 @@ export interface Verification {
 
 export interface KeelProfile {
   readonly lanes: readonly LaneMatch[];
+  /** Optional Vigil runtime homes; read-only dashboard observations, not graph ownership. */
+  readonly vigilHomes?: readonly string[];
   /** Absolute path of the Orca routing.json. Null = fanout/roles fail closed. */
   readonly routingPath: string | null;
   /** Repos scanned by the pr_status board view when no `repos` argument is given (`owner/repo`). */

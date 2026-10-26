@@ -31,7 +31,7 @@
 
 ## 用户规则覆盖层（优先于 pstack 上游默认）
 
-1. **统一分级，只修 P0/P1/P2。** P0 紧急严重事故；P1 严重缺陷（可信可达触发路径导致核心流程失效、严重数据错误或安全/隐私越界）；P2 真实、影响局部的一般缺陷，纳入修复；P3 改进建议不进修复清单。每个拟修 P0/P1/P2 写清触发条件、错误行为、实际影响与证据；证据不足标“待核实”，不默认降级也不凭猜测升级。
+1. **统一分级，只修 P0/P1/P2。** P0 紧急严重事故；P1 严重缺陷（可信可达触发路径导致核心流程失效、严重数据错误或安全/隐私越界）；P2 是本 PR 引入或改动范围内已证实的真实问题、影响局部未达 P1，另含三类必报（误导性测试、PR 自己写明的验收没达成、声称做过的验证实际没做），纳入修复，单纯缺测试或违反通用规范不单独构成 P2；P3 改进建议（风格、命名、生产行为已正确且 PR 未声称覆盖的补测试或覆盖率建议、不影响结论的措辞、无收益证据的优化）不进修复清单。Mivo 仓以审查机统一分级 `mivo/config/severity.md`（PraiseZhu/Review-PR）为准，与此摘要冲突时以它为准。每个拟修 P0/P1/P2 写清触发条件、错误行为、实际影响与证据；证据不足标“待核实”，不默认降级也不凭猜测升级。
 2. **外发须授权。** 推送、开 PR、转 Ready 需要用户当次授权：`pr_open` / `pr_ready` 要求 `authorization_source`。`pr_reply` 默认直接发表（用户在设置页选“每条确认”时才弹框）；只回分级说明、反证或已修复说明。
 3. **永不合并。** Keel 没有任何合并能力；PR 可合并时报告链接，由用户在 GitHub 合并。
 4. **按车道走。** `personal`（默认）：非 Draft，到 READY 即停；`gated-handoff`：必需检查全绿才转 Ready，Ready 后交给自动化盯梢，作者停手；`draft-gated-handoff`：在前者基础上强制 Draft，并按 base 分支规则文件校验标题与必需检查。交接后推送/回帖/修复类调用返回 `LANE_HANDED_OFF`。
@@ -42,7 +42,7 @@
 9. **Jev 是判断参考，不是事实证明。** 事实与门禁由确定性代码给出；Jev 只在策略允许的选项里排序。confidence ≥ 0.75 执行（J7 ≥ 0.8）；低于阈值补上下文重问一次，仍低就取改动最小、可撤回的选项；Jev 不可用且判断涉及连带文件时停下回报。
 10. **当前提交要有非作者验证。** 车道配了 `verifyCheck`（如 `agent-verify`）时，当前 head 没有该状态通过，`pr_status` 只给 `verify_current_head`，`pr_ready` 返回 `GATE_NOT_MET`。作者：派一个不是作者的模型（`fanout({ op: "roles" })` 的 e2e 档，或 `fanout({ op: "plan", kind: "swarm" })`）验证当前 head，自己不写这个状态。验证者：在自己的会话里跑测试、操作改动的功能、专门找反例；通过后执行 `gh api repos/<owner>/<repo>/statuses/<sha> -f state=success -f "context=<verifyCheck>" -f "description=<模型> <方法>"`，不通过写 `state=failure` 并说明原因。有新提交就重验。只改文档或配置时可由作者自查后写状态。验证者报告的 `ran` 必须列测试运行器本身的命令（如 `npm test`、`npx vitest run`、`pytest`）；`npm run verify` 这类聚合脚本 KEEL 认不出测试，会把级别判成 `type-check-only`。done 门遇到级别低于 SC 要求且 head/patch 都一致时给 `retry_verify`/`stop`，选 `retry_verify` 后重新派非作者验证，不再只给 wait/stop 卡死。信任边界：Keel 不核验状态由谁写入；本机所有 agent 共用同一个 GitHub 账号，这道门防疏忽、不防蓄意伪造，靠用户抽查兜底。要真正隔离，需给验证者独立的 GitHub 身份。建议在仓库分支保护里把该状态设为必需，绕开 Keel 的合并也会被拦住。
 
-交接车道可配置 `handoffHelperPath`，指向已部署的 Vigil `mivo-handoff.mjs` 绝对路径（需支持 `inspect` 和 `handoff --expected-head`）。本机需安装可从 PATH 或常见安装位置找到的 Node CLI；Cindy 内置 Node worker 不替代该外部执行器。配置后，`pr_ready` 在当前 HEAD 的 CI、审查进场和作者身份核对通过后转 Ready，自动发布并读回作者交接回执，最后才写本地交接记录；`dry_run` 不发布。读取失败或 HEAD 漂移时不声称交接成功。重复调用复用同代次回执，转 Draft 或进入新 Ready 代次后，过期本地记录不再锁住作者。外部有效回执也会拦住丢失本地记录的作者会话。未配置的车道保留原有本地交接行为。
+交接车道可配置 `handoffHelperPath`，指向已部署的 Vigil `mivo-handoff.mjs` 绝对路径（需支持 `inspect` 和 `handoff --expected-head`）。本机需安装可从 PATH 或常见安装位置找到的 Node CLI；Cindy 内置 Node worker 不替代该外部执行器。配置后，`pr_ready` 在当前 HEAD 的 CI 和作者身份核对通过后转 Ready；审查进场证据仅当该车道 `requireReviewEntry: true` 时才需要（缺省 false，独立于 `handoffHelperPath`，用 `kv.lanes` 或打包 profile 的布尔配置）。通过后自动发布并读回作者交接回执，最后才写本地交接记录；`dry_run` 不发布。读取失败或 HEAD 漂移时不声称交接成功。重复调用复用同代次回执，转 Draft 或进入新 Ready 代次后，过期本地记录不再锁住作者。外部有效回执也会拦住丢失本地记录的作者会话。未配置的车道保留原有本地交接行为。
 
 ## Cursor → Cindy 对照
 
@@ -88,6 +88,14 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。
 
 ## 看板与真实步骤
+
+### Vigil 现有任务进度
+
+个人构建配置可用 `vigilHomes` 指定 Vigil 运行目录（绝对路径数组，默认不读取任何目录）。重建并安装插件后，看板只读这些目录中的任务绑定、活动时间、处理结果和验证回执，不重新派单或启动图工作流。绑定按仓库、PR、任务、会话和提交核对；验证回执另外核对摘要。
+
+任务卡片显示有真实记录的当前状态；详情包含原 Cindy 修复会话入口、活动/结果/验证文件位置，以及 Keel 台账最近的步骤和证据。它不是完整执行轨迹的替代：代码编辑与独立审查没有结构化活动时不猜子步骤，不从聊天推断。旧阻塞记录后的新验证活动可恢复为验证中；新阻塞结果优先于旧活动。过期活动、未来时间、重复来源、提交变化及读取失败均标为待确认。看板读取不会延长任务心跳，也不会授予写代码、推送或合并权限。
+
+### Keel 自身工作流
 
 面板和主视图只读展示三列：本地工作流 → 云端检查至全绿 → 已交接。`pr_status({board:true, scope:"open"|"all", refresh?:true})` 按当前 GitHub 账号跨仓分页；`complete:false` 或 `more:true` 说明尚未读完，按返回的重试时间继续调用。旧 `boardRepos` 不再缩小全局看板范围；`repos` 只筛选本次工具返回的 `rows`，不影响全局读取、`total` 或面板。界面的仓库筛选在本地进行。
 

@@ -34,6 +34,13 @@ describe("J1–J12 templates", () => {
     expect(Object.keys(qs.sev_0!.criteria as object)).toEqual(["P0", "P1", "P2", "P3", "not_real"]);
     expect(TEMPLATES.J4.minimal).toBe("P3");
   });
+  it("J4 P2/P3 follow the review-machine unified grading", () => {
+    const c = TEMPLATES.J4.build(state).questions.sev_0!.criteria as Record<string, string>;
+    expect(c.P2).toContain("本 PR 引入或改动范围内已证实的真实问题");
+    for (const k of ["误导性测试", "PR 自己写明的验收没达成", "声称做过的验证实际没做", "单纯缺测试或违反通用规范不单独构成 P2"]) expect(c.P2).toContain(k);
+    expect(c.P3).toContain("生产行为已正确且 PR 未声称覆盖的补测试或覆盖率建议");
+    expect(c.P3).toContain("不影响结论的措辞");
+  });
   it("J8 only offers the actions the policy allowed", () => {
     expect(Object.keys(TEMPLATES.J8.build(state).questions.next!.criteria as object)).toEqual(["wait_for_ci", "triage_review_threads"]);
   });

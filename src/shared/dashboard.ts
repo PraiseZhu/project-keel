@@ -1,3 +1,5 @@
+import type { VigilProgress } from "./vigil.ts";
+
 export type BoardScope = "open" | "all";
 export type BoardStage = "local" | "cloud" | "handoff";
 export type BoardActivity = "running" | "waiting" | "needs-human" | "ready" | "handed-off" | "paused" | "done" | "unknown" | "stale" | "closed";
@@ -39,6 +41,7 @@ export interface ManagedPull {
 }
 
 export interface BoardCard extends RemotePull {
+  vigil?: VigilProgress;
   stage: BoardStage;
   activity: BoardActivity;
   status: string;

@@ -569,7 +569,7 @@ export function mapChangeDoneFailure(state: GraphRunState, result: ChangeGraphDo
           },
         },
       },
-      note: "交接车道的 done 门是 handoff，需要 pr_ready 收口，handoff 本身不算完成。authorization_source 必须是用户对「转 Ready / 交接」的实际授权原话；review_entry 必须在核实审查机进场条件后按真实结果填写。拿不到这两项时停下来问用户，不能自己编。",
+      note: "交接车道的 done 门是 handoff，需要 pr_ready 收口，handoff 本身不算完成。authorization_source 始终填写真实授权；仅当交接车道配置 requireReviewEntry: true 时，review_entry 才必须按当前 head 的真实进场核对结果填写；缺省或 false 时可省略。缺少所需授权，或启用开关却无法核实所需证据时停下来，不得编造。",
     };
   }
   return { kind: "decide", gate_id: "done", question: `尚未完成：${result.missing.join("；")}`, options: ["wait", "stop"], context: { missing: result.missing } };

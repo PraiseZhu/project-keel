@@ -53,6 +53,52 @@ describe("loadRuntimeConfig", () => {
     expect(h.nodeCalls).toEqual([]);
   });
 
+  it("keeps requireReviewEntry from packed lanes when kv.lanes is omitted", async () => {
+    const packed: KeelProfile = {
+      ...built,
+      lanes: [{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: true }],
+    };
+    const h = fakeHost();
+    const cfg = await loadRuntimeConfig(h, packed);
+    expect(cfg.lanes).toEqual([{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: true }]);
+    expect(h.files.size).toBe(0);
+  });
+
+  it("keeps boolean requireReviewEntry from kv.lanes, including explicit false", async () => {
+    const packed: KeelProfile = {
+      ...built,
+      lanes: [{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: false }],
+    };
+    const h = fakeHost({
+      kv: { lanes: [{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: true }] },
+    });
+    const cfg = await loadRuntimeConfig(h, packed);
+    expect(cfg.lanes).toEqual([{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: true }]);
+    expect(h.files.size).toBe(0);
+
+    const hFalse = fakeHost({
+      kv: { lanes: [{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: false }] },
+    });
+    const cfgFalse = await loadRuntimeConfig(hFalse, packed);
+    expect(cfgFalse.lanes).toEqual([{ repo: "acme/app", preset: "draft-gated-handoff", requireReviewEntry: false }]);
+    expect(hFalse.files.size).toBe(0);
+  });
+
+  it("does not treat a non-boolean requireReviewEntry as enabled", async () => {
+    const h = fakeHost({
+      kv: { lanes: [{ repo: "acme/app", preset: "gated-handoff", requireReviewEntry: "true" }] },
+    });
+    const cfg = await loadRuntimeConfig(h, built);
+    expect(cfg.lanes).toEqual([{ repo: "acme/app", preset: "gated-handoff" }]);
+    expect(cfg.lanes[0]).not.toHaveProperty("requireReviewEntry");
+  });
+
+  it("omits requireReviewEntry when packed lanes do not set it", async () => {
+    const h = fakeHost();
+    const cfg = await loadRuntimeConfig(h, built);
+    expect(cfg.lanes[0]).not.toHaveProperty("requireReviewEntry");
+  });
+
   it("keeps handoffHelperPath from kv.lanes so Vigil lanes do not fall back to local records", async () => {
     const helper = "/abs/vigil-helper.mjs";
     const h = fakeHost({

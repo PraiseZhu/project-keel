@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
 import { LANE_PRESETS } from "../../src/shared/types.ts";
@@ -61,6 +62,21 @@ describe("gated-handoff done gate", () => {
     expect(entry.source).toBe("");
     expect(entry.head_sha).toBe("a".repeat(40));
     expect(next.note).toMatch(/authorization_source/);
-    expect(next.note).toMatch(/review_entry/);
+    expect(next.note).toMatch(/requireReviewEntry: true/);
+    expect(next.note).toMatch(/缺省或 false 时可省略/);
+    expect(next.note).toMatch(/不得编造/);
+  });
+
+  it("pr_ready contract documents optional review_entry gated by requireReviewEntry", () => {
+    const ghost = JSON.parse(readFileSync(new URL("../../plugin/ghost.json", import.meta.url), "utf8")) as {
+      tools: Array<{ name: string; description: string; parameters: { required?: string[]; properties: Record<string, { description?: string }> } }>;
+    };
+    const tool = ghost.tools.find((t) => t.name === "pr_ready");
+    expect(tool).toBeTruthy();
+    expect(tool!.description).toMatch(/requireReviewEntry: true/);
+    expect(tool!.description).toMatch(/缺省 false/);
+    expect(tool!.parameters.properties.review_entry?.description).toMatch(/requireReviewEntry: true/);
+    expect(tool!.parameters.properties.review_entry?.description).toMatch(/缺省 false/);
+    expect(tool!.parameters.required ?? []).not.toContain("review_entry");
   });
 });

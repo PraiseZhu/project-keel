@@ -104,6 +104,7 @@ export function parseLanes(raw: unknown, built: readonly LaneMatch[]): readonly 
       ...(typeof o.preflight === "string" && o.preflight ? { preflight: o.preflight } : {}),
       ...(typeof o.verifyCheck === "string" && o.verifyCheck ? { verifyCheck: o.verifyCheck } : {}),
       ...(typeof o.handoffHelperPath === "string" && o.handoffHelperPath ? { handoffHelperPath: o.handoffHelperPath } : {}),
+      ...(typeof o.requireReviewEntry === "boolean" ? { requireReviewEntry: o.requireReviewEntry } : {}),
       ...(o.baseRuleFiles && typeof o.baseRuleFiles === "object" && !Array.isArray(o.baseRuleFiles)
         ? { baseRuleFiles: o.baseRuleFiles as LaneMatch["baseRuleFiles"] }
         : {}),

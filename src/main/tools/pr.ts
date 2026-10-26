@@ -148,10 +148,11 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
   const pre = await node<Snapshot>(ctx, "pr/snapshot", snapArgs);
   const handed = Boolean(await currentHandoff(ctx, pre.pr.repo, pre.pr.number, pre.pr));
   if (!dry && handed) throw new KeelError("LANE_HANDED_OFF", "当前 PR 已交接；继续修改前先取回并转 Draft。");
-  // Handing off also needs the review machine's entry condition (window, tool health), which no
-  // GitHub check exposes before Ready. The agent supplies what it checked; Keel binds it to this
-  // head and a fresh time, and refuses failed, stale or unbound evidence.
-  const entryNeeded = pre.rule.postReadyOwner === "automation";
+  // Only an explicit lane switch requires review-machine entry evidence.
+  // Handoff records still apply to every automation-owned lane.
+  const { match } = resolveLane(ctx.profile, pre.pr.repo);
+  const handoffNeeded = pre.rule.postReadyOwner === "automation";
+  const entryNeeded = handoffNeeded && match?.requireReviewEntry === true;
   const entry = entryNeeded ? checkEntry(args.review_entry, pre.pr.headSha, ctx.host.now()) : null;
   if (!dry && entry && !entry.ok)
     throw new KeelError("GATE_NOT_MET", `这个车道转 Ready 后交给自动化接管，服务器审查机进场证据不成立：${entry.problem}`, { missing: ["review_entry"], review_entry: entry });
@@ -161,8 +162,8 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
     was_draft: pre.pr.isDraft,
   });
   // Vigil lanes keep ownership in the external receipt; only local-record lanes need the pending-first record.
-  const integrated = resolveLane(ctx.profile, pre.pr.repo).match?.handoffHelperPath !== undefined;
-  if (!dry && entryNeeded && !integrated) await writeHandoff(ctx.host, { ...handoffBase(), status: "pending" });
+  const integrated = match?.handoffHelperPath !== undefined;
+  if (!dry && handoffNeeded && !integrated) await writeHandoff(ctx.host, { ...handoffBase(), status: "pending" });
   const r = await node(ctx, "pr/ready", { ...snapArgs, repo: pre.pr.repo, pr: pre.pr.number, dry_run: dry, expected_head: pre.pr.headSha });
   if (!r.gate.passed) {
     const v = pre.verification;
@@ -170,7 +171,7 @@ export async function prReady(ctx: ToolContext, args: Record<string, unknown>) {
     throw new KeelError("GATE_NOT_MET", `Ready 门禁未满足：${r.gate.missing.join("、")}。${hint}`, { missing: r.gate.missing, gate: r.gate });
   }
   let handoff: HandoffRecord | null = null;
-  if (!dry && r.ready && entryNeeded) {
+  if (!dry && r.ready && handoffNeeded) {
     if (integrated && (!r.watcher_handoff || r.watcher_handoff.head !== r.head_sha))
       throw new KeelError("HANDOFF_HELPER_INVALID", "Ready 已执行，但缺少当前 HEAD 的 Vigil 交接回执，作者交接未完成。");
     handoff = { ...handoffBase(), status: "complete", head_sha: r.head_sha, gate: r.gate, ...(r.watcher_handoff ? { watcher_receipt: r.watcher_handoff } : {}) };

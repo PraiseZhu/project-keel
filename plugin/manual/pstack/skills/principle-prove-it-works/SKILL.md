@@ -1,4 +1,4 @@
-> 移植自 pstack skills/principle-prove-it-works/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-prove-it-works/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（principle-prove-it-works）：Apply after completing a task, before declaring done. Verify against the real artifact (run the feature, read the actual value, inspect the diff), not a proxy, self-report, or 'it compiles.'
 

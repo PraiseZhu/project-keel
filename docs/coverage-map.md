@@ -1,6 +1,6 @@
 # pstack → Cindy 插件 复刻覆盖清单
 
-上游固定版本：`cursor/plugins@e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a`（pstack 0.15.9）。本表复制自计划期覆盖清单，「Keel 落点」列改为仓内实际路径（scripts/port-check.mjs --init 生成），`UNMAPPED=0` 才算覆盖完整。生成日期：2026-10-04。
+上游固定版本：`cursor/plugins@190d28736eff128ec94f502a22c7fe0c4b56cd37`（pstack 0.15.29；2026-10-21 从 0.15.9 升级，新增 10 项）。本表复制自计划期覆盖清单，「Keel 落点」列改为仓内实际路径（scripts/port-check.mjs --init 生成），`UNMAPPED=0` 才算覆盖完整。生成日期：2026-10-04。
 
 移植方式：A 原样移植（只替换宿主名词）；B 改写适配（行为改动写在备注）；C 代码移植（脚本 → Node 模块或工具）；D 由 Cindy 既有能力替代；E 不移植（备注写理由）。阶段 P1–P3 对应实施计划。
 
@@ -8,28 +8,28 @@
 
 | 维度 | 计数 |
 |---|---|
-| skill | 50 |
+| skill | 56 |
 | playbook | 23 |
 | agent | 2 |
-| script | 20 |
-| reference | 31 |
+| script | 22 |
+| reference | 33 |
 | automation | 3 |
-| 合计 | 129 |
+| 合计 | 139 |
 
 | 移植方式 | 计数 |
 |---|---|
-| A 原样移植 | 61 |
+| A 原样移植 | 69 |
 | B 改写适配 | 42 |
-| C 代码移植 | 21 |
+| C 代码移植 | 22 |
 | D 由 Cindy 能力替代 | 1 |
-| E 不移植 | 4 |
+| E 不移植 | 5 |
 
 | 阶段 | 计数 |
 |---|---|
-| P1 | 80 |
+| P1 | 86 |
 | P2 | 13 |
-| P3 | 32 |
-| — | 4 |
+| P3 | 35 |
+| — | 5 |
 
 UNMAPPED=0
 
@@ -44,13 +44,18 @@ UNMAPPED=0
 | skill | `skills/blast-radius/SKILL.md` | A | `plugin/manual/pstack/skills/blast-radius/SKILL.md` | P1 | 增加 Jev J12「是否需要更多运行证据」 |
 | skill | `skills/bro/SKILL.md` | A | `plugin/manual/pstack/skills/bro/SKILL.md` | P1 | 中文“说人话”改写 |
 | skill | `skills/correct/SKILL.md` | B | `plugin/manual/pstack/skills/correct/SKILL.md` | P3 | 结构性约束（lint/测试/规则）只出提案，写入需当次授权 |
+| skill | `skills/create-formal-verification-skill/SKILL.md` | A | `plugin/manual/pstack/skills/create-formal-verification-skill/SKILL.md` | P3 | 0.15.29 新增；在目标仓生成项目内形式化验证 skill |
 | skill | `skills/create-verification-skill/SKILL.md` | B | `plugin/manual/pstack/skills/create-verification-skill/SKILL.md` | P3 | control-ui/cli 换成 Cindy 浏览器、桌面、iOS 模拟器工具 |
 | skill | `skills/figure-it-out/SKILL.md` | A | `plugin/manual/pstack/skills/figure-it-out/SKILL.md` | P1 | 决策留痕走 ledger_log |
 | skill | `skills/how/SKILL.md` | B | `plugin/manual/pstack/skills/how/SKILL.md` | P1 | P1 用宿主原生 subagent；P2 可走 Orca 车道 |
+| skill | `skills/in-your-own-words/SKILL.md` | A | `plugin/manual/pstack/skills/in-your-own-words/SKILL.md` | P1 | 0.15.29 新增 |
 | skill | `skills/interrogate/SKILL.md` | B | `plugin/manual/pstack/skills/interrogate/SKILL.md`<br>`src/main/fanout/tools.ts` | P2 | 审查模型按 routing.json 现读；Jev J4/J5 分诊；套用 P0–P3 统一分级；draft-gated-handoff 车道默认不跑 |
+| skill | `skills/ketchup/SKILL.md` | A | `plugin/manual/pstack/skills/ketchup/SKILL.md` | P1 | 0.15.29 新增 |
+| skill | `skills/maintain-formal-verification-skill/SKILL.md` | A | `plugin/manual/pstack/skills/maintain-formal-verification-skill/SKILL.md` | P3 | 0.15.29 新增；同 create-formal-verification-skill |
 | skill | `skills/maintain-verification-skill/SKILL.md` | B | `plugin/manual/pstack/skills/maintain-verification-skill/SKILL.md` | P3 | 同 create-verification-skill |
 | skill | `skills/make-bot-ui/SKILL.md` | D | `plugin/manual/pstack/skills/make-bot-ui/SKILL.md` | P3 | Grok Bot webhook/Tailscale 是 Cursor 专属；意图改为“用 Cindy 插件面板做自定义入口” |
 | skill | `skills/no-comments/SKILL.md` | B | `plugin/manual/pstack/skills/no-comments/SKILL.md` | P1 | 默认只报告；发现多为 P3，按统一分级不自动修，用户点名才改 |
+| skill | `skills/poteto-help/SKILL.md` | A | `plugin/manual/pstack/skills/poteto-help/SKILL.md` | P1 | 0.15.29 新增；Cursor 专属入口说明按原文保留 |
 | skill | `skills/poteto-mode/SKILL.md` | B | `plugin/manual/pstack/skills/poteto-mode/SKILL.md`<br>`src/main/tools/pstack.ts` | P1 | 路由 + 非协商规则 + 用户规则覆盖层；持续模式先用工具结果续接，P3 评估 will-user-message 钩子 |
 | skill | `skills/principle-attack-the-premise/SKILL.md` | A | `plugin/manual/pstack/skills/principle-attack-the-premise/SKILL.md` | P1 | 触发条件与规则原样保留 |
 | skill | `skills/principle-boundary-discipline/SKILL.md` | A | `plugin/manual/pstack/skills/principle-boundary-discipline/SKILL.md` | P1 | 触发条件与规则原样保留 |
@@ -79,6 +84,7 @@ UNMAPPED=0
 | skill | `skills/recall/SKILL.md` | B | `plugin/manual/pstack/skills/recall/SKILL.md` | P1 | 来源换成插件台账 + Cindy 历史检索；不跨工作区扫会话 |
 | skill | `skills/reflect/SKILL.md` | B | `plugin/manual/pstack/skills/reflect/SKILL.md` | P3 | 改 skill 只出 diff 提案，写入需授权 |
 | skill | `skills/setup-pstack/SKILL.md` | B | `plugin/manual/pstack/skills/setup-pstack/SKILL.md`<br>`src/node/routes/routing.ts` | P1 | 角色→模型从 routing.json 现读，不写 ~/.cursor |
+| skill | `skills/sharpen/SKILL.md` | A | `plugin/manual/pstack/skills/sharpen/SKILL.md` | P1 | 0.15.29 新增 |
 | skill | `skills/show-me-your-work/SKILL.md` | C | `plugin/manual/pstack/skills/show-me-your-work/SKILL.md`<br>`src/main/ledger.ts` | P1 | TSV 存插件 data 目录，可导出到 <仓>/_tmp/pstack/ |
 | skill | `skills/swarm/SKILL.md` | B | `plugin/manual/pstack/skills/swarm/SKILL.md`<br>`src/main/fanout/tools.ts` | P2 | cloud 环境改本机 Orca Worker；PASS/ISSUES/BLOCKED 报告结构保留 |
 | skill | `skills/tdd/SKILL.md` | A | `plugin/manual/pstack/skills/tdd/SKILL.md` | P1 |  |
@@ -113,7 +119,9 @@ UNMAPPED=0
 | agent | `agents/comment-sicko.md` | B | `plugin/manual/pstack/agents/comment-sicko.md`<br>`plugin/manual/keel/fanout/lanes/comment-sicko.md` | P1 | 只读报告 |
 | agent | `agents/poteto-agent.md` | B | `plugin/manual/pstack/agents/poteto-agent.md`<br>`plugin/manual/keel/fanout/lanes/owner.md` | P2 | 不注册 agent 类型，改为派工包模板 |
 | script | `skills/poteto-mode/scripts/bootstrap.ts` | E | — | — | 依赖预打包进 worker.cjs，运行期不安装 |
+| script | `skills/poteto-mode/scripts/bun.lock` | E | — | — | 依赖由新仓 package-lock.json 锁定 |
 | script | `skills/poteto-mode/scripts/check-plan.mjs` | C | `src/node/plan/check-plan.ts` | P3 |  |
+| script | `skills/poteto-mode/scripts/check-plan.test.ts` | C | `tests/check-plan.test.ts` | P3 | 0.15.29 新增；fence 用例改为进程内调用 checkPlan |
 | script | `skills/poteto-mode/scripts/orch/orch.test.ts` | C | `tests/orch.test.ts` | P3 | 去掉 3 处 Bun API |
 | script | `skills/poteto-mode/scripts/orch/orch.ts` | C | `src/node/orch/cli.ts`<br>`src/node/orch/rpc.ts` | P3 | commander 子命令改为 JSON-RPC 方法 |
 | script | `skills/poteto-mode/scripts/orch/store.ts` | C | `src/node/orch/store.ts` | P3 | 纯 node:fs，近原样 |
@@ -144,6 +152,8 @@ UNMAPPED=0
 | reference | `skills/interrogate/references/lead-judgment.md` | A | `plugin/manual/pstack/skills/interrogate/references/lead-judgment.md` | P2 |  |
 | reference | `skills/interrogate/references/reviewer-prompt.md` | A | `plugin/manual/pstack/skills/interrogate/references/reviewer-prompt.md` | P2 |  |
 | reference | `skills/interrogate/references/rubric.md` | A | `plugin/manual/pstack/skills/interrogate/references/rubric.md` | P2 |  |
+| reference | `skills/poteto-help/references/prompting.md` | A | `plugin/manual/pstack/skills/poteto-help/references/prompting.md` | P1 |  |
+| reference | `skills/poteto-help/references/recipes.md` | A | `plugin/manual/pstack/skills/poteto-help/references/recipes.md` | P1 |  |
 | reference | `skills/poteto-mode/references/bugbot-triage.md` | A | `plugin/manual/pstack/skills/poteto-mode/references/bugbot-triage.md` | P1 |  |
 | reference | `skills/reflect/references/divergent-reviewer.md` | A | `plugin/manual/pstack/skills/reflect/references/divergent-reviewer.md` | P3 |  |
 | reference | `skills/reflect/references/judgment-reviewer.md` | A | `plugin/manual/pstack/skills/reflect/references/judgment-reviewer.md` | P3 |  |

@@ -1,4 +1,4 @@
-// Ported from pstack skills/poteto-mode/scripts/orch/orch.ts @ e43c7ee (MIT, (c) 2026 Lauren Tan).
+// Ported from pstack skills/poteto-mode/scripts/orch/orch.ts @ 190d287 (MIT, (c) 2026 Lauren Tan).
 // Keel change: dropped the bun shebang and bootstrap (dependencies are bundled); the same
 // commands are also served as JSON-RPC `orch/*` (src/node/orch/rpc.ts).
 import {
@@ -7,6 +7,7 @@ import {
   openStore,
   parseVerdict,
   type Counts,
+  type Forge,
   type Frontier,
   type InboxPointer,
   type OpenGate,
@@ -80,6 +81,7 @@ interface GateResolveOptions {
 
 interface FrontierSetOptions {
   readonly repo?: string;
+  readonly forge: Forge;
   readonly prs?: readonly number[];
 }
 
@@ -471,14 +473,23 @@ function createProgram(io: Io): Command {
 
   const frontier = program
     .command("frontier")
-    .description("manage the Graphite stack frontier")
+    .description("manage the stack frontier")
     .action(() => requireSubcommand(program));
-  leaf(frontier, "set", "discover the Graphite stack and set the frontier")
+  leaf(
+    frontier,
+    "set",
+    "resolve the pull request base chain and set the frontier"
+  )
     .addOption(
       new Option(
         "--repo <dir>",
         "repository directory (or ORCH_REPO)"
       ).env("ORCH_REPO")
+    )
+    .addOption(
+      new Option("--forge <forge>", "pull request forge")
+        .choices(["gh", "origin"])
+        .default("gh")
     )
     .option(
       "--prs <n,...>",
@@ -492,6 +503,7 @@ function createProgram(io: Io): Command {
         (store) =>
           store.frontier.set({
             repo: frontierRepo(options),
+            forge: options.forge,
             prs: options.prs,
           }),
         frontierLine

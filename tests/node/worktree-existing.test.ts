@@ -139,3 +139,21 @@ describe("git changed-files guards the write scope", () => {
     expect(checkScope(files, ["src/**"]).violations).toContain("secret.txt");
   });
 });
+
+describe("worktree/audit base (upstream worktree-audit.sh -b)", () => {
+  it("checks MERGED against the given base, defaults to origin/<default>, and rejects a missing base", async () => {
+    const r = repo();
+    r.g("update-ref", "refs/remotes/origin/main", r.sha());
+    r.g("worktree", "add", "-q", "-b", "feat", join(r.dir, ".worktrees", "feat"));
+    const wt = join(r.dir, ".worktrees", "feat");
+    writeFileSync(join(wt, "f.txt"), "x\n");
+    execFileSync("git", ["add", "f.txt"], { cwd: wt });
+    execFileSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "feat"], { cwd: wt });
+    r.g("update-ref", "refs/remotes/origin/integration", execFileSync("git", ["rev-parse", "HEAD"], { cwd: wt }).toString().trim());
+    const row = (out: { result?: unknown }) => (out.result as { path: string; merged: boolean }[]).find((x) => resolve(x.path) === resolve(wt))!;
+    expect(row(await dispatch("worktree/audit", { repo_dir: r.dir })).merged).toBe(false);
+    expect(row(await dispatch("worktree/audit", { repo_dir: r.dir, base_ref: "origin/integration" })).merged).toBe(true);
+    const missing = await dispatch("worktree/audit", { repo_dir: r.dir, base_ref: "origin/nope" });
+    expect(missing.error?.message).toMatch(/origin\/nope/);
+  });
+});

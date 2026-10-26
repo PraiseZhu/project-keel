@@ -9,7 +9,7 @@ import type { KeelProfile, Verification } from "../../shared/types.ts";
 import { ToolError, gh, ghJson, git, gitRaw } from "../env.ts";
 import { withCwd } from "../context.ts";
 import { originRepo, readBaseFile, resolveExisting, resolvePr, snapshot } from "./snapshot.ts";
-import { GhGitHubReader } from "./upstream/github.ts";
+import { GhGitHubReader, resolveReviewThreads } from "./upstream/github.ts";
 import { inspectVigil, publishVigil } from "./vigil-handoff.ts";
 
 
@@ -133,7 +133,7 @@ export async function prReady(profile: KeelProfile, p: { repo_dir?: string; repo
 
 export async function prThreads(profile: KeelProfile, p: { repo_dir?: string; repo?: string; pr?: number }) {
   const ctx = await resolvePr(p);
-  const threads = await withCwd(p.repo_dir, () => new GhGitHubReader().reviewThreads(ctx));
+  const threads = await withCwd(p.repo_dir, () => resolveReviewThreads(new GhGitHubReader(), ctx));
   void profile;
   return {
     repo: `${ctx.owner}/${ctx.repo}`,

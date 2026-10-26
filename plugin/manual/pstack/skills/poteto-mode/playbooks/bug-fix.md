@@ -1,8 +1,8 @@
-> 移植自 pstack skills/poteto-mode/playbooks/bug-fix.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/poteto-mode/playbooks/bug-fix.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 ### Bug fix
 
-**You own this task. Plan, review, verify.** Delegate investigation and the fix to subagents, stay in the lead.
+**You own this task. Plan, review, verify.** Delegate investigation and the fix to subagents, stay in the lead. Pick each subagent's reasoning level and fast or standard speed for the job, per the Subagents section.
 
 Be scientific. Every shipped line traces to runtime evidence. Belt-and-suspenders that "might help" is a hypothesis, not a fix. It does not ship. When evidence refutes a hypothesis, revert what it motivated. The smallest change the evidence justifies ships, nothing more.
 

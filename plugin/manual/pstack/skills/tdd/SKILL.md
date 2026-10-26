@@ -1,4 +1,4 @@
-> 移植自 pstack skills/tdd/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/tdd/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（tdd）：Use only when the user explicitly asks for TDD, a failing test, or a regression test, OR when the bug has an obvious cheap local test target. Skip when the test path is unclear, expensive, integration-heavy, or not requested.
 

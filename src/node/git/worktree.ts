@@ -126,11 +126,23 @@ export function bucketOf(r: RawRow): WorktreeAuditRow["bucket"] {
   return "review";
 }
 
-/** Read-only unless `refresh` (prune refreshes origin/<main> before deciding what is merged). */
-export async function audit(repoDir: string, opts: { refresh?: boolean } = {}): Promise<WorktreeAuditRow[]> {
+/**
+ * Read-only unless `refresh` (prune refreshes the base before deciding what is merged).
+ * `base` is the ref MERGED checks against; default origin/<default branch>. Pass it when PRs
+ * merge into a branch other than the remote's default (upstream worktree-audit.sh -b).
+ */
+export async function audit(repoDir: string, opts: { refresh?: boolean; base?: string } = {}): Promise<WorktreeAuditRow[]> {
   const root = await repoRoot(repoDir);
   const main = await defaultBranch(root);
-  if (opts.refresh) await gitRaw(["fetch", "origin", main, "--quiet"], { cwd: root, timeoutMs: 120_000 });
+  const base = assertRef(opts.base ?? `origin/${main}`);
+  if (opts.refresh && base.startsWith("origin/")) {
+    const name = base.slice("origin/".length);
+    await gitRaw(["fetch", "origin", `+refs/heads/${name}:refs/remotes/${base}`, "--quiet"], { cwd: root, timeoutMs: 120_000 });
+  }
+  // An explicit base must exist; the default keeps the old best-effort behaviour (merged=no) without a remote.
+  if (opts.base && (await gitRaw(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd: root })).code !== 0) {
+    throw new ToolError("WORKTREE_FAILED", `找不到基线分支 ${base}；先 fetch，或换一个 base_ref。`);
+  }
   const list = await git(["worktree", "list", "--porcelain"], { cwd: root });
   const paths = list.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9));
   const prsRaw = await ghRaw(["pr", "list", "--author", "@me", "--state", "all", "--limit", "500", "--json", "number,state,headRefName,headRefOid"], { cwd: root });
@@ -149,7 +161,7 @@ export async function audit(repoDir: string, opts: { refresh?: boolean } = {}): 
     }
     const head = (await gitRaw(["rev-parse", "HEAD"], { cwd: wt })).stdout.trim();
     const ts = Number((await gitRaw(["log", "-1", "--format=%ct", "HEAD"], { cwd: wt })).stdout.trim() || 0);
-    const merged = (await gitRaw(["merge-base", "--is-ancestor", head, `origin/${main}`], { cwd: root })).code === 0;
+    const merged = (await gitRaw(["merge-base", "--is-ancestor", head, base], { cwd: root })).code === 0;
     const porcelain = (await gitRaw(["status", "--porcelain"], { cwd: wt })).stdout;
     const b = await gitRaw(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: wt });
     const branch = b.code === 0 ? b.stdout.trim() : null;
@@ -172,8 +184,8 @@ export async function audit(repoDir: string, opts: { refresh?: boolean } = {}): 
   return rows;
 }
 
-export async function prune(repoDir: string, paths: readonly string[]) {
-  const rows = await audit(repoDir, { refresh: true });
+export async function prune(repoDir: string, paths: readonly string[], base?: string) {
+  const rows = await audit(repoDir, { refresh: true, ...(base ? { base } : {}) });
   const root = await repoRoot(repoDir);
   const removed: string[] = [];
   const refused: { path: string; reason: string }[] = [];

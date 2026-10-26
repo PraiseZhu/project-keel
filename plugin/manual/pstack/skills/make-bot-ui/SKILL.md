@@ -1,6 +1,6 @@
-> 移植自 pstack skills/make-bot-ui/SKILL.md @ e43c7ee（MIT）。改写：port-feature：A Cindy plugin panel (agent-action template) replaces the webhook routine, sender key and Tailscale.
+> 移植自 pstack skills/make-bot-ui/SKILL.md @ 190d287（MIT）。改写：port-feature：A Cindy plugin panel (agent-action template) replaces the webhook routine, sender key and Tailscale.
 
-> 上游说明（Make Bot UI）：>-
+> 上游说明（make-bot-ui）：>-
 
 **Keel 改写（优先于下文上游内容）**
 

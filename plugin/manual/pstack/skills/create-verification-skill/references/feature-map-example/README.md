@@ -1,4 +1,4 @@
-> 移植自 pstack skills/create-verification-skill/references/feature-map-example/README.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/create-verification-skill/references/feature-map-example/README.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 # Notes verification map
 

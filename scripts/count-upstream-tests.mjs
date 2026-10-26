@@ -24,7 +24,7 @@ function titles(src) {
 if (opt("--snapshot")) {
   const dir = opt("--snapshot");
   const files = readdirSync(dir).filter((f) => f.endsWith(".test.ts")).sort();
-  const snap = { upstream: "cursor/plugins pstack/skills/poteto-mode/scripts/watch-pr", sha: opt("--sha") ?? "e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a", files: Object.fromEntries(files.map((f) => [f, titles(readFileSync(join(dir, f), "utf8"))])) };
+  const snap = { upstream: "cursor/plugins pstack/skills/poteto-mode/scripts/watch-pr", sha: opt("--sha") ?? JSON.parse(readFileSync("tools/upstream.json", "utf8")).sha, files: Object.fromEntries(files.map((f) => [f, titles(readFileSync(join(dir, f), "utf8"))])) };
   writeFileSync(snapPath, JSON.stringify(snap, null, 2) + "\n");
   console.log(`snapshot: ${Object.values(snap.files).flat().length} cases from ${files.length} files`);
   process.exit(0);

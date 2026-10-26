@@ -1,4 +1,4 @@
-> 移植自 pstack skills/principle-boundary-discipline/SKILL.md @ e43c7ee（MIT）。改写：仅宿主名词替换
+> 移植自 pstack skills/principle-boundary-discipline/SKILL.md @ 190d287（MIT）。改写：仅宿主名词替换
 
 > 上游说明（principle-boundary-discipline）：Apply when wiring validation, error handling, or framework adapters. Concentrate guards at system boundaries (CLI, config, network, external APIs); trust internal types and keep business logic in pure functions.
 

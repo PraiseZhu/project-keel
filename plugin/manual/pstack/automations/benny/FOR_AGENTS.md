@@ -1,4 +1,4 @@
-> 移植自 pstack automations/benny/FOR_AGENTS.md @ e43c7ee（MIT）。改写：port-feature：Same as setup-benny.
+> 移植自 pstack automations/benny/FOR_AGENTS.md @ 190d287（MIT）。改写：port-feature：Same as setup-benny.
 
 **Keel 改写（优先于下文上游内容）**
 

@@ -46,8 +46,8 @@ const io: SettingsIO = {
       return { ok: false, status: 0, message: e instanceof Error ? e.message : "写入 /kv 失败。" };
     }
   },
-  async getAgentModels() {
-    const r = await fetch("/agent-models");
+  async getAgentModels(url = "/agent-models") {
+    const r = await fetch(url);
     let body: unknown;
     try { body = await r.json(); } catch { body = undefined; }
     return { status: r.status, body };
@@ -210,7 +210,7 @@ function paintDirty(): void {
 }
 
 function currentView() {
-  return buildStageView(draft, harness, catalog.models, isCatalogReady(catalog));
+  return buildStageView(draft, harness, catalog.models, isCatalogReady(catalog), catalog.catalogNote);
 }
 
 function paintCatalogStatus(): void {

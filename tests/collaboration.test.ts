@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectParallelReports, readExecutionRoute, sameRoute } from '../src/main/graph/collaboration.ts';
+import { collectParallelReports, readExecutionRoute, routeMatches, sameRoute } from '../src/main/graph/collaboration.ts';
 import type { Route } from '../src/shared/manual/schema.ts';
 
 const first: Route = { agent: 'codex', model: 'gpt-6-luna', provider_id: 'gateway-a', effort: 'high' };
@@ -39,5 +39,22 @@ describe('collaboration results', () => {
     expect(sameRoute(first, second)).toBe(false);
     expect(sameRoute(first, { ...first, effort: 'medium' })).toBe(false);
     expect(readExecutionRoute({ model: first.model, provider_id: 'gateway-a' })).toBeUndefined();
+  });
+  it('treats missing, null and local as the same device, and splits same-name models on different computers', () => {
+    expect(sameRoute(first, { ...first, agent_device_id: 'local' })).toBe(true);
+    expect(sameRoute({ ...first, agent_device_id: 'local' }, first)).toBe(true);
+    expect(sameRoute({ ...first, agent_device_id: 'dev-a' }, { ...first, agent_device_id: 'dev-b' })).toBe(false);
+    expect(sameRoute({ ...first, agent_device_id: 'dev-a' }, first)).toBe(false);
+    const observed = readExecutionRoute({ agent: first.agent, model: first.model, provider_id: first.provider_id, effort: first.effort });
+    expect(observed).toEqual(first);
+    expect(routeMatches(observed!, { ...first, agent_device_id: 'dev-a' })).toBe(true);
+    expect(routeMatches(
+      { ...first, agent_device_id: 'dev-b' },
+      { ...first, agent_device_id: 'dev-a' },
+    )).toBe(false);
+    expect(routeMatches(
+      { ...first, agent_device_id: 'local' },
+      { ...first, agent_device_id: 'dev-a' },
+    )).toBe(false);
   });
 });

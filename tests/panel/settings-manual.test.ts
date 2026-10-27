@@ -66,6 +66,14 @@ describe("catalog 404 / 503", () => {
     const cat = await fetchCatalog(io);
     expect(cat.retry).toBe(true);
   });
+
+  it("notes when Cindy cannot read other computers and keeps the local list", async () => {
+    const io = fakeIo({ models });
+    const cat = await fetchCatalog(io);
+    expect(cat.status).toBe("ok");
+    expect(cat.models).toEqual(models);
+    expect(cat.catalogNote).toMatch(/不能读取其他电脑的模型/);
+  });
 });
 
 describe("empty efforts omit effort", () => {

@@ -5,9 +5,11 @@ import {
   DEFAULT_MANUAL,
   exportManual,
   HARNESSES,
+  isLocalDevice,
   MANUAL_VERSION,
   ManualError,
   parseManual,
+  routeDeviceId,
   type AgentModel,
   type Harness,
   type ModelManual,
@@ -15,12 +17,13 @@ import {
   type Route,
   type TaskType,
 } from "../shared/manual/schema.ts";
+import { loadRemoteCatalog } from "../shared/manual/remote-catalog.ts";
 import { validateManual, type ManualIssue } from "../shared/manual/validate.ts";
 
 export interface SettingsIO {
   getKv(): Promise<Record<string, unknown>>;
   putKv(kv: Record<string, unknown>): Promise<{ ok: boolean; status: number; message?: string }>;
-  getAgentModels(): Promise<{ status: number; body?: unknown }>;
+  getAgentModels(url?: string): Promise<{ status: number; body?: unknown }>;
   broadcast(message: unknown): void;
 }
 
@@ -29,6 +32,7 @@ export interface CatalogState {
   readonly models: readonly AgentModel[];
   readonly message: string;
   readonly retry: boolean;
+  readonly catalogNote?: string;
 }
 
 export type SaveResult =
@@ -50,19 +54,32 @@ export function composeKv(existing: Record<string, unknown>, manual: ModelManual
 
 export function routeFromModel(model: AgentModel, effort?: string): Route {
   const agent = (HARNESSES as readonly string[]).includes(model.agent) ? (model.agent as Harness) : "codex";
-  const route: Route = { agent, model: model.id, provider_id: model.providerId };
+  const route: Route = {
+    agent,
+    model: model.id,
+    provider_id: model.providerId,
+    ...(!isLocalDevice(model.agentDeviceId) ? { agent_device_id: routeDeviceId(model.agentDeviceId) } : {}),
+  };
   const declared = model.efforts && model.efforts.length > 0;
   if (declared && effort && model.efforts!.includes(effort)) return { ...route, effort };
   return route;
 }
 
-export function findModel(models: readonly AgentModel[], agent: string, model: string, providerId: string): AgentModel | undefined {
-  return models.find((m) => m.agent === agent && m.id === model && m.providerId === providerId);
+export function findModel(
+  models: readonly AgentModel[],
+  agent: string,
+  model: string,
+  providerId: string,
+  agentDeviceId?: string | null,
+): AgentModel | undefined {
+  const want = routeDeviceId(agentDeviceId);
+  return models.find((m) => m.agent === agent && m.id === model && m.providerId === providerId
+    && routeDeviceId(m.agentDeviceId) === want);
 }
 
 export function staleReason(route: Route, models: readonly AgentModel[]): string | undefined {
   if (!route.model || !route.provider_id) return "尚未选择模型。";
-  const hit = findModel(models, route.agent, route.model, route.provider_id);
+  const hit = findModel(models, route.agent, route.model, route.provider_id, route.agent_device_id);
   if (!hit || hit.visible === false) return `模型 ${route.model} 在 agent ${route.agent} / 来源 ${route.provider_id} 下不存在。`;
   if (!hit.efforts || hit.efforts.length === 0) {
     if (route.effort !== undefined) return "该项未声明档位，只接受不填 effort。";
@@ -92,8 +109,9 @@ export function readCatalog(status: number, body: unknown): CatalogState {
 
 export async function fetchCatalog(io: SettingsIO): Promise<CatalogState> {
   try {
-    const r = await io.getAgentModels();
-    return readCatalog(r.status, r.body);
+    const catalog = await loadRemoteCatalog((url) => io.getAgentModels(url));
+    const state = catalog.ok ? readCatalog(200, { models: catalog.models }) : readCatalog(catalog.status, { models: catalog.models });
+    return catalog.catalogNote ? { ...state, catalogNote: catalog.catalogNote } : state;
   } catch (e) {
     return { status: "error", models: [], retry: false, message: `读取模型清单失败：${e instanceof Error ? e.message : String(e)}` };
   }
@@ -169,7 +187,7 @@ function routeAtPath(manual: ModelManual, path: string): Route | undefined {
 
 function routeTuple(route: Route | undefined): string {
   if (!route) return "";
-  return JSON.stringify([route.agent, route.model, route.provider_id, route.effort ?? ""]);
+  return JSON.stringify([route.agent, route.model, route.provider_id, route.effort ?? "", routeDeviceId(route.agent_device_id)]);
 }
 
 /** Availability issues exempt only when the same route tuple is unchanged. Same error text is not enough. */

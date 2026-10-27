@@ -1,17 +1,23 @@
 import { KeelError } from '../host.ts';
-import type { Route } from '../../shared/manual/schema.ts';
+import { sameDevice, type Route } from '../../shared/manual/schema.ts';
 import { LEAD_DEFAULT_PROVIDER } from '../../shared/manual/stages.ts';
 import { parseNodeReport, type NodeReport } from './report.ts';
 
 export function sameRoute(left: Route, right: Route): boolean {
   return left.agent === right.agent && left.model === right.model
-    && left.provider_id === right.provider_id && (left.effort ?? '') === (right.effort ?? '');
+    && left.provider_id === right.provider_id && (left.effort ?? '') === (right.effort ?? '')
+    && sameDevice(left.agent_device_id, right.agent_device_id);
 }
 
 /** A 查资料 sub (provider LEAD_DEFAULT_PROVIDER) only pins the harness; configured routes must match exactly. */
 export function routeMatches(observed: Route, expected: Route): boolean {
   if (expected.provider_id === LEAD_DEFAULT_PROVIDER) return observed.agent === expected.agent;
-  return sameRoute(observed, expected);
+  if (observed.agent !== expected.agent || observed.model !== expected.model
+    || observed.provider_id !== expected.provider_id || (observed.effort ?? '') !== (expected.effort ?? '')) {
+    return false;
+  }
+  if (observed.agent_device_id === undefined) return true;
+  return sameDevice(observed.agent_device_id, expected.agent_device_id);
 }
 
 export function readExecutionRoute(raw: unknown): Route | undefined {
@@ -20,8 +26,12 @@ export function readExecutionRoute(raw: unknown): Route | undefined {
   if (!['codex', 'claude-code', 'pi'].includes(String(value.agent)) || typeof value.model !== 'string'
     || typeof value.provider_id !== 'string' || !value.model || !value.provider_id) return undefined;
   if (value.effort !== undefined && typeof value.effort !== 'string') return undefined;
-  return { agent: value.agent as Route['agent'], model: value.model, provider_id: value.provider_id,
+  const route: Route = { agent: value.agent as Route['agent'], model: value.model, provider_id: value.provider_id,
     ...(typeof value.effort === 'string' ? { effort: value.effort } : {}) };
+  if (!Object.prototype.hasOwnProperty.call(value, 'agent_device_id')) return route;
+  const device = value.agent_device_id;
+  if (device !== null && typeof device !== 'string') return undefined;
+  return { ...route, agent_device_id: typeof device === 'string' && device ? device : 'local' };
 }
 
 export function collectParallelReports(parentKey: string, arms: readonly { dispatch_key: string; route: Route }[], raw: unknown): NodeReport {

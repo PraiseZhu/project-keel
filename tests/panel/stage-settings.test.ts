@@ -8,6 +8,9 @@ import {
   buildStageView,
   catalogArrivalAction,
   isCatalogReady,
+  modelLabel,
+  modelValue,
+  parseModelValue,
   renderStageRowsHtml,
   routeAfterModelChange,
   type SelectView,
@@ -15,6 +18,7 @@ import {
   type StageSettingsView,
 } from "../../src/panel/stage-settings.ts";
 import { stageCatalog, valueOf } from "./stage-catalog.ts";
+import { REMOTE_UNAVAILABLE_NOTE } from "../../src/shared/manual/remote-catalog.ts";
 
 const models = stageCatalog();
 
@@ -339,5 +343,71 @@ describe("rendering and catalog arrival", () => {
     expect(catalogArrivalAction({ seqAccepted: true, interacting: false, render: false })).toBe("store");
     expect(catalogArrivalAction({ seqAccepted: true, interacting: true })).toBe("defer");
     expect(catalogArrivalAction({ seqAccepted: true, interacting: false })).toBe("store-and-render");
+  });
+});
+
+describe("remote catalog options", () => {
+  const device = "device-claude-aaaaaaaa";
+  const remoteOpus = {
+    id: "anthropic/claude-opus-5-5",
+    name: "Opus 5.5",
+    agent: "claude-code",
+    providerId: "anthropic",
+    providerName: "Anthropic",
+    efforts: ["low", "medium", "high", "xhigh", "max"] as const,
+    defaultEffort: "high",
+    visible: true,
+    agentDeviceId: device,
+    deviceName: "Claude",
+  };
+  const mixed = [...models, remoteOpus];
+
+  it("keeps local labels, 3-tuple values, and groups, and labels remote items with the computer name", () => {
+    expect(modelLabel(models[0]!)).toBe("Opus 5.5 · XD Gateway");
+    expect(modelValue({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "xd" })).toBe(opus);
+    expect(parseModelValue(opus)).toEqual({ agent: "claude-code", id: "anthropic/claude-opus-5-5", providerId: "xd" });
+    expect(modelLabel(remoteOpus)).toBe("Opus 5.5 · Anthropic · Claude");
+    const remoteValue = valueOf("claude-code", "anthropic/claude-opus-5-5", "anthropic", device);
+    expect(parseModelValue(remoteValue)).toEqual({
+      agent: "claude-code", id: "anthropic/claude-opus-5-5", providerId: "anthropic", agentDeviceId: device,
+    });
+    const v = buildStageView(DEFAULT_MANUAL, "codex", mixed, true);
+    const plan = control(v, "plan", "primary", "model");
+    expect(groupLabels(plan).slice(0, 2)).toEqual(["Claude Code · XD Gateway", "Claude Code · Art Cindy"]);
+    expect(groupLabels(plan)).toContain("Claude");
+    expect(plan.groups.find((g) => g.label === "Claude")!.options.map((o) => o.label)).toContain("Opus 5.5 · Anthropic · Claude");
+    expect(offered(plan)).toContain(remoteValue);
+    expect(offered(plan)).toContain(opus);
+  });
+
+  it("round-trips a remote selection and keeps an unread saved route", () => {
+    const remoteValue = valueOf("claude-code", "anthropic/claude-opus-5-5", "anthropic", device);
+    const next = applyStageChange(DEFAULT_MANUAL, "codex", mixed, { stage: "plan", slot: "primary", act: "model", value: remoteValue });
+    expect(readStages(next.manual, "sol").plan).toMatchObject({ agent: "claude-code", model: "anthropic/claude-opus-5-5", provider_id: "anthropic", agent_device_id: device });
+    const again = buildStageView(next.manual, "codex", mixed, true);
+    expect(control(again, "plan", "primary", "model").value).toBe(remoteValue);
+    const unread = buildStageView(next.manual, "codex", models, true);
+    const current = control(unread, "plan", "primary", "model").options.find((o) => o.value === remoteValue)!;
+    expect(current.disabled).toBe(true);
+    expect(current.label).toMatch(/当前：/);
+    expect(current.label).toMatch(/Claude/);
+    expect(current.label).toMatch(/不可用/);
+    expect(control(unread, "plan", "primary", "model").value).toBe(remoteValue);
+  });
+
+  it("shows the remote-capability note without clearing local options", () => {
+    const v = buildStageView(DEFAULT_MANUAL, "codex", models, true, REMOTE_UNAVAILABLE_NOTE);
+    expect(v.catalogNote).toBe(REMOTE_UNAVAILABLE_NOTE);
+    expect(control(v, "code", "primary", "model").value).toBe(solArt);
+    expect(renderStageRowsHtml(v)).toContain(REMOTE_UNAVAILABLE_NOTE);
+  });
+
+  it("names an unread computer with the first 8 characters of the device id", () => {
+    const unnamed = { ...remoteOpus, deviceName: undefined as unknown as string };
+    const remoteValue = valueOf("claude-code", unnamed.id, unnamed.providerId, device);
+    const saved = applyStageChange(DEFAULT_MANUAL, "codex", [...models, unnamed], { stage: "plan", slot: "primary", act: "model", value: remoteValue }).manual;
+    const unread = buildStageView(saved, "codex", models, true);
+    const current = control(unread, "plan", "primary", "model").options.find((o) => o.value === remoteValue)!;
+    expect(current.label).toContain(device.slice(0, 8));
   });
 });

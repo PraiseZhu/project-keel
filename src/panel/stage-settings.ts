@@ -1,6 +1,7 @@
 // Pure logic for the settings page "工作环节": view data, HTML fragments and edits. DOM and events stay in settings.ts.
 
-import { DEFAULT_MANUAL, cloneManual, type AgentModel, type Harness, type ModelManual, type Profile, type Route } from "../shared/manual/schema.ts";
+import { DEFAULT_MANUAL, cloneManual, isLocalDevice, type AgentModel, type Harness, type ModelManual, type Profile, type Route } from "../shared/manual/schema.ts";
+import { deviceDisplayName } from "../shared/manual/remote-catalog.ts";
 import {
   allowedHarnesses,
   blockedReason,
@@ -89,20 +90,29 @@ function gatewayOf(m: Pick<AgentModel, "providerId" | "providerName">): string {
   return m.providerName ?? m.providerId;
 }
 export function modelLabel(m: AgentModel): string {
-  return `${m.name ?? m.id} · ${gatewayOf(m)}`;
+  const base = `${m.name ?? m.id} · ${gatewayOf(m)}`;
+  return isLocalDevice(m.agentDeviceId) ? base : `${base} · ${m.deviceName ?? deviceDisplayName(m.agentDeviceId!)}`;
 }
 export function routeName(route: Route, models: readonly AgentModel[]): string {
-  const hit = findModel(models, route.agent, route.model, route.provider_id);
-  return hit ? modelLabel(hit) : `${route.model} · ${route.provider_id}`;
+  const hit = findModel(models, route.agent, route.model, route.provider_id, route.agent_device_id);
+  if (hit) return modelLabel(hit);
+  const base = `${route.model} · ${route.provider_id}`;
+  return isLocalDevice(route.agent_device_id) ? base : `${base} · ${deviceDisplayName(route.agent_device_id!)}`;
 }
-export function modelValue(route?: Pick<Route, "agent" | "model" | "provider_id">): string {
+export function modelValue(route?: Pick<Route, "agent" | "model" | "provider_id" | "agent_device_id">): string {
   if (!route?.model || !route.provider_id) return "";
-  return JSON.stringify([route.agent, route.model, route.provider_id]);
+  if (isLocalDevice(route.agent_device_id)) return JSON.stringify([route.agent, route.model, route.provider_id]);
+  return JSON.stringify([route.agent, route.model, route.provider_id, route.agent_device_id]);
 }
-export function parseModelValue(value: string): { agent: string; id: string; providerId: string } | undefined {
+export function parseModelValue(value: string): { agent: string; id: string; providerId: string; agentDeviceId?: string } | undefined {
   try {
     const p = JSON.parse(value) as unknown;
-    if (Array.isArray(p) && p.length === 3 && p.every((x) => typeof x === "string")) return { agent: p[0] as string, id: p[1] as string, providerId: p[2] as string };
+    if (!Array.isArray(p) || !p.every((x) => typeof x === "string")) return undefined;
+    if (p.length === 3) return { agent: p[0] as string, id: p[1] as string, providerId: p[2] as string };
+    if (p.length === 4) {
+      const device = p[3] as string;
+      return { agent: p[0] as string, id: p[1] as string, providerId: p[2] as string, ...(isLocalDevice(device) ? {} : { agentDeviceId: device }) };
+    }
   } catch { /* not one of ours */ }
   return undefined;
 }
@@ -150,7 +160,7 @@ function candidates(stage: StageId, ctx: Ctx, onlyAgent?: string): AgentModel[] 
   for (const m of ctx.models) {
     if (!stageModelAllowed(stage, m, ctx.lead, ctx.writer, ctx.writerModel)) continue;
     if (onlyAgent !== undefined && m.agent !== onlyAgent) continue;
-    const key = `${m.agent}\t${m.id}\t${m.providerId}`;
+    const key = `${m.agent}\t${m.id}\t${m.providerId}\t${m.agentDeviceId ?? "local"}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(m);
@@ -159,18 +169,31 @@ function candidates(stage: StageId, ctx: Ctx, onlyAgent?: string): AgentModel[] 
 }
 
 function optionOf(m: AgentModel): SelectOptionView {
-  return { value: JSON.stringify([m.agent, m.id, m.providerId]), label: modelLabel(m) };
+  return {
+    value: modelValue({ agent: m.agent as Harness, model: m.id, provider_id: m.providerId, agent_device_id: m.agentDeviceId }),
+    label: modelLabel(m),
+  };
 }
 
-/** One optgroup per "执行框架 · 网关", Claude Code first, gateways in catalog order. */
+/** Local items: one optgroup per "执行框架 · 网关". Remote items: one optgroup per computer. */
 function groupModels(list: readonly AgentModel[]): SelectGroupView[] {
   const groups: SelectGroupView[] = [];
+  const local = list.filter((m) => isLocalDevice(m.agentDeviceId));
   for (const agent of STAGE_HARNESSES) {
     const byGateway = new Map<string, AgentModel[]>();
-    for (const m of list.filter((x) => x.agent === agent)) byGateway.set(m.providerId, [...(byGateway.get(m.providerId) ?? []), m]);
+    for (const m of local.filter((x) => x.agent === agent)) byGateway.set(m.providerId, [...(byGateway.get(m.providerId) ?? []), m]);
     for (const items of byGateway.values()) {
       groups.push({ label: `${agentLabel(agent)} · ${gatewayOf(items[0]!)}`, options: items.map(optionOf) });
     }
+  }
+  const remote = list.filter((m) => !isLocalDevice(m.agentDeviceId));
+  const byDevice = new Map<string, AgentModel[]>();
+  for (const m of remote) {
+    const id = m.agentDeviceId!;
+    byDevice.set(id, [...(byDevice.get(id) ?? []), m]);
+  }
+  for (const items of byDevice.values()) {
+    groups.push({ label: items[0]!.deviceName ?? deviceDisplayName(items[0]!.agentDeviceId!), options: items.map(optionOf) });
   }
   return groups;
 }
@@ -179,7 +202,7 @@ function groupModels(list: readonly AgentModel[]): SelectGroupView[] {
 /** Keep the old effort when the new model supports it, else the model's default, else none. */
 export function routeAfterModelChange(models: readonly AgentModel[], value: string, prevEffort?: string): Route | undefined {
   const key = parseModelValue(value);
-  const hit = key ? findModel(models, key.agent, key.id, key.providerId) : undefined;
+  const hit = key ? findModel(models, key.agent, key.id, key.providerId, key.agentDeviceId) : undefined;
   if (!hit) return undefined;
   const efforts = hit.efforts ?? [];
   const want = prevEffort && efforts.includes(prevEffort) ? prevEffort : (hit.defaultEffort ?? undefined);
@@ -221,7 +244,7 @@ function routeProblem(route: Route, a: ControlArgs): string | undefined {
 function effortSelect(a: ControlArgs, route: Route | undefined): SelectView {
   const base = { act: "effort" as const, stage: a.stage, slot: a.slot, label: `${whatOf(a.stage, a.slot)}推理强度`, groups: [] };
   const current = route?.effort ?? "";
-  const hit = route ? findModel(a.ctx.models, route.agent, route.model, route.provider_id) : undefined;
+  const hit = route ? findModel(a.ctx.models, route.agent, route.model, route.provider_id, route.agent_device_id) : undefined;
   const live = hit && hit.visible !== false ? hit : undefined;
   if (!route || !live || !a.catalogReady || a.parentMissing) {
     return { ...base, value: current, disabled: true, options: [{ value: current, label: current || "默认" }] };
@@ -273,10 +296,10 @@ function reviewDescription(writer: Harness | undefined, allowed: readonly StageH
   return `写代码用的是 ${agentLabel(writer)}，所以这里只能选 ${agentLabel(allowed[0]!)}`;
 }
 
-export function buildStageView(manual: ModelManual, harness: StageHarness, models: readonly AgentModel[], catalogReady: boolean): StageSettingsView {
+export function buildStageView(manual: ModelManual, harness: StageHarness, models: readonly AgentModel[], catalogReady: boolean, remoteNote?: string): StageSettingsView {
   const sub = RESEARCH_SUB[harness];
   const research = { title: "查资料", description: `主控自带小助手，一次并行派 ${RESEARCH_PARALLEL} 个`, label: sub.label, note: sub.note };
-  const catalogNote = catalogReady ? undefined : "模型清单暂时读不到，先显示已保存的配置；读到后才能修改。";
+  const catalogNote = catalogReady ? remoteNote : "模型清单暂时读不到，先显示已保存的配置；读到后才能修改。";
   const profile = profileForHarness(manual, harness);
   if (!profile) return { harness, missing: true, ...(catalogNote ? { catalogNote } : {}), research, rows: [], problemCount: 0 };
 
@@ -360,7 +383,7 @@ export interface StageChangeResult {
 /** The catalog copy of a default route, re-fitted to the catalog's efforts. undefined = not runnable here. */
 function fitDefault(route: Route | undefined, ctx: Ctx): Route | undefined {
   if (!route) return undefined;
-  const hit = findModel(ctx.models, route.agent, route.model, route.provider_id);
+  const hit = findModel(ctx.models, route.agent, route.model, route.provider_id, route.agent_device_id);
   if (!hit || !stageModelAllowed("review", hit, ctx.lead, ctx.writer, ctx.writerModel)) return undefined;
   return routeAfterModelChange(ctx.models, modelValue(route), route.effort);
 }

@@ -1,6 +1,6 @@
 import { family } from "../fanout.ts";
 import { resolve, resolveFinalReview, type ResolvedRoutes } from "./resolve.ts";
-import { KV_MAX_BYTES, MAX_FALLBACKS, ManualError, type AgentModel, type ModelManual, type Profile, type Route } from "./schema.ts";
+import { KV_MAX_BYTES, MAX_FALLBACKS, ManualError, routeDeviceId, type AgentModel, type ModelManual, type Profile, type Route } from "./schema.ts";
 import { blockedReason, isStageHarness, otherHarness, STAGE_HARNESS_LABELS } from "./stages.ts";
 
 export type { AgentModel };
@@ -15,7 +15,9 @@ function utf8Bytes(text: string): number {
 }
 
 function matchModel(models: readonly AgentModel[], route: Route): AgentModel | undefined {
-  return models.find((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id);
+  const want = routeDeviceId(route.agent_device_id);
+  return models.find((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id
+    && routeDeviceId(m.agentDeviceId) === want);
 }
 
 function effortsOf(model: AgentModel): readonly string[] | null {

@@ -6,7 +6,7 @@ import { resolve } from "../manual/resolve.ts";
 import { findProfile, resolveDirection, resolveFinalReview } from "../../shared/manual/resolve.ts";
 import { withRun, type GraphState } from "../store/runs.ts";
 import { family } from "../../shared/fanout.ts";
-import { routeMatches, sameRoute } from './collaboration.ts';
+import { routeMatches } from './collaboration.ts';
 import { isStageHarness, LEAD_DEFAULT_PROVIDER, RESEARCH_PARALLEL, RESEARCH_SUB } from "../../shared/manual/stages.ts";
 import { PSTACK_GRAPHS } from "../../shared/graph/pstack.ts";
 import { buildBrief, reportPath } from "./brief.ts";
@@ -1032,7 +1032,8 @@ function applyAccepted(state: GraphRunState, spec: GraphSpec, event: Extract<Adv
     node.started_at = now;
     return;
   }
-  if (event.execution_route && node.planned_params && !sameRoute(event.execution_route, node.planned_params as Route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', 'Worker 回执中的路线与所选模型、来源或档位不一致。');
+  // create_worker receipts omit agent_device_id. routeMatches does not treat that omission as this computer; sameRoute would.
+  if (event.execution_route && node.planned_params && !routeMatches(event.execution_route, node.planned_params as Route)) throw new KeelError('EXECUTION_ROUTE_MISMATCH', 'Worker 回执中的路线与所选模型、来源或档位不一致。');
   if (node.planned_params) node.actual_route = event.execution_route ?? {
     agent: node.planned_params.agent as Route["agent"],
     model: node.planned_params.model,

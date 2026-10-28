@@ -12,6 +12,8 @@ describe("dispatch recovery interrupts", () => {
     if (d.next.kind !== "dispatch") throw new Error("dispatch");
     expect(readState(h).nodes.worker?.dispatch_key).toBe("run1:worker:1");
     expect(readState(h).nodes.worker?.dispatch_state).toBe("planned");
+    expect(readState(h).nodes.worker?.planned_params?.agent_device_id).toBe("local");
+    expect(d.next.create_worker?.agent_device_id).toBe("local");
   });
 
   it("created but not delivered goes to reconciling, not a second create", async () => {

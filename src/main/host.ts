@@ -40,6 +40,8 @@ export interface AgentModelsResponse {
   readonly ok: boolean;
   readonly status: number;
   readonly models: readonly AgentModel[];
+  readonly unreadDevices?: readonly { readonly agentDeviceId: string; readonly name: string }[];
+  readonly catalogNote?: string;
 }
 
 export interface Host {
@@ -62,8 +64,8 @@ export interface Host {
   sleep(ms: number): Promise<void>;
   /** Sandbox GET /kv. Electron brain is read-only. */
   kvGet(): Promise<Record<string, unknown>>;
-  /** Sandbox GET /agent-models. */
-  agentModels(): Promise<AgentModelsResponse>;
+  /** Sandbox GET /agent-models. deviceIds limits remote fetches to those locations. */
+  agentModels(opts?: { deviceIds?: readonly string[] }): Promise<AgentModelsResponse>;
   /** Optional cindy.tasks; plugin_task nodes run inside KEEL when present. */
   tasks?: CindyTasksApi;
 }

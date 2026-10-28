@@ -9,7 +9,8 @@ import { asNudgeRun, flushNudgeCardOnToolCall, handleCardActionMessage, handleTu
 import { ClockWatchdog, type ClockStatus } from "./graph/clock-watchdog.ts";
 import { NudgeController } from "./graph/nudge.ts";
 import { CLOCK_PING_METHOD, CLOCK_STATUS_PATH } from "../shared/clock.ts";
-import type { AgentModel, Host } from "./host.ts";
+import type { Host } from "./host.ts";
+import { loadRemoteCatalog } from "../shared/manual/remote-catalog.ts";
 import { parseKvResponse } from "../shared/kv-response.ts";
 import { toChildEntries } from "./host-fs.ts";
 import { knownDashboardPull, refreshDashboard, restoreDashboard, updateDashboardLocal } from "./dashboard/service.ts";
@@ -38,14 +39,20 @@ const host: Host = {
     if (!r.ok) return parseKvResponse(r.status, false, null);
     return parseKvResponse(r.status, true, await r.json());
   },
-  async agentModels() {
-    const r = await fetch("/agent-models");
-    if (!r.ok) return { ok: false, status: r.status, models: [] };
-    const data: unknown = await r.json();
-    const models = data && typeof data === "object" && Array.isArray((data as { models?: unknown }).models)
-      ? (data as { models: AgentModel[] }).models
-      : [];
-    return { ok: true, status: r.status, models };
+  async agentModels(opts?: { deviceIds?: readonly string[] }) {
+    const catalog = await loadRemoteCatalog(async (url) => {
+      const r = await fetch(url);
+      let body: unknown;
+      try { body = await r.json(); } catch { body = undefined; }
+      return { status: r.status, body };
+    }, opts);
+    return {
+      ok: catalog.ok,
+      status: catalog.status,
+      models: catalog.models,
+      ...(catalog.unreadDevices.length ? { unreadDevices: catalog.unreadDevices } : {}),
+      ...(catalog.catalogNote ? { catalogNote: catalog.catalogNote } : {}),
+    };
   },
   ...(cindy.tasks && typeof cindy.tasks.create === "function"
     ? {

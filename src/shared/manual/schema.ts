@@ -23,6 +23,21 @@ export interface Route {
   readonly model: string;
   readonly provider_id: string;
   readonly effort?: string;
+  /** Missing or 'local' = the computer running this plugin. Omitted on /kv round-trip when absent. */
+  readonly agent_device_id?: string;
+}
+
+/** Missing, null, and 'local' are the current computer. */
+export function routeDeviceId(id: string | null | undefined): string {
+  return !id || id === "local" ? "local" : id;
+}
+
+export function sameDevice(left?: string | null, right?: string | null): boolean {
+  return routeDeviceId(left) === routeDeviceId(right);
+}
+
+export function isLocalDevice(id: string | null | undefined): boolean {
+  return routeDeviceId(id) === "local";
 }
 
 export interface Slot {
@@ -70,6 +85,8 @@ export interface AgentModel {
   readonly efforts?: readonly string[] | null;
   readonly defaultEffort?: string | null;
   readonly visible?: boolean;
+  readonly agentDeviceId?: string;
+  readonly deviceName?: string;
 }
 
 export class ManualError extends Error {
@@ -169,11 +186,21 @@ function parseRoute(raw: unknown, path: string): Route {
   if (typeof o.model !== "string" || !o.model.trim()) throw new ManualError("MANUAL_INVALID", "model 不能为空。", `${path}/model`);
   if (typeof o.provider_id !== "string" || !o.provider_id.trim()) throw new ManualError("MANUAL_INVALID", "provider_id 不能为空。", `${path}/provider_id`);
   const route: Route = { agent: o.agent, model: o.model.trim(), provider_id: o.provider_id.trim() };
-  if (o.effort !== undefined) {
-    if (typeof o.effort !== "string" || !o.effort.trim()) throw new ManualError("MANUAL_INVALID", "effort 若填写必须是非空字符串。", `${path}/effort`);
-    return { ...route, effort: o.effort.trim() };
+  const withEffort = ((): Route => {
+    if (o.effort !== undefined) {
+      if (typeof o.effort !== "string" || !o.effort.trim()) throw new ManualError("MANUAL_INVALID", "effort 若填写必须是非空字符串。", `${path}/effort`);
+      return { ...route, effort: o.effort.trim() };
+    }
+    return route;
+  })();
+  if (o.agent_device_id !== undefined) {
+    if (typeof o.agent_device_id !== "string" || !o.agent_device_id.trim()) {
+      throw new ManualError("MANUAL_INVALID", "agent_device_id 若填写必须是非空字符串。", `${path}/agent_device_id`);
+    }
+    const device = o.agent_device_id.trim();
+    if (device !== "local") return { ...withEffort, agent_device_id: device };
   }
-  return route;
+  return withEffort;
 }
 
 function parseSlot(raw: unknown, path: string): Slot {

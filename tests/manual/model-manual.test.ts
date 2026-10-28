@@ -371,6 +371,27 @@ describe("validateManual", () => {
     expect(importManual(exportManual(DEFAULT_MANUAL))).toEqual(DEFAULT_MANUAL);
   });
 
+  it("old manuals without agent_device_id do not grow the field on /kv round-trip", () => {
+    const parsed = parseManual(JSON.parse(exportManual(DEFAULT_MANUAL)));
+    const json = exportManual(parsed);
+    expect(json).not.toContain("agent_device_id");
+    expect(parsed.version).toBe(DEFAULT_MANUAL.version);
+    const remote = parseManual({
+      ...cloneManual(DEFAULT_MANUAL),
+      profiles: cloneManual(DEFAULT_MANUAL).profiles.map((p) => p.id === "sol"
+        ? { ...p, lead: { ...p.lead, agent_device_id: "dev-claude" } }
+        : p),
+    });
+    expect(remote.profiles[0]!.lead.agent_device_id).toBe("dev-claude");
+    const localExplicit = parseManual({
+      ...cloneManual(DEFAULT_MANUAL),
+      profiles: cloneManual(DEFAULT_MANUAL).profiles.map((p) => p.id === "sol"
+        ? { ...p, lead: { ...p.lead, agent_device_id: "local" } }
+        : p),
+    });
+    expect("agent_device_id" in localExplicit.profiles[0]!.lead).toBe(false);
+  });
+
   it("parses old JSON without direction_route and keeps inherit", () => {
     const parsed = parseManual(legacyGrokInheritManual());
     expect(parsed.profiles[1]).toMatchObject({ id: "grok", inherit: "sol" });

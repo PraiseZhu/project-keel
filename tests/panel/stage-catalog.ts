@@ -36,6 +36,6 @@ export function stageCatalog(): AgentModel[] {
 }
 
 /** Dropdown value for a catalog entry, same encoding as the settings page. */
-export function valueOf(agent: string, id: string, providerId: string): string {
-  return JSON.stringify([agent, id, providerId]);
+export function valueOf(agent: string, id: string, providerId: string, device?: string): string {
+  return device && device !== "local" ? JSON.stringify([agent, id, providerId, device]) : JSON.stringify([agent, id, providerId]);
 }

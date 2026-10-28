@@ -14,7 +14,8 @@ import { scIdsFromMissing } from "./done.ts";
 import { GATES } from "./gates.ts";
 import { crossesFunctionBoundaryOrUnknown, failureFingerprint } from "./astra-triggers.ts";
 import type { EdgeOn, GraphNode, GraphSpec } from "../../shared/graph/spec.ts";
-import { ManualError, type AgentModel, type ModelManual, type Role, type Route } from "../../shared/manual/schema.ts";
+import { isLocalDevice, ManualError, routeDeviceId, type AgentModel, type ModelManual, type Role, type Route } from "../../shared/manual/schema.ts";
+import { collectManualDeviceIds, unreadReason, type UnreadDevice } from "../../shared/manual/remote-catalog.ts";
 import {
   ACCEPTED_TIMEOUT_MS,
   dispatchKey,
@@ -138,6 +139,7 @@ export interface AdvanceOpts {
   gates?: GateHooks;
   config?: RuntimeConfig;
   models?: readonly AgentModel[];
+  unreadDevices?: readonly UnreadDevice[];
   doneCheck?: (state: GraphRunState) => DoneCheckResult | Promise<DoneCheckResult>;
   leadSessionId?: string;
   pluginBootId?: string;
@@ -244,8 +246,20 @@ function bumpFingerprint(state: GraphRunState, nodeId: string, signature: string
 function modelsAllow(models: readonly AgentModel[] | undefined, route: Route): boolean {
   if (!models) return true;
   if (models.length === 0) return false;
+  const want = routeDeviceId(route.agent_device_id);
   return models.some((m) => m.id === route.model && m.agent === route.agent && m.providerId === route.provider_id
+    && routeDeviceId(m.agentDeviceId) === want
     && m.visible !== false && (!route.effort || m.efforts?.includes(route.effort)));
+}
+
+function unreadOf(route: Route, unread?: readonly UnreadDevice[]): UnreadDevice | undefined {
+  if (isLocalDevice(route.agent_device_id) || !unread) return undefined;
+  const id = routeDeviceId(route.agent_device_id);
+  return unread.find((item) => item.agentDeviceId === id);
+}
+
+function workerDeviceId(route: Route): string {
+  return routeDeviceId(route.agent_device_id);
 }
 
 function routesForNode(manual: ModelManual, state: GraphRunState, role: Role, nodeId: string) {
@@ -277,6 +291,7 @@ function pickRoute(
   models: readonly AgentModel[] | undefined,
   preferFallback: boolean,
   nodeId: string,
+  unreadDevices?: readonly UnreadDevice[],
 ): { route: Route; fallbacks: readonly Route[]; index: number; note?: string } | { stop: string } {
   if (models && models.length === 0) return { stop: "实时模型清单为空，不能把全部路线当可用" };
   const resolved = routesForNode(manual, state, role, nodeId);
@@ -286,17 +301,26 @@ function pickRoute(
   // 做检查 runs on another harness than 写代码 (Claude Code ↔ Codex), not only another model family.
   const skipAgents = review ? new Set(state.author_agents ?? []) : null;
   const start = preferFallback ? 1 : 0;
+  let primaryUnread: UnreadDevice | undefined;
   for (let i = start; i < chain.length; i++) {
     const route = chain[i]!;
+    const unread = unreadOf(route, unreadDevices);
+    if (unread) {
+      if (i === 0) primaryUnread = unread;
+      continue;
+    }
     if (!modelsAllow(models, route)) continue;
     if (skipFam) {
       const fam = family(route.model);
       if (!fam || skipFam.has(fam)) continue;
     }
     if (skipAgents?.has(route.agent)) continue;
-    const note = i > 0 ? `主路线 ${chain[0]!.model} 不可用，改用 ${route.model}` : undefined;
+    const note = i > 0
+      ? (primaryUnread ? `${unreadReason(primaryUnread.name)}，改用 ${route.model}` : `主路线 ${chain[0]!.model} 不可用，改用 ${route.model}`)
+      : undefined;
     return { route, fallbacks: resolved.fallbacks, index: i, note };
   }
+  if (primaryUnread) return { stop: unreadReason(primaryUnread.name) };
   if (skipAgents?.size) return { stop: "没有与写代码不同执行框架、不同模型族的检查路线" };
   if (skipFam && skipFam.size) return { stop: "没有与作者不同族的验证路线" };
   return { stop: "全部路线不可用" };
@@ -519,6 +543,7 @@ async function planOrca(
   preferFallback: boolean,
   now: number,
   host: Host,
+  unreadDevices?: readonly UnreadDevice[],
 ): Promise<Next> {
   if (isResearchNode(specNode)) return planResearch(state, spec, specNode, node, now, host);
   const role = (specNode.role ?? "worker") as Role;
@@ -539,7 +564,7 @@ async function planOrca(
   if (explicitFinal && (models === undefined || models.length === 0)) {
     return finalReviewHuman("显式终审路线不可用：模型清单为空或不可读，不能换模型");
   }
-  const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback, specNode.id);
+  const picked = pickRoute(manual, state, role, specNode.writes, models, preferFallback, specNode.id, unreadDevices);
   if ("stop" in picked) {
     if (explicitFinal) return finalReviewHuman(`显式终审路线不可用：${picked.stop}，不能换模型`);
     state.status = "stopped";
@@ -548,7 +573,8 @@ async function planOrca(
     return next;
   }
   if (explicitFinal && models) {
-    const hit = models.find((m) => m.id === picked.route.model && m.agent === picked.route.agent && m.providerId === picked.route.provider_id);
+    const hit = models.find((m) => m.id === picked.route.model && m.agent === picked.route.agent && m.providerId === picked.route.provider_id
+      && routeDeviceId(m.agentDeviceId) === routeDeviceId(picked.route.agent_device_id));
     const efforts = hit?.efforts && hit.efforts.length > 0 ? hit.efforts : null;
     if (!hit || (picked.route.effort !== undefined && efforts && !efforts.includes(picked.route.effort))) {
       return finalReviewHuman("显式终审路线不可用：档位或模型不可用，不能换模型");
@@ -592,7 +618,7 @@ async function planOrca(
     provider_id: picked.route.provider_id,
     effort: picked.route.effort,
     fast: false,
-    agent_device_id: 'local',
+    agent_device_id: workerDeviceId(picked.route),
     working_dir: workingDir,
     initial_task: brief(state, spec, specNode, key, node.attempts),
     writes: specNode.writes,
@@ -620,7 +646,7 @@ async function planOrca(
     provider_id: params.provider_id,
     effort: params.effort,
     fast: false,
-    agent_device_id: 'local',
+    agent_device_id: params.agent_device_id ?? 'local',
     working_dir: params.working_dir,
     initial_task: params.initial_task,
   };
@@ -1536,7 +1562,7 @@ function pluginSendNext(state: GraphRunState, node: NodeRunState): Next | undefi
 async function enter(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; unreadDevices?: readonly UnreadDevice[]; preferFallback?: boolean; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
   now: number,
   depth = 0,
 ): Promise<Next> {
@@ -1551,7 +1577,7 @@ async function enter(
   if (id === ASTRA_CONSULT_ID) {
     state.consult_node = ASTRA_CONSULT_NODE;
     if (!state.team?.ready && !subagentEligible(ASTRA_CONSULT_NODE)) return nextSetup(state);
-    return planOrca(state, spec, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
+    return planOrca(state, spec, ASTRA_CONSULT_NODE, ensureNode(state, id), opts.manual, opts.models, opts.preferFallback === true, now, opts.host, opts.unreadDevices);
   }
   const specNode = nodeById(spec, id, state.consult_node);
   const node = ensureNode(state, id);
@@ -1658,7 +1684,7 @@ async function enter(
 
   if (specNode.kind === "dispatch") {
     if (!state.team?.ready && !subagentEligible(specNode)) return nextSetup(state);
-    return planOrca(state, spec, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host);
+    return planOrca(state, spec, specNode, node, opts.manual, opts.models, opts.preferFallback === true, now, opts.host, opts.unreadDevices);
   }
 
   return nextStop(state, `未知节点 kind ${specNode.kind}`);
@@ -1695,7 +1721,7 @@ function clearStaleNext(state: GraphRunState): void {
 async function computeNext(
   state: GraphRunState,
   spec: GraphSpec,
-  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
+  opts: { gates?: GateHooks; manual: ModelManual; models?: readonly AgentModel[]; unreadDevices?: readonly UnreadDevice[]; doneCheck?: AdvanceOpts["doneCheck"]; host: Host },
   now: number,
 ): Promise<Next> {
   clearStaleNext(state);
@@ -1796,8 +1822,11 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
     if (!state.spec_id || !state.cursor) throw new KeelError("RUN_STATE_INVALID", `run ${runId} 尚未初始化`);
     const spec = specOf(state, opts);
     const cfg = opts.config ?? (await loadRuntimeConfig(host));
-    const catalog = opts.models === undefined ? await host.agentModels() : undefined;
+    const catalog = opts.models === undefined
+      ? await host.agentModels({ deviceIds: collectManualDeviceIds(cfg.manual, state.profile_id) })
+      : undefined;
     const models = opts.models ?? (catalog?.ok && catalog.status === 200 ? catalog.models : []);
+    const unreadDevices = opts.unreadDevices ?? catalog?.unreadDevices;
     const now = host.now();
     await applyEvent(state, spec, event, opts.gates, now);
     applyGateAnswer(state, spec, now);
@@ -1805,7 +1834,7 @@ export async function advance(host: Host, runId: string, event: AdvanceEvent, op
       applyTimeouts(state, spec, now, event);
     }
     invalidateStaleTeam(state, spec, opts);
-    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, doneCheck: opts.doneCheck, host }, now);
+    const next = await computeNext(state, spec, { gates: opts.gates, manual: cfg.manual, models, unreadDevices, doneCheck: opts.doneCheck, host }, now);
     state.next = next;
     state.updated_at = now;
     return { next, state };

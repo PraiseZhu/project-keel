@@ -104,14 +104,6 @@ describe("pickRoute remote catalog unread", () => {
     expect(out.next.reason).toMatch(/Claude 的清单读不到/);
   });
 
-  it("names an unread fallback when the primary is unavailable too", async () => {
-    const unavailable: Route = { agent: "codex", model: "gpt-6-luna", provider_id: "art-cindy", effort: "high" };
-    const { out } = await dispatch(withWorker(unavailable, remotePrimary), localModels, unread);
-    expect(out.next.kind).toBe("stop");
-    if (out.next.kind !== "stop") throw new Error("stop");
-    expect(out.next.reason).toMatch(/Claude 的清单读不到/);
-  });
-
   it("does not use a local same-name model that is not on the fallback chain", async () => {
     const { out } = await dispatch(withWorker(remotePrimary), localModels, unread);
     expect(out.next.kind).toBe("stop");

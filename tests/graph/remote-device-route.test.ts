@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { advance } from "../../src/main/graph/interpreter.ts";
+import { makeContext } from "../../src/main/context.ts";
+import { runTool } from "../../src/main/dispatch.ts";
+import { advance, createRun } from "../../src/main/graph/interpreter.ts";
 import { sameRoute } from "../../src/main/graph/collaboration.ts";
 import { findModel } from "../../src/panel/manual-editor.ts";
+import { PSTACK_GRAPHS } from "../../src/shared/graph/pstack.ts";
 import { cloneManual, DEFAULT_MANUAL, type AgentModel, type Profile, type Route } from "../../src/shared/manual/schema.ts";
 import { validateManual } from "../../src/shared/manual/validate.ts";
+import { EMPTY_PROFILE } from "../../src/shared/types.ts";
 import { boot, readState } from "./helpers.ts";
 import { fakeHost } from "../helpers/fakeHost.ts";
 
@@ -143,5 +147,95 @@ describe("route identity includes device", () => {
     expect(out.next.kind).toBe("stop");
     if (out.next.kind !== "stop") throw new Error("stop");
     expect(out.next.reason).toMatch(/全部路线不可用/);
+  });
+});
+
+describe("accepted receipt on a remote route", () => {
+  async function dispatchRemote(runId: string) {
+    const h = fakeHost({ kv: { manual: withWorker(remotePrimary) }, agentModels: remoteModels });
+    const spec = PSTACK_GRAPHS["bug-fix"];
+    await createRun(h, {
+      run_id: runId,
+      spec_id: spec.id,
+      profile_id: "sol",
+      lead_harness: "codex",
+      task_type: "bug-fix",
+      entry: "implement",
+      goal: "fix the bug",
+      worktree: "/repo/.worktrees/keel-run1",
+      scopeAllow: ["src/**"],
+      now: h.now(),
+    });
+    const d = await advance(h, runId, {
+      type: "report",
+      phase: "setup",
+      outcome: { worker_permission_mode: "bypassPermissions", team_id: "t1" },
+      session_id: "s1",
+    }, { spec });
+    return { h, d };
+  }
+
+  async function accept(h: Awaited<ReturnType<typeof dispatchRemote>>["h"], runId: string, dispatchKey: string, resolved: Record<string, unknown>) {
+    return runTool(makeContext(h, `acc-${runId}`, EMPTY_PROFILE), "keel_report", {
+      run_id: runId,
+      phase: "accepted",
+      dispatch_key: dispatchKey,
+      worker_id: "w1",
+      worker_session_id: "ws1",
+      dispatch_outcome: { dispatched: true, wakeKind: "immediate" },
+      resolved,
+    });
+  }
+
+  const resolvedWithoutDevice = { agent: "codex", model: "gpt-6.1-sol", providerId: "art-cindy", effort: "high" };
+
+  it("does not mismatch or record the worker as local when the receipt omits agent_device_id", async () => {
+    const runId = "run-remote-omit-device";
+    const { h, d } = await dispatchRemote(runId);
+    expect(d.next.kind).toBe("dispatch");
+    if (d.next.kind !== "dispatch") throw new Error("dispatch");
+    expect(d.next.create_worker?.agent_device_id).toBe(DEVICE);
+    const out = await accept(h, runId, d.next.dispatch_key, resolvedWithoutDevice);
+    expect(out.ok, JSON.stringify(out)).toBe(true);
+    if (!out.ok) throw new Error(out.errorCode);
+    expect(out.result).toMatchObject({ next: { kind: "wait" } });
+    const node = readState(h, runId).nodes.implement;
+    expect(node?.planned_params?.agent_device_id).toBe(DEVICE);
+    expect(node?.actual_route).toEqual({
+      agent: "codex",
+      model: "gpt-6.1-sol",
+      provider_id: "art-cindy",
+      effort: "high",
+    });
+    expect(node?.actual_route?.agent_device_id).toBeUndefined();
+  });
+
+  it("keeps a receipt that names the planned remote device", async () => {
+    const runId = "run-remote-matching-device";
+    const { h, d } = await dispatchRemote(runId);
+    if (d.next.kind !== "dispatch") throw new Error("dispatch");
+    const out = await accept(h, runId, d.next.dispatch_key, { ...resolvedWithoutDevice, agent_device_id: DEVICE });
+    expect(out.ok, JSON.stringify(out)).toBe(true);
+    expect(readState(h, runId).nodes.implement?.actual_route).toEqual({
+      agent: "codex",
+      model: "gpt-6.1-sol",
+      provider_id: "art-cindy",
+      effort: "high",
+      agent_device_id: DEVICE,
+    });
+  });
+
+  it("rejects an accepted receipt whose agent_device_id is present and not the planned device", async () => {
+    for (const [runId, device] of [
+      ["run-remote-local-device", "local"],
+      ["run-remote-other-device", "device-other-bbbbbbbb"],
+    ] as const) {
+      const { h, d } = await dispatchRemote(runId);
+      if (d.next.kind !== "dispatch") throw new Error("dispatch");
+      const out = await accept(h, runId, d.next.dispatch_key, { ...resolvedWithoutDevice, agent_device_id: device });
+      expect(out.ok, JSON.stringify(out)).toBe(false);
+      if (out.ok) throw new Error("expected mismatch");
+      expect(out.errorCode).toBe("EXECUTION_ROUTE_MISMATCH");
+    }
   });
 });

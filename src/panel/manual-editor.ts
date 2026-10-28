@@ -17,7 +17,7 @@ import {
   type Route,
   type TaskType,
 } from "../shared/manual/schema.ts";
-import { loadRemoteCatalog } from "../shared/manual/remote-catalog.ts";
+import { loadRemoteCatalog, unreadReason, type UnreadDevice } from "../shared/manual/remote-catalog.ts";
 import { validateManual, type ManualIssue } from "../shared/manual/validate.ts";
 
 export interface SettingsIO {
@@ -33,6 +33,7 @@ export interface CatalogState {
   readonly message: string;
   readonly retry: boolean;
   readonly catalogNote?: string;
+  readonly unreadDevices?: readonly UnreadDevice[];
 }
 
 export type SaveResult =
@@ -111,7 +112,13 @@ export async function fetchCatalog(io: SettingsIO): Promise<CatalogState> {
   try {
     const catalog = await loadRemoteCatalog((url) => io.getAgentModels(url));
     const state = catalog.ok ? readCatalog(200, { models: catalog.models }) : readCatalog(catalog.status, { models: catalog.models });
-    return catalog.catalogNote ? { ...state, catalogNote: catalog.catalogNote } : state;
+    const notes = [catalog.catalogNote, ...catalog.unreadDevices.map((device) => unreadReason(device.name))]
+      .filter((note): note is string => Boolean(note));
+    return {
+      ...state,
+      ...(catalog.unreadDevices.length ? { unreadDevices: catalog.unreadDevices } : {}),
+      ...(notes.length ? { catalogNote: [...new Set(notes)].join("；") } : {}),
+    };
   } catch (e) {
     return { status: "error", models: [], retry: false, message: `读取模型清单失败：${e instanceof Error ? e.message : String(e)}` };
   }

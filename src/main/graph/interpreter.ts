@@ -301,14 +301,14 @@ function pickRoute(
   // 做检查 runs on another harness than 写代码 (Claude Code ↔ Codex), not only another model family.
   const skipAgents = review ? new Set(state.author_agents ?? []) : null;
   const start = preferFallback ? 1 : 0;
-  let primaryUnread: UnreadDevice | undefined;
+  const unreadChain = chain.map((route) => unreadOf(route, unreadDevices));
+  const firstUnreadIndex = unreadChain.findIndex(Boolean);
+  const firstUnread = firstUnreadIndex >= 0
+    ? { index: firstUnreadIndex, device: unreadChain[firstUnreadIndex]! }
+    : undefined;
   for (let i = start; i < chain.length; i++) {
     const route = chain[i]!;
-    const unread = unreadOf(route, unreadDevices);
-    if (unread) {
-      if (i === 0) primaryUnread = unread;
-      continue;
-    }
+    if (unreadChain[i]) continue;
     if (!modelsAllow(models, route)) continue;
     if (skipFam) {
       const fam = family(route.model);
@@ -316,11 +316,13 @@ function pickRoute(
     }
     if (skipAgents?.has(route.agent)) continue;
     const note = i > 0
-      ? (primaryUnread ? `${unreadReason(primaryUnread.name)}，改用 ${route.model}` : `主路线 ${chain[0]!.model} 不可用，改用 ${route.model}`)
+      ? (firstUnread && firstUnread.index < i
+        ? `${unreadReason(firstUnread.device.name)}，改用 ${route.model}`
+        : `主路线 ${chain[0]!.model} 不可用，改用 ${route.model}`)
       : undefined;
     return { route, fallbacks: resolved.fallbacks, index: i, note };
   }
-  if (primaryUnread) return { stop: unreadReason(primaryUnread.name) };
+  if (firstUnread) return { stop: unreadReason(firstUnread.device.name) };
   if (skipAgents?.size) return { stop: "没有与写代码不同执行框架、不同模型族的检查路线" };
   if (skipFam && skipFam.size) return { stop: "没有与作者不同族的验证路线" };
   return { stop: "全部路线不可用" };

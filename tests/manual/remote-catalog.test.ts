@@ -49,6 +49,25 @@ describe("loadRemoteCatalog", () => {
     expect(catalog.catalogNote).toBe(REMOTE_UNAVAILABLE_NOTE);
   });
 
+  it("keeps reading the next device when an earlier device returns 404", async () => {
+    const other = "device-claude-bbbbbbbb";
+    const catalog = await loadRemoteCatalog(fetchMap({
+      "/agent-models": {
+        status: 200,
+        body: {
+          ok: true,
+          models: [localModel],
+          locations: [{ agentDeviceId: DEVICE, name: "Claude" }, { agentDeviceId: other, name: "Air" }],
+        },
+      },
+      ["/agent-models?agent_device_id=" + DEVICE]: { status: 404, body: {} },
+      ["/agent-models?agent_device_id=" + other]: { status: 200, body: { ok: true, agentDeviceId: other, models: [remoteModel] } },
+    }));
+    expect(catalog.models).toEqual([localModel, { ...remoteModel, agentDeviceId: other, deviceName: "Air" }]);
+    expect(catalog.unreadDevices).toEqual([{ agentDeviceId: DEVICE, name: "Claude" }]);
+    expect(catalog.catalogNote).toBeUndefined();
+  });
+
   it("drops a remote list whose echoed agentDeviceId does not match the request", async () => {
     const catalog = await loadRemoteCatalog(fetchMap({
       "/agent-models": { status: 200, body: { ok: true, models: [localModel], locations: [{ agentDeviceId: DEVICE, name: "Claude" }] } },

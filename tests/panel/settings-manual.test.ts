@@ -74,6 +74,19 @@ describe("catalog 404 / 503", () => {
     expect(cat.models).toEqual(models);
     expect(cat.catalogNote).toMatch(/不能读取其他电脑的模型/);
   });
+
+  it("names the computer whose list is unread without dropping readable models", async () => {
+    const device = "device-claude-aaaaaaaa";
+    const io = fakeIo({ models });
+    io.getAgentModels = async (url = "/agent-models") => url === "/agent-models"
+      ? { status: 200, body: { ok: true, models, locations: [{ agentDeviceId: device, name: "Claude" }] } }
+      : { status: 503, body: { ok: false } };
+    const cat = await fetchCatalog(io);
+    expect(cat.status).toBe("ok");
+    expect(cat.models).toEqual(models);
+    expect(cat.catalogNote).toMatch(/Claude 的清单读不到/);
+    expect(cat.unreadDevices).toEqual([{ agentDeviceId: device, name: "Claude" }]);
+  });
 });
 
 describe("empty efforts omit effort", () => {

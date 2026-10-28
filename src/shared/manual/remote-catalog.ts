@@ -143,10 +143,6 @@ export async function loadRemoteCatalog(fetchJson: CatalogFetch, opts?: { device
   const unreadDevices: UnreadDevice[] = [];
   let capabilityMissing = false;
   for (const id of requested) {
-    if (capabilityMissing) {
-      unreadDevices.push(unreadOf(id, locations));
-      continue;
-    }
     let res: { status: number; body?: unknown };
     try {
       res = await fetchJson("/agent-models?agent_device_id=" + encodeURIComponent(id));
@@ -155,6 +151,8 @@ export async function loadRemoteCatalog(fetchJson: CatalogFetch, opts?: { device
       continue;
     }
     if (res.status === 400 || res.status === 404) {
+      // Old Cindy returns 400 for any query string. A 404 can also mean just this device.
+      // Mark it unread but still ask the next device, so one bad location cannot hide the rest.
       capabilityMissing = true;
       unreadDevices.push(unreadOf(id, locations));
       continue;
@@ -174,7 +172,7 @@ export async function loadRemoteCatalog(fetchJson: CatalogFetch, opts?: { device
     }
   }
 
-  if (capabilityMissing) {
+  if (capabilityMissing && remoteModels.length === 0) {
     return {
       ok: true,
       status: 200,

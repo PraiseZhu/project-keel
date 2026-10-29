@@ -105,7 +105,7 @@ UNMAPPED=0
 | playbook | `skills/poteto-mode/playbooks/investigation.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/investigation.md`<br>`src/shared/graph/pstack.ts` | P1 |  |
 | playbook | `skills/poteto-mode/playbooks/multi-phase-plan.md` | C | `plugin/manual/pstack/skills/poteto-mode/playbooks/multi-phase-plan.md`<br>`src/node/plan/check-plan.ts` | P3 | check-plan.mjs 移植；计划文件落 ~/AI-Agent/Codex/plans/ 或目标仓 docs/ |
 | playbook | `skills/poteto-mode/playbooks/opening-a-pr.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/opening-a-pr.md`<br>`src/shared/graph/pstack.ts` | P1 | 按车道：draft-gated-handoff 车道 必 Draft，个人仓默认非 Draft；标题/正文以目标仓规则为准；开 PR 不自动 babysit |
-| playbook | `skills/poteto-mode/playbooks/orchestrate.md` | C | `plugin/manual/pstack/skills/poteto-mode/playbooks/orchestrate.md`<br>`src/node/orch/store.ts` | P3 | orch store 移植；多 PR 计划默认交给 task-priority→approve-exec（用户 2026-10-04 裁决） |
+| playbook | `skills/poteto-mode/playbooks/orchestrate.md` | C | `plugin/manual/pstack/skills/poteto-mode/playbooks/orchestrate.md`<br>`src/node/orch/store.ts` | P3 | orch store 移植；多 PR 计划默认先开 issue 再批准执行（open-issue → approve-exec；用户 2026-10-04 裁决，2026-10-29 改为 issue 入口） |
 | playbook | `skills/poteto-mode/playbooks/pause-safely.md` | B | `plugin/manual/pstack/skills/poteto-mode/playbooks/pause-safely.md` | P1 | resume note 写插件 data 目录；不 push 新东西 |
 | playbook | `skills/poteto-mode/playbooks/perf-issue.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/perf-issue.md` | P3 |  |
 | playbook | `skills/poteto-mode/playbooks/prototype.md` | A | `plugin/manual/pstack/skills/poteto-mode/playbooks/prototype.md` | P1 |  |

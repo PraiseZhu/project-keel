@@ -1,6 +1,6 @@
-// Threshold policy for Jev answers, aligned with approve-exec: act at ≥0.75 (J7 ≥0.8),
+// Threshold policy for Jev answers (from the 2026-09-23 owner autonomy policy): act at ≥0.75 (J7 ≥0.8),
 // otherwise re-ask once, then fall back to the smallest reversible option.
-// Jev unavailable on a collateral-file judgement → stop (approve-exec D2).
+// Jev unavailable on a collateral-file judgement → stop.
 
 import { DEFAULT_THRESHOLDS, type JevThresholds } from "../../shared/types.ts";
 import type { Interpretation, Template } from "./templates.ts";

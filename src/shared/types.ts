@@ -119,7 +119,7 @@ export const EMPTY_PROFILE: KeelProfile = {
 
 export interface JevThresholds {
   readonly act: number;
-  /** J7 (test-legacy) uses the stricter line from the approved approve-exec policy. */
+  /** J7 (test-legacy) uses the stricter line from the 2026-09-23 owner autonomy policy. */
   readonly strict: number;
 }
 

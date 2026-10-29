@@ -25,7 +25,7 @@
     "kind": "policy",
     "mode": "prepend",
     "overlay": "overlays/autopilot.md",
-    "why": "Multi-PR runs go to the user's existing task-priority → approve-exec pipeline; owners stop at merge-ready."
+    "why": "Multi-PR runs: open-issue builds the parent and child issues, then approve-exec opens one owner session per child issue; owners drive their PR with keel_run and stop at merge-ready."
   },
   {
     "path": "skills/poteto-mode/playbooks/autopilot-stack.md",

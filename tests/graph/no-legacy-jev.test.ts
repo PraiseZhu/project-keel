@@ -73,8 +73,29 @@ describe("pr-facts path never calls legacy Jev", () => {
     expect(p.handedOff).toBe(false);
     expect(p.nextAction).not.toBe("stopped_after_handoff");
 
+    // Handoff records only count on a lane that opted into handoff.
+    const optedIn = { lanes: [{ repo: "acme/app", preset: "gated-handoff" as const, postReadyOwner: "automation" as const }], routingPath: null, boardRepos: [], plansDir: null };
     const legacy = fakeHost({ node });
     legacy.files.set(key, JSON.stringify(base));
-    expect((await readPrFacts(makeContext(legacy, "c1"), { repo: "acme/app", pr: 9 })).handedOff).toBe(true);
+    expect((await readPrFacts(makeContext(legacy, "c1", optedIn), { repo: "acme/app", pr: 9 })).handedOff).toBe(true);
+  });
+
+  // PraiseZhu/project-keel#71: a record left from before the old watcher retired must not make
+  // keel_run / keel_wait treat a default-lane PR as handed off (e.g. while its CI is red).
+  it("ignores a leftover handoff record on a default gated lane", async () => {
+    const red = { ...snapshot, preset: "gated-handoff" as const, rule: LANE_PRESETS["gated-handoff"],
+      decision: { kind: "blocker" as const, blocker: "failing-checks" }, checks: { failed: ["unit"], pending: [], passed: 0 } };
+    const node = (method: string) => {
+      if (method === "pr/snapshot") return { ok: true, result: red };
+      if (method === "pr/threads") return { ok: true, result: { repo: pr.repo, number: pr.number, threads: [] } };
+      return { ok: false, message: method };
+    };
+    const host = fakeHost({ node });
+    host.files.set("handoff/acme__app__9.json", JSON.stringify({ repo: "acme/app", number: 9, at: "2026-11-20T00:00:00Z", head_sha: "abc", gate: null, evidence: null, status: "complete" }));
+    const lane = { lanes: [{ repo: "acme/app", preset: "gated-handoff" as const }], routingPath: null, boardRepos: [], plansDir: null };
+    const facts = await readPrFacts(makeContext(host, "c1", lane), { repo: "acme/app", pr: 9 });
+    expect(facts.handedOff).toBe(false);
+    expect(facts.allowedActions).toEqual(["classify_ci_failure"]);
+    expect(facts.nextAction).toBe("classify_ci_failure");
   });
 });

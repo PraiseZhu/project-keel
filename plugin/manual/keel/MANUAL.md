@@ -85,7 +85,7 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 3. `open-pr` → `wait-ci`：主控照 next 调 `pr_open`（用户授权原话填 `authorization_source`）再 `keel_wait`。CI 红走 `fix-ci`，有评审线程走 `triage-threads`，二者都先经 `pr_open` 推送再等 CI。
 4. 审查（`astra-final-review`）：不同家族的强模型只读审 diff、亲自跑测试并给出 verdict。`FAIL` 由 `g-accept` 退回写手，写手的任务说明会列出审查报告；`PASS` / `PASS+NOTES` 进入 `report-ready`。同一失败重复两次时 `astra-unstick` 先出主意。
 5. done 门发现某条 SC 没有证据时给 `revise` / `waive` / `stop`：`revise` 退回写手并写明缺哪条；`waive` 必须带用户原话 `authorization_source`。验证级别不够时给 `retry_verify`，重派审查。
-6. `pr_status` 判定 ready 且 `mergeable: true` 时，才报告“可合并”与链接。车道有合并标签而 PR 还没贴时，`nextAction` 是 `wait_for_review`，按它等标签：用 `pr_wait({ until: "change" })` 等（默认的 `ci_terminal` 在 ready 时会立刻返回，不等标签）。门禁车道先 `pr_ready` 转 Ready，之后原会话照 `nextAction` 继续跟进。
+6. `pr_status` 判定 ready 后照 `nextAction` 走：是 `report_mergeable`（此时 `mergeable: true`）才报告“可合并”与链接；是 `wait_for_review` 表示车道有合并标签而 PR 还没贴，用 `pr_wait({ until: "change" })` 等标签（默认的 `ci_terminal` 在 ready 时会立刻返回，不等标签）；显式配了 `postReadyOwner: "automation"` 的车道给 `handoff` / `stopped_after_handoff`，按上文交接段落处理，不等标签。门禁车道先 `pr_ready` 转 Ready，之后原会话照 `nextAction` 继续跟进。
 
 完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束。显式配了 `postReadyOwner: "automation"` 的车道，`pr_ready` 成功后变为 `stopped_after_handoff` 也算这一段结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束。其余情况照 `nextAction` 继续。
 

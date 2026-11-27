@@ -51,6 +51,7 @@ export async function readPrFacts(ctx: ToolContext, args: Record<string, unknown
     gate: snap.gate,
     handedOff,
     ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}),
+    labels: snap.pr.labels,
   });
   return {
     snapshot: snap,

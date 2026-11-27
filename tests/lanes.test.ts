@@ -364,10 +364,40 @@ describe("default gated lanes keep the PR with the author session after Ready", 
     expect(optedIn.match?.handoffHelperPath).toBe(retiredHelper);
   });
 
-  it("a ready PR is reported mergeable (once labelled), not handed off", () => {
+  it("a ready PR waits for the merge label, then is reported mergeable — never handed off", () => {
     const rule = resolveLane(mivo, repo).rule;
     const gate = evaluateGate(rule, ["build"], [{ name: "build", bucket: "pass" }], []);
-    expect(allowedActions({ rule, decision: "ready", isDraft: false, gate, handedOff: false })).toEqual(["report_mergeable"]);
+    const ready = { rule, decision: "ready" as const, isDraft: false, gate, handedOff: false };
+    expect(allowedActions({ ...ready, labels: [] })).toEqual(["wait_for_review"]);
+    expect(allowedActions({ ...ready, labels: ["bug"] })).toEqual(["wait_for_review"]);
+    expect(allowedActions({ ...ready, labels: ["bug", "review:merge-ready"] })).toEqual(["report_mergeable"]);
+    // A lane without a merge label does not wait for one.
+    const client = resolveLane(makeProfile([{ repo: "acme/client", preset: "gated-handoff" }]), "acme/client").rule;
+    expect(allowedActions({ ...ready, rule: client, labels: [] })).toEqual(["report_mergeable"]);
+  });
+
+  it("pr_status: a ready Mivo-lane PR without the merge label waits for review instead of reporting mergeable", async () => {
+    const readyPr = (labels: string[]) => ({ ok: true, result: { ...snapshot(true), rule: resolveLane(mivo, repo).rule, decision: { kind: "ready" },
+      pr: { ...pr, isDraft: false, mergeStateStatus: "CLEAN", labels }, mergeReadyLabel: labels.includes("review:merge-ready") } });
+    const unlabelled: any = await runTool(makeContext(fakeHost({ node: (m) => (m === "pr/snapshot" ? readyPr([]) : { ok: false, message: m }) }), "c1", mivo), "pr_status", { repo, pr: 7 });
+    expect(unlabelled).toMatchObject({ ok: true, result: { mergeable: false, allowedActions: ["wait_for_review"], nextAction: "wait_for_review" } });
+    expect(unlabelled.result.merge_hint).toContain("review:merge-ready");
+    const labelled: any = await runTool(makeContext(fakeHost({ node: (m) => (m === "pr/snapshot" ? readyPr(["review:merge-ready"]) : { ok: false, message: m }) }), "c1", mivo), "pr_status", { repo, pr: 7 });
+    expect(labelled).toMatchObject({ ok: true, result: { mergeable: true, allowedActions: ["report_mergeable"], nextAction: "report_mergeable" } });
+  });
+
+  it("pr_wait until change wakes up when the merge label is added", async () => {
+    let reads = 0;
+    const node = (m: string) => {
+      if (m !== "pr/snapshot") return { ok: false, message: m };
+      reads += 1;
+      const labels = reads >= 3 ? ["review:merge-ready"] : [];
+      return { ok: true, result: { ...snapshot(true), rule: resolveLane(mivo, repo).rule, decision: { kind: "ready" },
+        pr: { ...pr, isDraft: false, mergeStateStatus: "CLEAN", labels }, mergeReadyLabel: labels.length > 0 } };
+    };
+    const h = fakeHost({ node });
+    const r: any = await runTool(makeContext(h, "c1", mivo), "pr_wait", { repo, pr: 7, until: "change", max_minutes: 5 });
+    expect(r).toMatchObject({ ok: true, result: { mergeable: true, nextAction: "report_mergeable" } });
   });
 
   it("SC1: after pr_ready succeeds, replies, pushes and another pr_ready are not refused with LANE_HANDED_OFF", async () => {

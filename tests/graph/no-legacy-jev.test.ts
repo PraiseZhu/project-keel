@@ -103,4 +103,20 @@ describe("pr-facts path never calls legacy Jev", () => {
     expect(facts.allowedActions).toEqual(["classify_ci_failure"]);
     expect(facts.nextAction).toBe("classify_ci_failure");
   });
+
+  // keel_run's done gate reads these facts: a Mivo-lane PR without the merge label is not finished.
+  it("waits for the lane's merge label before reporting mergeable", async () => {
+    const facts = async (labels: string[]) => {
+      const ready = { ...snapshot, preset: "draft-gated-handoff" as const, rule: LANE_PRESETS["draft-gated-handoff"], pr: { ...pr, labels } };
+      const node = (method: string) => {
+        if (method === "pr/snapshot") return { ok: true, result: ready };
+        if (method === "pr/threads") return { ok: true, result: { repo: pr.repo, number: pr.number, threads: [] } };
+        return { ok: false, message: method };
+      };
+      const lane = { lanes: [{ repo: "acme/app", preset: "draft-gated-handoff" as const }], routingPath: null, boardRepos: [], plansDir: null };
+      return readPrFacts(makeContext(fakeHost({ node }), "c1", lane), { repo: "acme/app", pr: 9 });
+    };
+    expect((await facts([])).nextAction).toBe("wait_for_review");
+    expect((await facts(["review:merge-ready"])).nextAction).toBe("report_mergeable");
+  });
 });

@@ -51,6 +51,8 @@ export interface ActionInput {
   readonly handedOff: boolean;
   /** False when the lane's `verifyCheck` has not passed on the current head; omitted when the lane has none. */
   readonly verified?: boolean;
+  /** Current PR labels. A lane with `mergeLabel` is not reported mergeable until the PR carries it. */
+  readonly labels?: readonly string[];
 }
 
 /** Actions the policy allows next. Jev (J8) may only rank inside this list. Merging is never an action. */
@@ -72,6 +74,8 @@ export function allowedActions(i: ActionInput): PrAction[] {
   if (i.gate.applies && !i.gate.ok) return ["wait_for_ci"];
   if (i.verified === false) return ["verify_current_head"];
   if (i.rule.postReadyOwner === "automation") return ["handoff"];
+  // The author session keeps the PR, so wait for the review machine's label instead of stopping early.
+  if (i.rule.mergeLabel && !(i.labels ?? []).includes(i.rule.mergeLabel)) return ["wait_for_review"];
   return ["report_mergeable"];
 }
 

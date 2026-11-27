@@ -57,9 +57,12 @@ describe("pr-facts path never calls legacy Jev", () => {
     judgeItems.mockRestore();
   });
 
-  it("a pending handoff record is not a handoff; a record without status is complete", async () => {
+  it("on a lane that opted into handoff, a pending record is not a handoff; a record without status is complete", async () => {
+    // Handoff records only count on a lane that opted into handoff, so both profile and snapshot rule opt in.
+    const optedIn = { lanes: [{ repo: "acme/app", preset: "gated-handoff" as const, postReadyOwner: "automation" as const }], routingPath: null, boardRepos: [], plansDir: null };
+    const automation = { ...snapshot, preset: "gated-handoff" as const, rule: { ...LANE_PRESETS["gated-handoff"], postReadyOwner: "automation" as const } };
     const node = (method: string) => {
-      if (method === "pr/snapshot") return { ok: true, result: snapshot };
+      if (method === "pr/snapshot") return { ok: true, result: automation };
       if (method === "pr/threads") return { ok: true, result: { repo: pr.repo, number: pr.number, threads: [] } };
       return { ok: false, message: method };
     };
@@ -68,16 +71,18 @@ describe("pr-facts path never calls legacy Jev", () => {
 
     const pending = fakeHost({ node });
     // Pending for an older head: reconcile must leave it pending, so it is not a handoff.
-    pending.files.set(key, JSON.stringify({ ...base, head_sha: "older", status: "pending" }));
-    const p = await readPrFacts(makeContext(pending, "c1"), { repo: "acme/app", pr: 9 });
+    const pendingRecord = JSON.stringify({ ...base, head_sha: "older", status: "pending" });
+    pending.files.set(key, pendingRecord);
+    const p = await readPrFacts(makeContext(pending, "c1", optedIn), { repo: "acme/app", pr: 9 });
     expect(p.handedOff).toBe(false);
-    expect(p.nextAction).not.toBe("stopped_after_handoff");
+    expect(p.nextAction).toBe("handoff");
+    expect(pending.files.get(key)).toBe(pendingRecord);
 
-    // Handoff records only count on a lane that opted into handoff.
-    const optedIn = { lanes: [{ repo: "acme/app", preset: "gated-handoff" as const, postReadyOwner: "automation" as const }], routingPath: null, boardRepos: [], plansDir: null };
     const legacy = fakeHost({ node });
     legacy.files.set(key, JSON.stringify(base));
-    expect((await readPrFacts(makeContext(legacy, "c1", optedIn), { repo: "acme/app", pr: 9 })).handedOff).toBe(true);
+    const l = await readPrFacts(makeContext(legacy, "c1", optedIn), { repo: "acme/app", pr: 9 });
+    expect(l.handedOff).toBe(true);
+    expect(l.allowedActions).toEqual(["stopped_after_handoff"]);
   });
 
   // PraiseZhu/project-keel#71: a record left from before the old watcher retired must not make

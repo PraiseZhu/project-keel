@@ -87,7 +87,7 @@ Worker 的模型、provider、框架、推理强度按设置原样派出，回�
 
 老盯梢停用后，默认不再交接。车道配置里遗留的 `handoffHelperPath` 会被忽略，`pr_ready` 不调用它；停用前写下的本地交接记录也不再拦住作者会话。
 
-只有某个车道显式写 `"postReadyOwner": "automation"` 时，才恢复转 Ready 后交给自动化接手：交接后推送、回帖、修复类调用返回 `LANE_HANDED_OFF`。这时可再配 `handoffHelperPath`，指向已部署的 Vigil 交接 helper 绝对路径（需支持 `inspect` 和 `handoff --expected-head`），本机需有 PATH 上可找到的 Node CLI；`pr_ready` 通过后发布并读回作者交接回执，再写本地交接记录。helper 读取失败或 HEAD 漂移时不声称交接成功；转 Draft 或进入新 Ready 代次后，过期记录不再锁住作者。
+只有某个车道显式写 `"postReadyOwner": "automation"` 时，才恢复转 Ready 后交给自动化接手：交接后推送、回帖、修复类调用返回 `LANE_HANDED_OFF`。没配 `handoffHelperPath` 时，`pr_ready` 成功后只写本地交接记录，这条记录会一直锁住作者会话，转 Draft 或推新提交也不解除。要按外部归属判断时，再配 `handoffHelperPath`，指向已部署的 Vigil 交接 helper 绝对路径（需支持 `inspect` 和 `handoff --expected-head`），本机需有 PATH 上可找到的 Node CLI：`pr_ready` 通过后先发布并读回作者交接回执，再写本地交接记录；helper 读取失败或 HEAD 漂移时不声称交接成功；转 Draft 或进入新 Ready 代次后，过期记录不再锁住作者。
 
 ## 仓库内容
 

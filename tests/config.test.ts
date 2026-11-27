@@ -84,6 +84,20 @@ describe("loadRuntimeConfig", () => {
     expect(hFalse.files.size).toBe(0);
   });
 
+  it("keeps only a valid postReadyOwner opt-in from kv.lanes", async () => {
+    const h = fakeHost({
+      kv: { lanes: [
+        { repo: "acme/app", preset: "gated-handoff", postReadyOwner: "automation" },
+        { repo: "acme/other", preset: "gated-handoff", postReadyOwner: "watcher" },
+      ] },
+    });
+    const cfg = await loadRuntimeConfig(h, built);
+    expect(cfg.lanes).toEqual([
+      { repo: "acme/app", preset: "gated-handoff", postReadyOwner: "automation" },
+      { repo: "acme/other", preset: "gated-handoff" },
+    ]);
+  });
+
   it("does not treat a non-boolean requireReviewEntry as enabled", async () => {
     const h = fakeHost({
       kv: { lanes: [{ repo: "acme/app", preset: "gated-handoff", requireReviewEntry: "true" }] },

@@ -5,10 +5,17 @@ import { LANE_PRESETS, type DecisionKind, type KeelProfile, type LaneMatch, type
 
 export function resolveLane(profile: KeelProfile, repo: string): { match: LaneMatch | null; rule: LaneRule } {
   const key = repo.toLowerCase();
-  const match = profile.lanes.find((l) => l.repo.toLowerCase() === key) ?? null;
-  const base = LANE_PRESETS[match?.preset ?? "personal"];
-  const rule: LaneRule = match?.baseRuleFiles ? { ...base, baseRuleFiles: { ...base.baseRuleFiles, ...match.baseRuleFiles } } : base;
-  return { match, rule };
+  const found = profile.lanes.find((l) => l.repo.toLowerCase() === key) ?? null;
+  const base = LANE_PRESETS[found?.preset ?? "personal"];
+  let rule: LaneRule = found?.baseRuleFiles ? { ...base, baseRuleFiles: { ...base.baseRuleFiles, ...found.baseRuleFiles } } : base;
+  if (found?.postReadyOwner && found.postReadyOwner !== rule.postReadyOwner) rule = { ...rule, postReadyOwner: found.postReadyOwner };
+  // A handoff helper only means something when automation takes over after Ready. Older local
+  // configs still point Mivo at the retired watcher's helper; drop it so it is never called.
+  if (found?.handoffHelperPath !== undefined && rule.postReadyOwner !== "automation") {
+    const { handoffHelperPath: _ignored, ...rest } = found;
+    return { match: rest, rule };
+  }
+  return { match: found, rule };
 }
 
 /** Draft flag for `pr_open`. A draft-first lane forces Draft regardless of the request. */

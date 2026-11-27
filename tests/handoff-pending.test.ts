@@ -7,10 +7,10 @@ import { readHandoff, writeHandoff } from "../src/main/handoff.ts";
 import { fakeHost } from "./helpers/fakeHost.ts";
 
 const profile: KeelProfile = {
-  lanes: [{ repo: "acme/gated-app", preset: "draft-gated-handoff" }],
+  lanes: [{ repo: "acme/gated-app", preset: "draft-gated-handoff", postReadyOwner: "automation" }],
   routingPath: null, boardRepos: [], plansDir: null,
 };
-const gated = LANE_PRESETS["draft-gated-handoff"];
+const gated = { ...LANE_PRESETS["draft-gated-handoff"], postReadyOwner: "automation" as const };
 const pr = { repo: "acme/gated-app", number: 7, url: "https://github.com/acme/gated-app/pull/7", title: "feat: x", state: "OPEN", isDraft: true, headSha: "abc", headRef: "f", baseRef: "main", mergeable: "MERGEABLE", mergeStateStatus: "DRAFT", reviewDecision: null, labels: [] };
 
 function snapshot(gateOk: boolean, extra: Record<string, unknown> = {}) {

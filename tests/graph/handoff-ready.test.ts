@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC } from "../e2e/helpers.ts";
+import { makeWorld, makeE2eHost, startRun, leadLoop, cleanupRepos, SC, PR_REPO } from "../e2e/helpers.ts";
 import { LANE_PRESETS } from "../../src/shared/types.ts";
 import { mapChangeDoneFailure } from "../../src/main/tools/keel.ts";
 import type { GraphRunState } from "../../src/main/graph/state.ts";
@@ -11,6 +11,8 @@ describe("gated-handoff done gate", () => {
   it("emits pr_ready with auth/review placeholders and completes after success", async () => {
     const world = makeWorld();
     const host = makeE2eHost(world);
+    // Handoff is opt-in since the old watcher retired; this suite covers the opted-in lane.
+    host.kv.lanes = [{ repo: PR_REPO, preset: "gated-handoff", postReadyOwner: "automation" }];
     const original = host.node.bind(host);
     host.node = async (method, params, opts) => {
       const response = await original(method, params, opts);
@@ -20,7 +22,7 @@ describe("gated-handoff done gate", () => {
           result: {
             ...(response.result as object),
             preset: "gated-handoff",
-            rule: LANE_PRESETS["gated-handoff"],
+            rule: { ...LANE_PRESETS["gated-handoff"], postReadyOwner: "automation" },
             gate: { applies: true, required: ["verify"], passed: ["verify"], failing: [], pending: [], missing: [], ok: true, sources: ["test"] },
           },
         };

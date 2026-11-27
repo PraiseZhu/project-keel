@@ -42,7 +42,10 @@ function handoffRecord(pull: RemotePull): HandoffRecord {
   };
 }
 
-const helperLane = (repo: string) => ({ repo, preset: "gated-handoff" as const, handoffHelperPath: "/synthetic/helper.mjs" });
+const helperLane = (repo: string) => ({ repo, preset: "gated-handoff" as const, postReadyOwner: "automation" as const, handoffHelperPath: "/synthetic/helper.mjs" });
+// Lanes that still opt into post-Ready handoff but keep only the local record.
+const localLane = (repo: string) => ({ repo, preset: "gated-handoff" as const, postReadyOwner: "automation" as const });
+const localContext = (host: FakeHost, repo: string) => makeContext(host, "projection-regression", { ...profile, lanes: [localLane(repo)] }, undefined, "lead");
 
 describe("dashboard current handoff regressions", () => {
   it.each([
@@ -99,7 +102,7 @@ describe("dashboard current handoff regressions", () => {
 
   it("respects an explicit lanes override and existing complete-record rules when no helper is configured", async () => {
     const original = makePull(); const pull = { ...original, headSha: "d".repeat(40) };
-    const host = fakeHost({ kv: { lanes: [], manual: "broken" } });
+    const host = fakeHost({ kv: { lanes: [localLane(original.repo)], manual: "broken" } });
     await writeHandoff(host, handoffRecord(original));
     const ctx = makeContext(host, "local-lane", { ...profile, lanes: [helperLane(pull.repo)] });
     const handoff = await currentDashboardHandoff(ctx, pull);
@@ -146,8 +149,8 @@ describe("dashboard current handoff regressions", () => {
   it("reconciles a successful pending Ready transition without a full snapshot", async () => {
     const pull = makePull(); const host = fakeHost(); host.clock.t = now;
     await writeHandoff(host, { ...handoffRecord(pull), status: "pending", was_draft: true });
-    expect(await currentDashboardHandoff(context(host), { ...pull, isDraft: true })).toBeNull();
-    const complete = await currentDashboardHandoff(context(host), pull);
+    expect(await currentDashboardHandoff(localContext(host, pull.repo), { ...pull, isDraft: true })).toBeNull();
+    const complete = await currentDashboardHandoff(localContext(host, pull.repo), pull);
     expect(complete?.status).toBe("complete");
     expect(host.nodeCalls).toEqual([]);
     expect(JSON.parse(host.files.get("handoff/sample__keel__1.json")!).status).toBe("complete");
@@ -160,7 +163,7 @@ describe("dashboard current handoff regressions", () => {
       return { ok: true, result: { pr: pull, decision: { kind: "ready" }, gate: { applies: true, ok } } };
     } });
     await writeHandoff(host, { ...handoffRecord(pull), status: "pending", was_draft: false });
-    const handoff = await currentDashboardHandoff(context(host), pull);
+    const handoff = await currentDashboardHandoff(localContext(host, pull.repo), pull);
     expect(Boolean(handoff)).toBe(ok);
     expect(host.nodeCalls).toHaveLength(1);
   });

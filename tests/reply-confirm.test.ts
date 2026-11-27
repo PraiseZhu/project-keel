@@ -57,7 +57,7 @@ describe("pr_reply replyConfirm", () => {
 
   it("still refuses a handed-off PR in auto mode", async () => {
     const calls: string[] = [];
-    const gated: KeelProfile = { ...profile, lanes: [{ repo: "acme/app", preset: "gated-handoff" }] };
+    const gated: KeelProfile = { ...profile, lanes: [{ repo: "acme/app", preset: "gated-handoff", postReadyOwner: "automation" }] };
     const h = fakeHost({ node: nodeFake(calls) as never });
     await writeHandoff(h, { repo: "acme/app", number: 7, at: "2026-10-08T00:00:00Z", head_sha: "abc", gate: {}, evidence: {} });
     const r = await runTool(makeContext(h, "c1", gated), "pr_reply", { repo: "acme/app", pr: 7, target_id: "issue", body: "hi" });

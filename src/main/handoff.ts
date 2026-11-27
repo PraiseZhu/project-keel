@@ -1,5 +1,7 @@
-// Post-Ready handoff records. Once a PR in an automation-owned lane is marked Ready, the
-// author session must stop pushing, replying or fixing; tools check this record first.
+// Post-Ready handoff records. Every preset now keeps the PR with the author session after
+// Ready (the old watcher retired). Only a lane that opts back in with
+// `postReadyOwner: "automation"` hands off; then the author session must stop pushing,
+// replying or fixing, and tools check this record first.
 
 import { KeelError, type Host } from "./host.ts";
 import { node, type ToolContext } from "./context.ts";
@@ -41,7 +43,9 @@ export async function writeHandoff(host: Host, rec: HandoffRecord): Promise<void
 
 /** Vigil lanes ask the helper; other lanes read the local record (finishing a pending one when `snap` shows Ready landed). */
 export async function currentHandoff(ctx: ToolContext, repo: string, n: number, expected?: Pick<PrSummary, "headSha" | "state" | "isDraft">, snap?: ReconcileSnap): Promise<HandoffRecord | null> {
-  const { match } = resolveLane(ctx.profile, repo);
+  const { match, rule } = resolveLane(ctx.profile, repo);
+  // Self-owned lanes never lock the author, even if a record was written before the switch.
+  if (rule.postReadyOwner !== "automation") return null;
   if (match?.handoffHelperPath === undefined) {
     const rec = await readHandoff(ctx.host, repo, n);
     const settled = snap ? await reconcileHandoff(ctx.host, rec, snap) : rec;
@@ -59,7 +63,7 @@ export async function currentHandoff(ctx: ToolContext, repo: string, n: number, 
 export async function assertNotHandedOff(ctx: ToolContext, repo: string, n: number, expected?: Pick<PrSummary, "headSha" | "state" | "isDraft">): Promise<void> {
   const rec = await currentHandoff(ctx, repo, n, expected);
   if (rec)
-    throw new KeelError("LANE_HANDED_OFF", `${repo}#${n} 已于 ${rec.at} 转 Ready 并交接给自动化盯梢。作者会话不再推送、回帖或修复；如需大改，请先按仓库规则把 PR 转回 Draft。`, { handoff: rec });
+    throw new KeelError("LANE_HANDED_OFF", `${repo}#${n} 已于 ${rec.at} 转 Ready，并按该车道的 postReadyOwner: "automation" 配置交给自动化接手。作者会话不再推送、回帖或修复；如需大改，请先按仓库规则把 PR 转回 Draft。不需要交接时，去掉车道配置里的 postReadyOwner。`, { handoff: rec });
 }
 
 /** If Ready succeeded but the complete write did not, the next status read finishes the record. */

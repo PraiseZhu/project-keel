@@ -9,12 +9,13 @@ import { fakeHost } from "./helpers/fakeHost.ts";
 
 const profile: KeelProfile = {
   lanes: [
-    { repo: "Acme/Gated-App", preset: "draft-gated-handoff", baseRuleFiles: { requiredChecks: "docs/required.json" } },
-    { repo: "acme/client", preset: "gated-handoff" },
+    { repo: "Acme/Gated-App", preset: "draft-gated-handoff", postReadyOwner: "automation", baseRuleFiles: { requiredChecks: "docs/required.json" } },
+    { repo: "acme/client", preset: "gated-handoff", postReadyOwner: "automation" },
   ],
   routingPath: null, boardRepos: [], plansDir: null,
 };
-const gated = LANE_PRESETS["draft-gated-handoff"];
+// These suites cover an automation-owned lane, which a lane opts into explicitly.
+const gated = { ...LANE_PRESETS["draft-gated-handoff"], postReadyOwner: "automation" as const };
 
 describe("lane resolution", () => {
   it("matches repos case-insensitively and defaults to personal", () => {
@@ -75,7 +76,7 @@ function makeProfile(lanes: LaneMatch[]): KeelProfile {
 }
 const pr = { repo: "acme/gated-app", number: 7, url: "https://github.com/acme/gated-app/pull/7", title: "feat: x", state: "OPEN", isDraft: true, headSha: "abc", headRef: "f", baseRef: "main", mergeable: "MERGEABLE", mergeStateStatus: "DRAFT", reviewDecision: null, labels: [] };
 function snapshot(gateOk: boolean, preset: LanePreset = "draft-gated-handoff", repo = "acme/gated-app") {
-  const rule = LANE_PRESETS[preset];
+  const rule = preset === "personal" ? LANE_PRESETS[preset] : { ...LANE_PRESETS[preset], postReadyOwner: "automation" as const };
   const required = preset === "personal" ? [] : ["build"];
   const checks = gateOk && required.length ? [{ name: "build", bucket: "pass" as const }] : [];
   const g = evaluateGate(rule, required, checks, []);
@@ -161,7 +162,7 @@ describe("pr_ready / pr_reply lane enforcement", () => {
   it.each(handoffSwitchOff)("$name hands off without review_entry", async ({ repo, preset, extra }) => {
     const calls: string[] = [];
     const h = fakeHost({ node: nodeFake(true, calls, preset, repo) });
-    const ctx = makeContext(h, "c1", makeProfile([{ repo, preset, ...extra }]));
+    const ctx = makeContext(h, "c1", makeProfile([{ repo, preset, postReadyOwner: "automation", ...extra }]));
     const r: any = await runTool(ctx, "pr_ready", { repo, pr: 7, authorization_source: auth });
     expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true, handoff: { status: "complete" } } });
     expect(r.result.gate.missing.join()).not.toContain("review_entry");
@@ -171,7 +172,7 @@ describe("pr_ready / pr_reply lane enforcement", () => {
   it.each(handoffSwitchOff)("$name dry_run omits review_entry from missing and writes nothing", async ({ repo, preset, extra }) => {
     const calls: string[] = [];
     const h = fakeHost({ node: nodeFake(true, calls, preset, repo) });
-    const r: any = await runTool(makeContext(h, "c1", makeProfile([{ repo, preset, ...extra }])), "pr_ready", { repo, pr: 7, dry_run: true });
+    const r: any = await runTool(makeContext(h, "c1", makeProfile([{ repo, preset, postReadyOwner: "automation", ...extra }])), "pr_ready", { repo, pr: 7, dry_run: true });
     expect(r).toMatchObject({ ok: true, result: { executed: false, dry_run: true, handed_off: false, would_mark_ready: true } });
     expect(r.result.gate.passed).toBe(true);
     expect(r.result.gate.missing.join()).not.toContain("review_entry");
@@ -213,7 +214,7 @@ describe("pr_ready / pr_reply lane enforcement", () => {
   });
   it("an automation lane with requireReviewEntry true will not hand off without the review machine's entry evidence", async () => {
     const calls: string[] = [];
-    const on = makeProfile([{ repo: "acme/gated-app", preset: "draft-gated-handoff", requireReviewEntry: true }]);
+    const on = makeProfile([{ repo: "acme/gated-app", preset: "draft-gated-handoff", postReadyOwner: "automation", requireReviewEntry: true }]);
     const h = fakeHost({ node: nodeFake(true, calls) });
     const r = await runTool(makeContext(h, "c1", on), "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: auth });
     expect(r).toMatchObject({ ok: false, errorCode: "GATE_NOT_MET" });
@@ -222,7 +223,7 @@ describe("pr_ready / pr_reply lane enforcement", () => {
     expect([...h.files.keys()].some((k) => k.startsWith("handoff/"))).toBe(false);
   });
   it("bad entry evidence blocks Ready and is listed even in a dry run when the switch is on", async () => {
-    const on = makeProfile([{ repo: "acme/gated-app", preset: "draft-gated-handoff", requireReviewEntry: true }]);
+    const on = makeProfile([{ repo: "acme/gated-app", preset: "draft-gated-handoff", postReadyOwner: "automation", requireReviewEntry: true }]);
     for (const bad of [{ ...validEntry, result: "fail" }, { ...validEntry, result: "" }, { ...validEntry, head_sha: "old" }, { ...validEntry, checked_at: at(45) }, { ...validEntry, source: "" }]) {
       const calls: string[] = [];
       const h = fakeHost({ node: nodeFake(true, calls) });
@@ -239,7 +240,7 @@ describe("pr_ready / pr_reply lane enforcement", () => {
   });
   it("valid evidence on a requireReviewEntry lane hands off and binds expected_head", async () => {
     const seen: any[] = [];
-    const on = makeProfile([{ repo: "acme/gated-app", preset: "draft-gated-handoff", requireReviewEntry: true }]);
+    const on = makeProfile([{ repo: "acme/gated-app", preset: "draft-gated-handoff", postReadyOwner: "automation", requireReviewEntry: true }]);
     const h = fakeHost({ node: (m, p) => (m === "pr/ready" && seen.push(p), nodeFake(true, [])(m, p)) });
     const r: any = await runTool(makeContext(h, "c1", on), "pr_ready", { repo: "acme/gated-app", pr: 7, authorization_source: auth, review_entry: validEntry });
     expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: true, handoff: { status: "complete" } } });
@@ -325,5 +326,107 @@ describe("final-review follow-ups at the tool level", () => {
     const r: any = await runTool(makeContext(fakeHost(), "c1", profile), "pstack_start", { task: "修一下登录报错" });
     expect(r).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
     expect(r.message).toContain("repo_dir");
+  });
+});
+
+// PraiseZhu/project-keel#71: the old watcher retired, so the gated presets keep the PR with the
+// author session after Ready. These use the lane exactly as Mivo is configured on each machine
+// today (draft-gated-handoff plus the retired watcher's helper path) and no opt-in.
+describe("default gated lanes keep the PR with the author session after Ready", () => {
+  const repo = "acme/gated-app";
+  const retiredHelper = "/abs/retired/vigil/bin/mivo-handoff.mjs";
+  const mivo = makeProfile([{ repo, preset: "draft-gated-handoff", handoffHelperPath: retiredHelper }]);
+  // Same fake worker, but its snapshot carries the preset rule the real worker would resolve.
+  const selfNode = (calls: string[]) => {
+    const base = nodeFake(true, calls);
+    return (method: string, params: any) => {
+      const r: any = base(method, params);
+      return method === "pr/snapshot" ? { ok: true, result: { ...r.result, rule: resolveLane(mivo, repo).rule } } : r;
+    };
+  };
+  const handoffFiles = (h: ReturnType<typeof fakeHost>) => [...h.files.keys()].filter((k) => k.startsWith("handoff/"));
+
+  it("both gated presets now default to the author session; personal is unchanged", () => {
+    expect(LANE_PRESETS["draft-gated-handoff"].postReadyOwner).toBe("self");
+    expect(LANE_PRESETS["gated-handoff"].postReadyOwner).toBe("self");
+    expect(LANE_PRESETS.personal.postReadyOwner).toBe("self");
+    // Draft-first, the Ready gate and the merge label stay as they were.
+    expect(LANE_PRESETS["draft-gated-handoff"]).toMatchObject({ draftFirst: true, readyGate: "required-checks", mergeLabel: "review:merge-ready" });
+    expect(LANE_PRESETS["gated-handoff"]).toMatchObject({ draftFirst: false, readyGate: "required-checks" });
+  });
+
+  it("drops the retired helper path unless the lane opts back into handoff", () => {
+    const dropped = resolveLane(mivo, repo);
+    expect(dropped.rule.postReadyOwner).toBe("self");
+    expect(dropped.match).toEqual({ repo, preset: "draft-gated-handoff" });
+    const optedIn = resolveLane(makeProfile([{ repo, preset: "draft-gated-handoff", postReadyOwner: "automation", handoffHelperPath: retiredHelper }]), repo);
+    expect(optedIn.rule.postReadyOwner).toBe("automation");
+    expect(optedIn.match?.handoffHelperPath).toBe(retiredHelper);
+  });
+
+  it("a ready PR waits for the merge label, then is reported mergeable — never handed off", () => {
+    const rule = resolveLane(mivo, repo).rule;
+    const gate = evaluateGate(rule, ["build"], [{ name: "build", bucket: "pass" }], []);
+    const ready = { rule, decision: "ready" as const, isDraft: false, gate, handedOff: false };
+    expect(allowedActions({ ...ready, labels: [] })).toEqual(["wait_for_review"]);
+    expect(allowedActions({ ...ready, labels: ["bug"] })).toEqual(["wait_for_review"]);
+    expect(allowedActions({ ...ready, labels: ["bug", "review:merge-ready"] })).toEqual(["report_mergeable"]);
+    // A lane without a merge label does not wait for one.
+    const client = resolveLane(makeProfile([{ repo: "acme/client", preset: "gated-handoff" }]), "acme/client").rule;
+    expect(allowedActions({ ...ready, rule: client, labels: [] })).toEqual(["report_mergeable"]);
+  });
+
+  it("pr_status: a ready Mivo-lane PR without the merge label waits for review instead of reporting mergeable", async () => {
+    const readyPr = (labels: string[]) => ({ ok: true, result: { ...snapshot(true), rule: resolveLane(mivo, repo).rule, decision: { kind: "ready" },
+      pr: { ...pr, isDraft: false, mergeStateStatus: "CLEAN", labels }, mergeReadyLabel: labels.includes("review:merge-ready") } });
+    const unlabelled: any = await runTool(makeContext(fakeHost({ node: (m) => (m === "pr/snapshot" ? readyPr([]) : { ok: false, message: m }) }), "c1", mivo), "pr_status", { repo, pr: 7 });
+    expect(unlabelled).toMatchObject({ ok: true, result: { mergeable: false, allowedActions: ["wait_for_review"], nextAction: "wait_for_review" } });
+    expect(unlabelled.result.merge_hint).toContain("review:merge-ready");
+    const labelled: any = await runTool(makeContext(fakeHost({ node: (m) => (m === "pr/snapshot" ? readyPr(["review:merge-ready"]) : { ok: false, message: m }) }), "c1", mivo), "pr_status", { repo, pr: 7 });
+    expect(labelled).toMatchObject({ ok: true, result: { mergeable: true, allowedActions: ["report_mergeable"], nextAction: "report_mergeable" } });
+  });
+
+  it("pr_wait until change wakes up when the merge label is added", async () => {
+    let reads = 0;
+    const node = (m: string) => {
+      if (m !== "pr/snapshot") return { ok: false, message: m };
+      reads += 1;
+      const labels = reads >= 3 ? ["review:merge-ready"] : [];
+      return { ok: true, result: { ...snapshot(true), rule: resolveLane(mivo, repo).rule, decision: { kind: "ready" },
+        pr: { ...pr, isDraft: false, mergeStateStatus: "CLEAN", labels }, mergeReadyLabel: labels.length > 0 } };
+    };
+    const h = fakeHost({ node });
+    const r: any = await runTool(makeContext(h, "c1", mivo), "pr_wait", { repo, pr: 7, until: "change", max_minutes: 5 });
+    expect(r).toMatchObject({ ok: true, result: { mergeable: true, nextAction: "report_mergeable" } });
+  });
+
+  it("SC1: after pr_ready succeeds, replies, pushes and another pr_ready are not refused with LANE_HANDED_OFF", async () => {
+    const calls: string[] = [];
+    const h = fakeHost({ node: selfNode(calls), kv: { replyConfirm: "auto" } });
+    const ctx = makeContext(h, "c1", mivo);
+    const ready: any = await runTool(ctx, "pr_ready", { repo, pr: 7, authorization_source: auth });
+    expect(ready).toMatchObject({ ok: true, result: { ready: true, handed_off: false, handoff: null } });
+    expect(handoffFiles(h)).toEqual([]);
+    expect(await runTool(ctx, "pr_reply", { repo, pr: 7, target_id: "issue", body: "已按评审修复" })).toMatchObject({ ok: true, result: { posted: true } });
+    expect(calls).toContain("pr/reply");
+    const open = await runTool(ctx, "pr_open", { repo_dir: "/r", title: "fix: x", sections: "b", push: true, authorization_source: "用户 2026-11-27：修复后推送" });
+    expect(open).toMatchObject({ ok: true });
+    expect(calls).toContain("pr/open");
+    expect(await runTool(ctx, "pr_ready", { repo, pr: 7, authorization_source: "again" })).toMatchObject({ ok: true, result: { handed_off: false } });
+    const status: any = await runTool(ctx, "pr_status", { repo, pr: 7 });
+    expect(status).toMatchObject({ ok: true, result: { handedOff: false } });
+    expect(status.result.allowedActions).not.toContain("stopped_after_handoff");
+  });
+
+  it("a handoff record written before the switch no longer locks the author session", async () => {
+    const calls: string[] = [];
+    const h = fakeHost({ node: selfNode(calls), kv: { replyConfirm: "auto" } });
+    await writeHandoff(h, { repo, number: 7, at: "2026-11-20T00:00:00Z", head_sha: "abc", gate: {}, evidence: {}, status: "complete" });
+    const ctx = makeContext(h, "c1", mivo);
+    expect(await runTool(ctx, "pr_reply", { repo, pr: 7, target_id: "issue", body: "继续跟进" })).toMatchObject({ ok: true });
+    expect(await runTool(ctx, "pr_ready", { repo, pr: 7, authorization_source: auth })).toMatchObject({ ok: true, result: { handed_off: false } });
+    const status: any = await runTool(ctx, "pr_status", { repo, pr: 7 });
+    expect(status).toMatchObject({ ok: true, result: { handedOff: false } });
+    expect(status.result.nextAction).not.toBe("stopped_after_handoff");
   });
 });

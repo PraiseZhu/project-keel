@@ -5,10 +5,17 @@ import { LANE_PRESETS, type DecisionKind, type KeelProfile, type LaneMatch, type
 
 export function resolveLane(profile: KeelProfile, repo: string): { match: LaneMatch | null; rule: LaneRule } {
   const key = repo.toLowerCase();
-  const match = profile.lanes.find((l) => l.repo.toLowerCase() === key) ?? null;
-  const base = LANE_PRESETS[match?.preset ?? "personal"];
-  const rule: LaneRule = match?.baseRuleFiles ? { ...base, baseRuleFiles: { ...base.baseRuleFiles, ...match.baseRuleFiles } } : base;
-  return { match, rule };
+  const found = profile.lanes.find((l) => l.repo.toLowerCase() === key) ?? null;
+  const base = LANE_PRESETS[found?.preset ?? "personal"];
+  let rule: LaneRule = found?.baseRuleFiles ? { ...base, baseRuleFiles: { ...base.baseRuleFiles, ...found.baseRuleFiles } } : base;
+  if (found?.postReadyOwner && found.postReadyOwner !== rule.postReadyOwner) rule = { ...rule, postReadyOwner: found.postReadyOwner };
+  // A handoff helper only means something when automation takes over after Ready. Older local
+  // configs still point Mivo at the retired watcher's helper; drop it so it is never called.
+  if (found?.handoffHelperPath !== undefined && rule.postReadyOwner !== "automation") {
+    const { handoffHelperPath: _ignored, ...rest } = found;
+    return { match: rest, rule };
+  }
+  return { match: found, rule };
 }
 
 /** Draft flag for `pr_open`. A draft-first lane forces Draft regardless of the request. */
@@ -44,6 +51,8 @@ export interface ActionInput {
   readonly handedOff: boolean;
   /** False when the lane's `verifyCheck` has not passed on the current head; omitted when the lane has none. */
   readonly verified?: boolean;
+  /** Current PR labels. A lane with `mergeLabel` is not reported mergeable until the PR carries it. */
+  readonly labels?: readonly string[];
 }
 
 /** Actions the policy allows next. Jev (J8) may only rank inside this list. Merging is never an action. */
@@ -65,6 +74,8 @@ export function allowedActions(i: ActionInput): PrAction[] {
   if (i.gate.applies && !i.gate.ok) return ["wait_for_ci"];
   if (i.verified === false) return ["verify_current_head"];
   if (i.rule.postReadyOwner === "automation") return ["handoff"];
+  // The author session keeps the PR, so wait for the review machine's label instead of stopping early.
+  if (i.rule.mergeLabel && !(i.labels ?? []).includes(i.rule.mergeLabel)) return ["wait_for_review"];
   return ["report_mergeable"];
 }
 

@@ -12,7 +12,8 @@ export interface LaneRule {
   readonly draftFirst: boolean;
   /** Gate checked before `gh pr ready`. */
   readonly readyGate: "required-checks" | "none";
-  /** After Ready, who owns the PR. `automation` means the author session must stop touching it. */
+  /** After Ready, who owns the PR. `self`: the author session keeps following it to merge or close.
+   *  `automation`: the author session must stop touching it (only when a lane opts in via `LaneMatch.postReadyOwner`). */
   readonly postReadyOwner: "automation" | "self";
   /** Local multi-model review default. */
   readonly localInterrogate: "off" | "on-demand";
@@ -31,7 +32,7 @@ export const LANE_PRESETS: Readonly<Record<LanePreset, LaneRule>> = {
     preset: "draft-gated-handoff",
     draftFirst: true,
     readyGate: "required-checks",
-    postReadyOwner: "automation",
+    postReadyOwner: "self",
     localInterrogate: "off",
     mergeLabel: "review:merge-ready",
   },
@@ -39,7 +40,7 @@ export const LANE_PRESETS: Readonly<Record<LanePreset, LaneRule>> = {
     preset: "gated-handoff",
     draftFirst: false,
     readyGate: "required-checks",
-    postReadyOwner: "automation",
+    postReadyOwner: "self",
     localInterrogate: "on-demand",
   },
   personal: {
@@ -59,7 +60,9 @@ export interface LaneMatch {
   readonly preflight?: string;
   /** Commit status a non-author verifier posts on the head it checked (e.g. `agent-verify`). When set, Keel reports neither Ready nor mergeable until it passes on the current head. */
   readonly verifyCheck?: string;
-  /** Optional Vigil CLI producer/inspector for this automation lane. Never a shell command. */
+  /** Opt back into post-Ready handoff for this lane. Default is the preset value (`self` for every preset since the old watcher retired). */
+  readonly postReadyOwner?: LaneRule["postReadyOwner"];
+  /** Optional Vigil CLI producer/inspector. Only used when the lane is automation-owned; ignored otherwise. Never a shell command. */
   readonly handoffHelperPath?: string;
   /** Automation-owned lanes only. Default false; true requires a valid review_entry on the current HEAD. */
   readonly requireReviewEntry?: boolean;

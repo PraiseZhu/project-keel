@@ -1,7 +1,7 @@
 // Graph-side PR facts: Node pr/snapshot + raw threads. Never calls judge / judgeItems,
 // and never goes through prWait's trailing status() (which defaults jev:true).
 
-import { allowedActions } from "../../shared/lanes.ts";
+import { allowedActions, resolveLane } from "../../shared/lanes.ts";
 import type { PrAction, PrStatus } from "../../shared/types.ts";
 import { node, type ToolContext } from "../context.ts";
 import { isCompleteHandoff, readHandoff, reconcileHandoff } from "../handoff.ts";
@@ -39,7 +39,9 @@ export async function readPrFacts(ctx: ToolContext, args: Record<string, unknown
   // Same snapshot inputs and handoff semantics as pr_status, so the graph cannot see a different state.
   const snap = await node<Snapshot>(ctx, "pr/snapshot", await snapshotArgs(ctx, args));
   const raw = await node<{ threads?: PrThread[] }>(ctx, "pr/threads", prArgs(args));
-  const rec = await reconcileHandoff(ctx.host, await readHandoff(ctx.host, snap.pr.repo, snap.pr.number), snap);
+  // Like currentHandoff: only a lane that opted into handoff reads (and settles) its record.
+  const owned = resolveLane(ctx.profile, snap.pr.repo).rule.postReadyOwner === "automation";
+  const rec = owned ? await reconcileHandoff(ctx.host, await readHandoff(ctx.host, snap.pr.repo, snap.pr.number), snap) : null;
   const handedOff = isCompleteHandoff(rec);
   const allowed = allowedActions({
     rule: snap.rule,
@@ -49,6 +51,7 @@ export async function readPrFacts(ctx: ToolContext, args: Record<string, unknown
     gate: snap.gate,
     handedOff,
     ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}),
+    labels: snap.pr.labels,
   });
   return {
     snapshot: snap,

@@ -78,14 +78,16 @@ Worker 的模型、provider、框架、推理强度按设置原样派出，回�
 | 车道 | 行为 |
 | --- | --- |
 | `personal`（默认） | 非 Draft，到 READY 即停 |
-| `gated-handoff` | 必需检查全绿才转 Ready，Ready 后交给自动化盯梢，作者停手 |
+| `gated-handoff` | 必需检查全绿才转 Ready |
 | `draft-gated-handoff` | 在上一条基础上强制 Draft，并按 base 分支规则校验标题与必需检查 |
 
-交接后再做推送、回帖、修复类调用会返回 `LANE_HANDED_OFF`。
+三种车道转 Ready 后都由原会话继续跟进到合并或关闭：CI 失败和确认成立的 P0/P1/P2 意见仍由作者会话推送、回帖、修复，KEEL 不会因为转过 Ready 而拒绝。
 
 任一车道都可以配 `verifyCheck`（例如 `agent-verify`）。当前提交没有这个 GitHub 状态通过时，KEEL 不报可合并，也不转 Ready，下一步固定为「验证当前提交」：由不是作者的模型验证后，给这个提交写状态。代码一改，旧状态就不属于新提交，需要重新验证。建议同时在仓库分支保护里把它设为必需检查。KEEL 不核验状态由谁写入：本机 agent 共用同一个 GitHub 账号时，这道门防疏忽、不防蓄意伪造。
 
-交接车道可配置 `handoffHelperPath`，指向已部署的 Vigil `mivo-handoff.mjs` 绝对路径（需支持 `inspect` 和 `handoff --expected-head`）。本机需安装可从 PATH 或常见安装位置找到的 Node CLI；Cindy 内置 Node worker 不替代该外部执行器。配置后，`pr_ready` 在当前 HEAD 的 CI、审查进场和作者身份核对通过后转 Ready，自动发布并读回作者交接回执，最后才写本地交接记录；`dry_run` 不发布。读取失败或 HEAD 漂移时不声称交接成功。重复调用复用同代次回执，转 Draft 或进入新 Ready 代次后，过期本地记录不再锁住作者。外部有效回执也会拦住丢失本地记录的作者会话。未配置的车道保留原有本地交接行为。
+老盯梢停用后，默认不再交接。车道配置里遗留的 `handoffHelperPath` 会被忽略，`pr_ready` 不调用它；停用前写下的本地交接记录也不再拦住作者会话。
+
+只有某个车道显式写 `"postReadyOwner": "automation"` 时，才恢复转 Ready 后交给自动化接手：交接后推送、回帖、修复类调用返回 `LANE_HANDED_OFF`。没配 `handoffHelperPath` 时，`pr_ready` 成功后只写本地交接记录，这条记录会一直锁住作者会话，转 Draft 或推新提交也不解除。要按外部归属判断时，再配 `handoffHelperPath`，指向已部署的 Vigil 交接 helper 绝对路径（需支持 `inspect` 和 `handoff --expected-head`），本机需有 PATH 上可找到的 Node CLI：`pr_ready` 通过后先发布并读回作者交接回执，再写本地交接记录；helper 读取失败或 HEAD 漂移时不声称交接成功；转 Draft 或进入新 Ready 代次后，过期记录不再锁住作者。
 
 ## 仓库内容
 

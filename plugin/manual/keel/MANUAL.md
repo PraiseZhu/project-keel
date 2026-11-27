@@ -34,7 +34,7 @@
 1. **统一分级，只修 P0/P1/P2。** P0 紧急严重事故；P1 严重缺陷（可信可达触发路径导致核心流程失效、严重数据错误或安全/隐私越界）；P2 是本 PR 引入或改动范围内已证实的真实问题、影响局部未达 P1，另含三类必报（误导性测试、PR 自己写明的验收没达成、声称做过的验证实际没做），纳入修复，单纯缺测试或违反通用规范不单独构成 P2；P3 改进建议（风格、命名、生产行为已正确且 PR 未声称覆盖的补测试或覆盖率建议、不影响结论的措辞、无收益证据的优化）不进修复清单。Mivo 仓以审查机统一分级 `mivo/config/severity.md`（PraiseZhu/Review-PR）为准，与此摘要冲突时以它为准。每个拟修 P0/P1/P2 写清触发条件、错误行为、实际影响与证据；证据不足标“待核实”，不默认降级也不凭猜测升级。
 2. **外发须授权。** 推送、开 PR、转 Ready 需要用户当次授权：`pr_open` / `pr_ready` 要求 `authorization_source`。`pr_reply` 默认直接发表（用户在设置页选“每条确认”时才弹框）；只回分级说明、反证或已修复说明。
 3. **永不合并。** Keel 没有任何合并能力；PR 可合并时报告链接，由用户在 GitHub 合并。
-4. **按车道走。** `personal`（默认）：非 Draft，到 READY 即停；`gated-handoff`：必需检查全绿才转 Ready，Ready 后交给自动化盯梢，作者停手；`draft-gated-handoff`：在前者基础上强制 Draft，并按 base 分支规则文件校验标题与必需检查。交接后推送/回帖/修复类调用返回 `LANE_HANDED_OFF`。
+4. **按车道走。** `personal`（默认）：非 Draft，到 READY 即停；`gated-handoff`：必需检查全绿才转 Ready；`draft-gated-handoff`：在前者基础上强制 Draft，并按 base 分支规则文件校验标题与必需检查，有合并标签时等标签。三种车道转 Ready 后都由原会话继续跟进到合并或关闭：CI 失败和确认成立的 P0/P1/P2 意见仍由作者会话推送、回帖、修复，`pr_*` 不会因为转过 Ready 而拒绝。
 5. **只改用户点名的仓。** 前序诊断、拆仓建议都不算授权。
 6. **worktree 放 `<仓>/.worktrees/`**，不放 `/tmp`。
 7. **Orca 派工读 routing.json**（`fanout({ op: "roles" | "plan" })`），Worker 一律 `bypassPermissions`；只按配置里的 fallbacks 降级，配置不可读即停。
@@ -42,7 +42,9 @@
 9. **Jev 是判断参考，不是事实证明。** 事实与门禁由确定性代码给出；Jev 只在策略允许的选项里排序。confidence ≥ 0.75 执行（J7 ≥ 0.8）；低于阈值补上下文重问一次，仍低就取改动最小、可撤回的选项；Jev 不可用且判断涉及连带文件时停下回报。
 10. **当前提交要有非作者验证。** 车道配了 `verifyCheck`（如 `agent-verify`）时，当前 head 没有该状态通过，`pr_status` 只给 `verify_current_head`，`pr_ready` 返回 `GATE_NOT_MET`。作者：派一个不是作者的模型（`fanout({ op: "roles" })` 的 e2e 档，或 `fanout({ op: "plan", kind: "swarm" })`）验证当前 head，自己不写这个状态。验证者：在自己的会话里跑测试、操作改动的功能、专门找反例；通过后执行 `gh api repos/<owner>/<repo>/statuses/<sha> -f state=success -f "context=<verifyCheck>" -f "description=<模型> <方法>"`，不通过写 `state=failure` 并说明原因。有新提交就重验。只改文档或配置时可由作者自查后写状态。验证者报告的 `ran` 必须列测试运行器本身的命令（如 `npm test`、`npx vitest run`、`pytest`）；`npm run verify` 这类聚合脚本 KEEL 认不出测试，会把级别判成 `type-check-only`。done 门遇到级别低于 SC 要求且 head/patch 都一致时给 `retry_verify`/`stop`，选 `retry_verify` 后重新派非作者验证，不再只给 wait/stop 卡死。信任边界：Keel 不核验状态由谁写入；本机所有 agent 共用同一个 GitHub 账号，这道门防疏忽、不防蓄意伪造，靠用户抽查兜底。要真正隔离，需给验证者独立的 GitHub 身份。建议在仓库分支保护里把该状态设为必需，绕开 Keel 的合并也会被拦住。
 
-交接车道可配置 `handoffHelperPath`，指向已部署的 Vigil `mivo-handoff.mjs` 绝对路径（需支持 `inspect` 和 `handoff --expected-head`）。本机需安装可从 PATH 或常见安装位置找到的 Node CLI；Cindy 内置 Node worker 不替代该外部执行器。配置后，`pr_ready` 在当前 HEAD 的 CI 和作者身份核对通过后转 Ready；审查进场证据仅当该车道 `requireReviewEntry: true` 时才需要（缺省 false，独立于 `handoffHelperPath`，用 `kv.lanes` 或打包 profile 的布尔配置）。通过后自动发布并读回作者交接回执，最后才写本地交接记录；`dry_run` 不发布。读取失败或 HEAD 漂移时不声称交接成功。重复调用复用同代次回执，转 Draft 或进入新 Ready 代次后，过期本地记录不再锁住作者。外部有效回执也会拦住丢失本地记录的作者会话。未配置的车道保留原有本地交接行为。
+老盯梢停用后，默认不再交接。车道配置里遗留的 `handoffHelperPath` 会被忽略，`pr_ready` 不调用它；停用前写下的本地交接记录也不再拦住作者会话。
+
+只有某个车道显式写 `"postReadyOwner": "automation"` 时，才恢复转 Ready 后交给自动化接手：交接后推送/回帖/修复类调用返回 `LANE_HANDED_OFF`，`pr_status` 给 `stopped_after_handoff`。没配 `handoffHelperPath` 时，`pr_ready` 成功后只写本地交接记录，这条记录会一直锁住作者会话，转 Draft 或推新提交也不解除。审查进场证据仅当该车道 `requireReviewEntry: true` 时才需要。要按外部归属判断时，再配 `handoffHelperPath`，指向已部署的 Vigil 交接 helper 绝对路径（需支持 `inspect` 和 `handoff --expected-head`），本机需有 PATH 上可找到的 Node CLI：`pr_ready` 通过后先发布并读回作者交接回执，再写本地交接记录；helper 读取失败或 HEAD 漂移时不声称交接成功；转 Draft 或进入新 Ready 代次后，过期记录不再锁住作者。
 
 ## Cursor → Cindy 对照
 
@@ -83,9 +85,9 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 3. `open-pr` → `wait-ci`：主控照 next 调 `pr_open`（用户授权原话填 `authorization_source`）再 `keel_wait`。CI 红走 `fix-ci`，有评审线程走 `triage-threads`，二者都先经 `pr_open` 推送再等 CI。
 4. 审查（`astra-final-review`）：不同家族的强模型只读审 diff、亲自跑测试并给出 verdict。`FAIL` 由 `g-accept` 退回写手，写手的任务说明会列出审查报告；`PASS` / `PASS+NOTES` 进入 `report-ready`。同一失败重复两次时 `astra-unstick` 先出主意。
 5. done 门发现某条 SC 没有证据时给 `revise` / `waive` / `stop`：`revise` 退回写手并写明缺哪条；`waive` 必须带用户原话 `authorization_source`。验证级别不够时给 `retry_verify`，重派审查。
-6. `pr_status` 判定 ready → 报告“可合并”与链接；交接车道则 `pr_ready` 后停手。
+6. `pr_status` 判定 ready 后照 `nextAction` 走：是 `report_mergeable`（此时 `mergeable: true`）才报告“可合并”与链接；是 `wait_for_review` 表示车道有合并标签而 PR 还没贴，用 `pr_wait({ until: "change" })` 等标签（默认的 `ci_terminal` 在 ready 时会立刻返回，不等标签）；显式配了 `postReadyOwner: "automation"` 的车道给 `handoff` / `stopped_after_handoff`，按上文交接段落处理，不等标签。门禁车道先 `pr_ready` 转 Ready，之后原会话照 `nextAction` 继续跟进。
 
-完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或交接车道 `pr_ready` 成功后变为 `stopped_after_handoff`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束；其余情况照 `nextAction` 继续。
+完成标准：只有 `pr_status` 的 `nextAction` 是 `report_mergeable`，或报出具体阻塞（缺权限、缺环境、预算用完），才算结束。显式配了 `postReadyOwner: "automation"` 的车道，`pr_ready` 成功后变为 `stopped_after_handoff` 也算这一段结束；看到 `handoff` 表示该调 `pr_ready` 交接，不是结束。其余情况照 `nextAction` 继续。
 
 ## 看板与真实步骤
 
@@ -99,7 +101,7 @@ node "$KEEL/node/orch.mjs" --store <dir> status # orch 记账，子命令同上�
 
 面板和主视图只读展示三列：本地工作流 → 云端检查至全绿 → 已交接。`pr_status({board:true, scope:"open"|"all", refresh?:true})` 按当前 GitHub 账号跨仓分页；`complete:false` 或 `more:true` 说明尚未读完，按返回的重试时间继续调用。旧 `boardRepos` 不再缩小全局看板范围；`repos` 只筛选本次工具返回的 `rows`，不影响全局读取、`total` 或面板。界面的仓库筛选在本地进行。
 
-本人在其它电脑创建的 PR 从 GitHub 统一读取；本机 Keel 索引还补充处理过的非本人作者 PR。其它电脑未共享的非本人 PR 关联与私有运行步骤不能凭空取得。未关联流程显示「步骤 ?」。Mini 内部盯梢未接入，只在已有有效交接记录时标「已交接」，不推断已可合并。
+本人在其它电脑创建的 PR 从 GitHub 统一读取；本机 Keel 索引还补充处理过的非本人作者 PR。其它电脑未共享的非本人 PR 关联与私有运行步骤不能凭空取得。未关联流程显示「步骤 ?」。只有显式配了 `postReadyOwner: "automation"` 的车道、且有有效交接记录时才标「已交接」，不推断已可合并。
 
 执行中如需显示本地步骤，由绑定的主控在实际进入该步骤时调用：
 

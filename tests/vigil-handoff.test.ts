@@ -15,7 +15,7 @@ const repo = "example-org/example-plugin", head = "a".repeat(40);
 const realHelper = process.env.VIGIL_HELPER_UNDER_TEST;
 afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function fixture() {
+function fixture(opts: { optIn?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "keel-vigil-")); roots.push(root);
   const file = join(root, "remote.json"), calls = join(root, "calls.jsonl");
   const state = {
@@ -51,7 +51,7 @@ else if(mode==='handoff'){
   vi.stubEnv("MIVO_WATCHER_HOME", root); vi.stubEnv("MIVO_WATCHER_PROFILE", "");
   vi.stubEnv("KEEL_HANDOFF_TEST_STATE", file); vi.stubEnv("KEEL_HANDOFF_TEST_CALLS", calls);
   installUpstreamRunner();
-  const profile: KeelProfile = { lanes: [{ repo, preset: "draft-gated-handoff", handoffHelperPath: realHelper || stub }], routingPath: null, plansDir: null, boardRepos: [] };
+  const profile: KeelProfile = { lanes: [{ repo, preset: "draft-gated-handoff", ...(opts.optIn === false ? {} : { postReadyOwner: "automation" as const }), handoffHelperPath: realHelper || stub }], routingPath: null, plansDir: null, boardRepos: [] };
   const host = fakeHost({ node: async (method, params) => {
     const result = await dispatch(method, params);
     return result.error ? { ok: false, message: result.error.message } : { ok: true, result: result.result };
@@ -178,7 +178,7 @@ describe("configured Vigil author handoff through the real Keel tool/RPC path", 
     const f = fixture();
     const helperPath = f.ctx.profile.lanes[0]?.handoffHelperPath;
     expect(helperPath).toBeTruthy();
-    f.host.kv.lanes = [{ repo, preset: "draft-gated-handoff", handoffHelperPath: helperPath }];
+    f.host.kv.lanes = [{ repo, preset: "draft-gated-handoff", postReadyOwner: "automation", handoffHelperPath: helperPath }];
     const ctx = makeContext(f.host, "kv-lanes", { lanes: [], routingPath: null, plansDir: null, boardRepos: [] });
     const ready = () => runTool(ctx, "pr_ready", {
       repo, pr: 7,
@@ -190,5 +190,32 @@ describe("configured Vigil author handoff through the real Keel tool/RPC path", 
       result: { handedOff: true, nextAction: "stopped_after_handoff" },
     });
     expect(f.read().comments).toHaveLength(1);
+  });
+});
+
+// PraiseZhu/project-keel#71: Mivo lanes on each machine still name the retired watcher's helper.
+// Without an explicit opt-in, Ready goes through the real worker and never runs that helper.
+describe("Mivo-style lane without opt-in after the old watcher retired (real tool/RPC path)", { timeout: 20_000 }, () => {
+  const helperCalls = (f: ReturnType<typeof fixture>) => f.calls().filter((a) => a[0] === "helper" || a[0] === "external-node");
+
+  it("SC2: pr_ready marks Ready without calling the configured helper and writes no handoff", async () => {
+    const f = fixture({ optIn: false });
+    const r = await f.ready();
+    expect(r).toMatchObject({ ok: true, result: { ready: true, handed_off: false, handoff: null } });
+    expect(f.read().pr.isDraft).toBe(false);
+    expect(f.calls().some((a) => a[0] === "pr" && a[1] === "ready")).toBe(true);
+    expect(helperCalls(f)).toEqual([]);
+    expect(f.read().comments).toHaveLength(0);
+    expect(f.localRecords()).toEqual([]);
+  });
+
+  it("SC1: the author session keeps going: a second pr_ready and pr_status are not stopped", async () => {
+    const f = fixture({ optIn: false });
+    await f.ready();
+    expect(await f.ready()).toMatchObject({ ok: true, result: { ready: true, handed_off: false } });
+    const status: any = await runTool(f.ctx, "pr_status", { repo, pr: 7 });
+    expect(status).toMatchObject({ ok: true, result: { handedOff: false } });
+    expect(status.result.allowedActions).not.toContain("stopped_after_handoff");
+    expect(helperCalls(f)).toEqual([]);
   });
 });

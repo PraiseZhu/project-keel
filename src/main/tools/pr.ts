@@ -40,7 +40,7 @@ export async function snapshotArgs(ctx: ToolContext, args: Record<string, unknow
 export async function status(ctx: ToolContext, args: Record<string, unknown>, opts: { jev?: boolean } = {}): Promise<PrStatus & { mergeable: boolean; jev?: unknown; merge_hint?: string }> {
   const snap = await node<Snapshot>(ctx, "pr/snapshot", await snapshotArgs(ctx, args));
   const handedOff = Boolean(await currentHandoff(ctx, snap.pr.repo, snap.pr.number, snap.pr, snap));
-  const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff, ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}) });
+  const allowed = allowedActions({ rule: snap.rule, decision: snap.decision.kind, ...(snap.decision.blocker ? { blocker: snap.decision.blocker } : {}), isDraft: snap.pr.isDraft, gate: snap.gate, handedOff, ...(snap.verification ? { verified: snap.verification.state === "pass" } : {}), labels: snap.pr.labels });
   let next: PrAction = allowed[0]!;
   let jev: unknown;
   if (opts.jev !== false) {
@@ -83,7 +83,7 @@ export async function prWait(ctx: ToolContext, args: Record<string, unknown>) {
   const deadline = start + maxMinutes * 60_000;
   let first: Awaited<ReturnType<typeof status>> | null = null;
   let last: Awaited<ReturnType<typeof status>> | null = null;
-  const fingerprint = (s: NonNullable<typeof last>) => JSON.stringify([s.decision, s.checks, s.unresolvedThreads, s.pr.headSha, s.pr.isDraft]);
+  const fingerprint = (s: NonNullable<typeof last>) => JSON.stringify([s.decision, s.checks, s.unresolvedThreads, s.pr.headSha, s.pr.isDraft, [...(s.pr.labels ?? [])].sort()]);
   for (;;) {
     last = await status(ctx, args, { jev: false });
     first ??= last;

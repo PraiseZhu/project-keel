@@ -9,7 +9,7 @@ describe("kv.lanes Vigil helper through the graph handoff chain", () => {
     const world = makeWorld();
     const host = makeE2eHost(world);
     const helper = "/abs/vigil-helper.mjs";
-    host.kv.lanes = [{ repo: PR_REPO, preset: "gated-handoff", handoffHelperPath: helper }];
+    host.kv.lanes = [{ repo: PR_REPO, preset: "gated-handoff", postReadyOwner: "automation", handoffHelperPath: helper }];
     let handed = false;
     let inspects = 0;
     const receipt = (): VigilReceipt => ({
@@ -53,7 +53,7 @@ describe("kv.lanes Vigil helper through the graph handoff chain", () => {
           result: {
             ...(response.result as object),
             preset: "gated-handoff",
-            rule: LANE_PRESETS["gated-handoff"],
+            rule: { ...LANE_PRESETS["gated-handoff"], postReadyOwner: "automation" },
             gate: { applies: true, required: ["verify"], passed: ["verify"], failing: [], pending: [], missing: [], ok: true, sources: ["test"] },
             pr: { ...(response.result as { pr: object }).pr, isDraft: !handed, headSha: world.prHead, state: "OPEN" },
           },
